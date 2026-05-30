@@ -1,0 +1,20 @@
+fn run_bench() {
+    let configs = [
+        {"N": 64, "T": 2.0, "dt": 0.01, "seed": 42},
+        {"N": 128, "T": 2.0, "dt": 0.005, "seed": 42},
+        {"N": 256, "T": 2.0, "dt": 0.005, "seed": 42},
+        {"N": 512, "T": 2.0, "dt": 0.005, "seed": 42},
+    ]
+    let norms = []
+    for cfg in configs {
+        let r = solver_solve(cfg)
+        norms.push(r["norm"])
+    }
+    return norms
+}
+
+let results = run_bench()
+print(f"norms: {results}")
+
+let norms2 = run_bench()
+print(f"repeat: {norms2}")

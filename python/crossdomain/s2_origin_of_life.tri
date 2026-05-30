@@ -1,0 +1,8 @@
+@T(18.0)
+reg autopoiesis : England_autopoietic = 4;
+reg hypercycle : Eigen_hypercycle = 4;
+reg bzchem : Belousov_Zhabotinsky = 4;
+ring(autopoiesis, hypercycle, bzchem) kappa=-2.5 for T=18.0;
+OBSERVE autopoiesis k_star, crystallinity, peak, atom_count;
+OBSERVE hypercycle k_star, crystallinity, peak, atom_count;
+OBSERVE bzchem k_star, crystallinity, peak, atom_count;

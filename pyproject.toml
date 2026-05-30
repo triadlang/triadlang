@@ -1,0 +1,95 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triadlang"
+version = "1.0.0"
+description = "TriadLang — a programming language whose runtime is the Triad equation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "qrv0" }
+]
+keywords = [
+    "triad",
+    "triadlang",
+    "nonlinear-schrodinger",
+    "quantum-substrate",
+    "fluctuation-dissipation",
+    "wave-computing",
+    "compiler",
+    "programming-language",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: Other/Proprietary License",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Software Development :: Interpreters",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+]
+
+# Hard dependencies — required for the language and the PDE solver to run.
+dependencies = [
+    "numpy>=1.24",
+]
+
+# Optional feature sets. Install only what you need.
+[project.optional-dependencies]
+# Advanced observables: SAT solver peak-finding, atom-framing components,
+# image-style labelling of crystallized regions.
+science = [
+    "scipy>=1.10",
+]
+# Plotting and visualization helpers (runtime/viz.py, stdlib/plot.py).
+viz = [
+    "matplotlib>=3.7",
+]
+# Optional GPU backend (NVIDIA, CUDA 12.x).
+gpu = [
+    "cupy-cuda12x",
+]
+# Language Server Protocol implementation.
+lsp = [
+    "pygls>=1.0",
+]
+# Real quantum hardware backends (qubit module).
+quantum = [
+    "qiskit>=1.0",
+    "qiskit-aer>=0.14",
+    "cirq>=1.3",
+]
+# Everything above, for a full developer install.
+all = [
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "pygls>=1.0",
+]
+# Test/lint tooling.
+dev = [
+    "pytest",
+    "ruff",
+    "black",
+]
+
+[project.scripts]
+triad = "cli.main:main"
+
+[project.urls]
+Homepage = "https://triadlang.com"
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["cli*", "runtime*", "compiler*", "frontend*", "stdlib*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["python"]
+testpaths = ["python/tests"]

@@ -1,0 +1,6 @@
+let r1 = solver_solve({"N": 64, "T": 2.0, "dt": 0.005, "seed": 42, "mode": 0})
+let r2 = solver_solve({"N": 128, "T": 2.0, "dt": 0.005, "seed": 42, "mode": 0})
+let r3 = solver_solve({"N": 256, "T": 2.0, "dt": 0.005, "seed": 42, "mode": 0})
+print(f"C mode=0 N= 64: norm={r1["norm"]:.10f} peak={r1["peak"]:.10f}")
+print(f"C mode=0 N=128: norm={r2["norm"]:.10f} peak={r2["peak"]:.10f}")
+print(f"C mode=0 N=256: norm={r3["norm"]:.10f} peak={r3["peak"]:.10f}")

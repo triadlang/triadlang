@@ -1,0 +1,38 @@
+{
+  "name": "triadlang",
+  "displayName": "TriadLang",
+  "description": "Syntax highlighting + LSP for TriadLang — the language of the Triad equation",
+  "version": "0.3.0",
+  "publisher": "qorvuscompany",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qorvuscompany/triadlang"
+  },
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "triadlang",
+        "aliases": ["TriadLang", "triadlang"],
+        "extensions": [".tri"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "triadlang",
+        "scopeName": "source.triadlang",
+        "path": "./triadlang.tmLanguage.json"
+      }
+    ]
+  },
+  "activationEvents": [
+    "onLanguage:triadlang"
+  ],
+  "main": "./extension.js"
+}

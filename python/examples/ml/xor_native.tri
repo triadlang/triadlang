@@ -1,0 +1,57 @@
+// XOR training — native ML (compiles to C, zero Python)
+
+// Build model: Linear(2,8) -> ReLU -> Linear(8,1) -> Sigmoid
+let model = ml_seq_new(4)
+let l1 = ml_linear(2, 8)
+let l2 = ml_linear(8, 1)
+ml_seq_set(model, 0, 0, l1)   // 0 = TRIAD_LAYER_LINEAR
+ml_seq_set(model, 1, 1, l1)   // 1 = TRIAD_LAYER_RELU (layer ignored)
+ml_seq_set(model, 2, 0, l2)   // 0 = TRIAD_LAYER_LINEAR
+ml_seq_set(model, 3, 2, l2)   // 2 = TRIAD_LAYER_SIGMOID (layer ignored)
+
+// Adam optimizer
+let opt = ml_adam(model, 0.01)
+
+// XOR data
+let x0 = ml_tensor([0.0, 0.0], false)
+let x1 = ml_tensor([0.0, 1.0], false)
+let x2 = ml_tensor([1.0, 0.0], false)
+let x3 = ml_tensor([1.0, 1.0], false)
+let y0 = ml_tensor([0.0], false)
+let y1 = ml_tensor([1.0], false)
+let y2 = ml_tensor([1.0], false)
+let y3 = ml_tensor([0.0], false)
+
+let inputs = [x0, x1, x2, x3]
+let targets = [y0, y1, y2, y3]
+
+// Training loop
+for epoch in range(2000) {
+    let epoch_loss = 0.0
+    for s in range(4) {
+        ml_adam_zero(opt)
+        let pred = ml_seq_forward(model, inputs[s])
+        let loss = ml_mse_loss(pred, targets[s])
+        ml_backward(loss)
+        ml_adam_step(opt)
+        epoch_loss = epoch_loss + ml_item(loss)
+    }
+    if epoch % 500 == 0 {
+        print(f"epoch {epoch}: loss={epoch_loss / 4.0:.6f}")
+    }
+}
+
+// Evaluate
+print("Predictions:")
+let labels = [0.0, 1.0, 1.0, 0.0]
+let correct = 0
+for s in range(4) {
+    let pred = ml_seq_forward(model, inputs[s])
+    let p = ml_item(pred)
+    let label = 0
+    if p > 0.5 { label = 1 }
+    let target = int(labels[s])
+    if label == target { correct = correct + 1 }
+    print(f"  input {s}: pred={p:.4f} label={label} target={target}")
+}
+print(f"XOR accuracy: {correct}/4")

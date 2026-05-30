@@ -1,0 +1,22 @@
+import triad;
+import time;
+
+let start = time.now();
+
+let p1 = triad.regime("anti_collapse");
+let p2 = triad.regime("anti_collapse");
+let p3 = triad.regime("B0");
+let p4 = triad.regime("B0");
+
+let result = triad.solve_coupled(
+    [["a", p1], ["b", p2], ["c", p3], ["d", p4]],
+    [["a","b",-2.5], ["b","c",-2.5], ["c","d",-2.5], ["d","a",-2.5]],
+    T=5.0
+);
+
+let elapsed = time.now() - start;
+print(f"TriadLang 4-substrate ring coupling: {elapsed:.4f}s");
+for key in result {
+    let r = result[key];
+    print(f"  {key}: k_star={r.k_star:.4f}, crystallinity={r.crystallinity:.4f}");
+}

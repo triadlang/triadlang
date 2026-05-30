@@ -1,0 +1,171 @@
+TriadLang Proprietary Source-Available License v1.0
+
+Copyright (c) 2026 qrv0.
+All rights reserved.
+
+This software, including its source code, documentation, examples,
+benchmarks, runtime components, compiler components, models, tests,
+specifications, and related materials (collectively, the "Software"),
+is proprietary software owned by qrv0.
+
+The Software is made publicly visible only for authorship proof,
+timestamping, inspection, evaluation, and reproducibility demonstration.
+
+Public availability of the Software does not grant any license or
+permission except as expressly stated in this License.
+
+1. Limited Evaluation Permission
+
+Subject to this License, qrv0 grants you a limited, revocable,
+non-exclusive, non-transferable permission to view the Software and,
+if technically necessary, run the unmodified Software locally solely
+for personal, non-commercial evaluation and verification of public
+technical claims made by qrv0.
+
+This permission does not allow production use, commercial use,
+hosted use, redistribution, modification, sublicensing, or derivative
+work creation.
+
+2. Prohibited Uses
+
+Without prior written permission from qrv0, you may not:
+
+a. use the Software for any commercial purpose;
+b. copy the Software except as technically necessary to view or evaluate it;
+c. modify, adapt, translate, or create derivative works from the Software;
+d. redistribute, publish, sublicense, sell, lease, rent, or transfer the Software;
+e. use the Software in any product, service, platform, API, hosted system,
+   cloud service, model pipeline, agent framework, benchmark service,
+   inference system, training system, or commercial research system;
+f. use the Software to train, fine-tune, distill, evaluate, benchmark,
+   improve, or generate data for any artificial intelligence system,
+   machine learning model, foundation model, language model, agent,
+   embedding system, retrieval system, or automated code system;
+g. ingest, scrape, mine, index, embed, vectorize, or otherwise process
+   the Software or its documentation for AI training, AI evaluation,
+   AI retrieval, AI code generation, AI benchmarking, or dataset creation;
+h. remove, obscure, or alter copyright notices, authorship notices,
+   license notices, hashes, provenance files, or attribution files;
+i. reverse engineer, decompile, or disassemble any binary or compiled
+   component provided with the Software, except where applicable law
+   expressly prohibits this restriction;
+j. use the Software to create a competing language, compiler, runtime,
+   solver, benchmark system, AI runtime, simulation runtime, quantum
+   runtime, FDT verification system, or substantially similar system;
+k. claim authorship, inventorship, ownership, priority, or independent
+   origin over the Software or substantially similar derivatives derived
+   from access to the Software.
+
+3. No Open Source License
+
+This Software is not open source.
+
+No rights are granted under any open-source license, including but not
+limited to MIT, Apache, BSD, GPL, LGPL, AGPL, MPL, or similar licenses,
+unless qrv0 separately and explicitly grants such rights in writing.
+
+4. Git Hosting Platforms
+
+If this Software is published on GitHub, GitLab, or any similar platform,
+the platform's technical functionality may allow viewing, cloning, or
+forking within that platform.
+
+Such platform functionality does not grant any rights beyond the limited
+evaluation permission stated in this License.
+
+In particular, a fork, clone, download, archive, cache, mirror, or copy
+does not grant permission to use, modify, redistribute, commercialize,
+train on, integrate, host, or create derivative works from the Software.
+
+5. Contributions
+
+No contributions are accepted unless qrv0 explicitly agrees in writing.
+
+If you submit an issue, pull request, patch, suggestion, benchmark,
+optimization, documentation change, design note, or other contribution
+without a separate written agreement, you grant qrv0 a perpetual,
+worldwide, royalty-free, irrevocable right to use, modify, publish,
+redistribute, sublicense, and incorporate that contribution into the
+Software or related works without obligation to compensate you.
+
+You represent that you have the right to submit any contribution you
+provide.
+
+6. Commercial Licensing
+
+Commercial use, institutional use, hosted use, redistribution,
+modification, derivative work creation, AI/ML use, benchmarking for
+commercial purposes, or integration into any product or service requires
+a separate written commercial license from qrv0.
+
+For permission, contact qrv0 through the official contact channel listed
+in the repository or project documentation.
+
+7. No Patent License
+
+No patent rights are granted by this License.
+
+No license is granted to any invention, method, process, architecture,
+runtime, compiler technique, optimization, model design, benchmark design,
+simulation method, verification method, or other patentable subject matter
+embodied in, described by, or inferable from the Software.
+
+8. Trademarks and Names
+
+No rights are granted to use the names "Triad", "TriadLang", "qrv0",
+or any related names, marks, logos, identifiers, project names, or branding
+except to accurately refer to the original project in a non-misleading way.
+
+9. Confidential or Unpublished Components
+
+Some components, designs, methods, benchmarks, runtimes, models, or
+optimizations related to the Software may be unpublished or withheld.
+
+Nothing in this License grants any right to access, reconstruct, infer,
+reverse engineer, or demand those unpublished components.
+
+10. Termination
+
+Any violation of this License automatically terminates all permissions
+granted to you.
+
+Upon termination, you must immediately stop using the Software and delete
+all copies under your control, except where retention is legally required.
+
+Termination does not limit qrv0's rights or remedies.
+
+11. No Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT,
+ACCURACY, SECURITY, RELIABILITY, OR PERFORMANCE.
+
+qrv0 does not warrant that the Software will be error-free, secure,
+available, complete, suitable for any purpose, or compatible with any
+system.
+
+12. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, qrv0 SHALL NOT BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR
+PUNITIVE DAMAGES, INCLUDING LOSS OF PROFITS, LOSS OF DATA, BUSINESS
+INTERRUPTION, SECURITY INCIDENTS, MODEL FAILURES, SYSTEM FAILURES, OR
+ANY OTHER DAMAGES ARISING FROM OR RELATED TO THE SOFTWARE OR THIS LICENSE.
+
+13. Reservation of Rights
+
+All rights not expressly granted in this License are reserved by qrv0.
+
+No implied licenses are granted.
+
+14. Governing Terms
+
+If any provision of this License is held unenforceable, the remaining
+provisions remain in effect.
+
+This License may be updated by qrv0 for future versions of the Software.
+Each version of the Software is governed by the license file included
+with that version, unless qrv0 states otherwise in writing.
+
+End of License.

@@ -1,0 +1,15 @@
+import triad;
+
+let result = triad.solve(triad.regime("anti_collapse"), T=10.0);
+
+print(f"k_star        = {triad.k_star(result)}");
+print(f"crystallinity = {triad.crystal(result)}");
+print(f"peak          = {triad.peak(result)}");
+print(f"norm          = {triad.norm(result)}");
+print(f"ipr           = {triad.ipr(result)}");
+print(f"fwhm          = {triad.fwhm(result)}");
+print(f"pr            = {triad.pr(result)}");
+
+let spec = triad.spectrum(result);
+let s_max = max(spec["S"]);
+print(f"spectrum S max = {s_max}");

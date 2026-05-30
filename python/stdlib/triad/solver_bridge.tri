@@ -1,0 +1,20 @@
+// Triad solver bridge — stdlib module for accessing the PDE solver from .tri
+// Usage: import triad.solver_bridge;
+
+fn create_params() {
+    return {
+        "L": 32.0, "N": 128, "dt": 0.005, "T": 20.0,
+        "hbar": 1.0, "m": 1.0, "omega": 0.05,
+        "Lambda": -0.5, "alpha": 0.15, "sigma": 1.5,
+        "Gamma": 0.05, "f_FDT": 0.002,
+        "nu": [2.0, 0.5, 0.1],
+        "lam": [-0.3, -0.2, -0.1],
+        "mode": "full", "seed": 0
+    };
+}
+
+fn describe_params(p) {
+    print("TriadParams:");
+    print("  L=" + str(p["L"]) + " N=" + str(p["N"]) + " dt=" + str(p["dt"]));
+    print("  Lambda=" + str(p["Lambda"]) + " mode=" + str(p["mode"]));
+}

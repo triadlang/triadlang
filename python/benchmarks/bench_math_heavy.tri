@@ -1,0 +1,20 @@
+// Math-heavy computation benchmark — numerical integration (trapezoidal)
+import math;
+
+fn integrate(a, b, n) {
+    let h = (b - a) / float(n);
+    let total = 0.0;
+    for i in range(n + 1) {
+        let x = a + float(i) * h;
+        let y = math.sin(x) * math.exp(-0.1 * x) + math.cos(x * 0.5);
+        if i == 0 or i == n {
+            total = total + y / 2.0;
+        } else {
+            total = total + y;
+        }
+    }
+    return total * h;
+}
+
+let result = integrate(0.0, 100.0, 50000);
+print("integral = " + str(result));

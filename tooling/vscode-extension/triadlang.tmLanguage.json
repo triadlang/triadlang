@@ -1,0 +1,61 @@
+{
+  "name": "TriadLang",
+  "scopeName": "source.triadlang",
+  "fileTypes": ["tri"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#annotations" },
+    { "include": "#keywords" },
+    { "include": "#opcodes" },
+    { "include": "#regimes" },
+    { "include": "#metrics" },
+    { "include": "#predicates" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "match": "//.*$", "name": "comment.line.double-slash.triadlang" },
+        { "match": "#.*$",  "name": "comment.line.number-sign.triadlang" }
+      ]
+    },
+    "annotations": {
+      "match": "@(T|dt|kappa|noise|L|N|D|bc|backend)\\b",
+      "name": "support.function.annotation.triadlang"
+    },
+    "keywords": {
+      "match": "\\b(reg|loop|segment|if|else|true|false|OUT|HALT|evolve|for|couple|pair|ring|sequence|via|each_for|OBSERVE|over_seeds|assert|substrate|composed_of|to|kappa)\\b",
+      "name": "keyword.control.triadlang"
+    },
+    "opcodes": {
+      "match": "\\b(MOV|LOAD|ADD|SUB|MUL|DIV|AND|OR|NOT|XOR|CMP|INC|DEC|ZERO|SHIFT_LEFT|SHIFT_RIGHT|PROBE|CHECKPOINT)\\b",
+      "name": "keyword.other.opcode.triadlang"
+    },
+    "regimes": {
+      "match": "\\b(B0|B0_3d|dispersive|anti_collapse|R5_crystal|thermal_pure|register_legacy|HodgkinHuxley|MaxwellWiechert|ENSO_recharge|LSV_market|England_autopoietic|Eigen_hypercycle|Belousov_Zhabotinsky|Cepheid_pulsator|Cosmological_inflation|DarkMatter_halo)\\b",
+      "name": "support.class.regime.triadlang"
+    },
+    "metrics": {
+      "match": "\\b(k_star|IPR|crystallinity|peak|FWHM|norm|stabilization|memory_persistence|bravais_family|cluster_count|cluster_centroids|slow_state|slow_state_late_mean|LZc|metastability|phi_id|pcist|causal_density|kuramoto)\\b",
+      "name": "support.constant.metric.triadlang"
+    },
+    "predicates": {
+      "match": "\\b(persistent|extended|structurally_open|non_trivial_memory)\\b",
+      "name": "support.function.predicate.triadlang"
+    },
+    "strings": {
+      "match": "\"[^\"]*\"",
+      "name": "string.quoted.double.triadlang"
+    },
+    "numbers": {
+      "match": "\\b(0b[01]+|0x[0-9a-fA-F]+|-?\\d+\\.?\\d*([eE][+-]?\\d+)?)\\b",
+      "name": "constant.numeric.triadlang"
+    },
+    "identifiers": {
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+      "name": "variable.other.triadlang"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+import numpy as np;
+
+let a = np.array([1.0, 2.0, 3.0, 4.0]);
+let b = np.array([10.0, 20.0, 30.0, 40.0]);
+
+let sum_ab = a + b;
+let diff = b - a;
+let prod = a * b;
+let div = b / a;
+let power = a ** 2;
+
+print(f"a + b  = {sum_ab}");
+print(f"b - a  = {diff}");
+print(f"a * b  = {prod}");
+print(f"b / a  = {div}");
+print(f"a ** 2 = {power}");
+
+let scalar = a * 3.0 + 1.0;
+print(f"a*3+1  = {scalar}");
+
+let big = np.zeros(1000000) + 1.0;
+let result = np.sum(big * big);
+print(f"sum of 1M ones squared = {result}");
+
+let x = np.linspace(0.0, 6.28, 100);
+let y = np.sin(x) * np.cos(x);
+print(f"sin*cos max = {np.max(y)}");
+print(f"sin*cos min = {np.min(y)}");

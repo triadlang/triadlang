@@ -1,0 +1,63 @@
+class Vec2 {
+    x
+    y
+    fn new(x, y) { self.x = x; self.y = y }
+    fn add_1() { self.x = self.x + 1; self.y = self.y + 1 }
+    fn mag() { return sqrt(self.x * self.x + self.y * self.y) }
+}
+
+fn bench(label, n, fn_ref) {
+    let result = fn_ref(n)
+    print(f"{label}: {result}")
+    return result
+}
+
+fn stress_solver() {
+    let total = 0.0
+    for i in range(10) {
+        let cfg = {"N": 128, "T": 1.0, "dt": 0.005, "seed": i, "mode": 2}
+        let r = solver_solve(cfg)
+        total = total + r["norm"]
+    }
+    return total
+}
+
+fn stress_language() {
+    let total = 0
+    for i in range(10000) {
+        let x = i * i + i
+        if x % 7 == 0 {
+            total = total + x
+        }
+    }
+    return total
+}
+
+fn stress_class_loop() {
+    let v = Vec2(0, 0)
+    for i in range(1000) {
+        v.add_1()
+    }
+    return v.mag()
+}
+
+fn stress_gen() {
+    fn gen_squares(n) {
+        let i = 0
+        while i < n {
+            yield i * i
+            i = i + 1
+        }
+    }
+    let total = 0
+    for x in gen_squares(1000) {
+        total = total + x
+    }
+    return total
+}
+
+print("=== NATIVE TriadLang stress ===")
+print(f"solver:    {stress_solver()}")
+print(f"language:  {stress_language()}")
+print(f"class:     {stress_class_loop()}")
+print(f"generator: {stress_gen()}")

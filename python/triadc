@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""
+triadc — TriadLang v2.0 compiler + runner.
+
+Usage:
+    triadc <file.tri>                     # compile and run
+    triadc --ast <file.tri>               # parse only, dump AST
+    triadc --tokens <file.tri>            # tokens only
+    triadc --plan <file.tri>              # compile + dump op log + segment plan
+    triadc --verbose <file.tri>           # run with diagnostics
+    triadc --trace <file.tri>             # print per-segment summary
+    triadc --seeds N <file.tri>           # ensemble: N runs, mean ± std per OUT
+"""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import numpy as np
+from frontend.lexer import tokenize, LexError
+from frontend.parser import parse, ParseError
+from compiler.triadc import Compiler, CompileConfig, CompileError, decode_outputs
+from runtime.observables import dominant_wavenumber
+
+
+def _trace_callback(compiled):
+    def cb(seg, seg_i):
+        parts = []
+        for sid, sub in list(compiled.runtime.substrates.items())[:8]:
+            try:
+                k = dominant_wavenumber(sub.psi, sub.dx,
+                                         k_min=2*np.pi/sub.params.L)
+            except Exception:
+                k = float("nan")
+            parts.append(f"{sub.name}:k*={k:.2f}")
+        print(f"  trace seg {seg_i:3d}  t={seg.t_end:6.2f}  "
+              f"{', '.join(parts)}")
+    return cb
+
+
+def _print_probe_log(compiled):
+    if not compiled.runtime.probe_log:
+        return
+    print("\n=== Probe log ===")
+    for r in compiled.runtime.probe_log:
+        print(f"  t={r.t:7.3f}  [{r.label}]  {r.substrate_name}: "
+              f"k*={r.k_star:.3f}  IPR={r.ipr:.4f}  "
+              f"C={r.crystallinity:.3f}  peak={r.peak:.4f}")
+
+
+def _parse_args(argv):
+    if len(argv) < 2:
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+    args = argv[1:]
+    mode = "run"
+    seeds = 1
+    path = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--ast":      mode = "ast"
+        elif a == "--tokens": mode = "tokens"
+        elif a == "--plan":   mode = "plan"
+        elif a == "--verbose":mode = "verbose"
+        elif a == "--trace":  mode = "trace"
+        elif a == "--plot":   mode = "plot"
+        elif a == "fmt":      mode = "fmt"
+        elif a == "--seeds":
+            i += 1
+            if i >= len(args):
+                print("triadc: --seeds requires an integer argument", file=sys.stderr)
+                sys.exit(2)
+            try:
+                seeds = int(args[i])
+            except ValueError:
+                print(f"triadc: --seeds expects an integer, got {args[i]!r}", file=sys.stderr)
+                sys.exit(2)
+        elif a.startswith("--"):
+            print(f"triadc: unknown flag {a}", file=sys.stderr)
+            sys.exit(2)
+        else:
+            path = a
+        i += 1
+    if path is None:
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+    return mode, seeds, path
+
+
+def _auto_plot(compiled, source_path: str):
+    """U1 — save trajectory + density figures from a finished run."""
+    import os
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        print(f"--plot: matplotlib unavailable: {e}", file=sys.stderr)
+        return
+    out_dir = os.path.join(os.path.dirname(source_path), "_plots")
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(source_path))[0]
+    n_subs = len(compiled.runtime.substrates)
+    rows = (n_subs + 1) // 2
+    fig, axes = plt.subplots(rows, 2, figsize=(11, 3.2 * rows))
+    # ncols is always 2, so subplots returns a (2,) array when rows==1
+    # (including the single-substrate case) and a (rows,2) array otherwise.
+    if rows == 1:
+        axes = [axes]
+    for i, (sid, sub) in enumerate(compiled.runtime.substrates.items()):
+        ax = axes[i // 2][i % 2]
+        if sub.density_traj is None or sub.density_traj.size == 0:
+            ax.set_title(f"{sub.name} (no trajectory)")
+            continue
+        if sub.D == 1:
+            t = sub.t_traj
+            ax.imshow(sub.density_traj, aspect="auto", origin="lower",
+                      extent=[t[0], t[-1], -sub.params.L/2, sub.params.L/2],
+                      cmap="viridis")
+            ax.set_xlabel("t"); ax.set_ylabel("x")
+            ax.set_title(f"{sub.name} : |ψ(x,t)|²")
+        else:
+            # ND: plot norm trajectory
+            norm_t = sub.density_traj.sum(axis=tuple(range(sub.D))) * sub.dx**sub.D
+            ax.plot(sub.t_traj, norm_t)
+            ax.set_xlabel("t"); ax.set_ylabel("‖ψ‖²")
+            ax.set_title(f"{sub.name} (D={sub.D}): norm vs t")
+    if n_subs % 2 == 1:
+        axes[-1][-1].axis("off")
+    fig.tight_layout()
+    out_path = os.path.join(out_dir, f"{base}.png")
+    fig.savefig(out_path, dpi=110)
+    plt.close(fig)
+    print(f"saved plot: {out_path}")
+    # U2 — multi-scale plot for any composed_of macros
+    try:
+        from runtime.viz import multi_scale_plot
+        ms = multi_scale_plot(compiled, source_path)
+        if ms:
+            for p in ms:
+                print(f"saved multi-scale plot: {p}")
+    except Exception as e:
+        print(f"  (multi-scale plot skipped: {e})")
+
+
+def main(argv):
+    mode, seeds, path = _parse_args(argv)
+    if not os.path.exists(path):
+        print(f"triadc: file not found: {path}", file=sys.stderr)
+        return 2
+    with open(path) as f:
+        src = f.read()
+
+    try:
+        if mode == "tokens":
+            for t in tokenize(src):
+                print(t)
+            return 0
+        prog_ast = parse(src)
+        if mode == "ast":
+            import pprint
+            pprint.pprint(prog_ast, depth=12)
+            return 0
+        if mode == "fmt":
+            from compiler.formatter import format_program
+            print(format_program(prog_ast), end="")
+            return 0
+        compiled = Compiler().compile(prog_ast)
+        if mode == "plan":
+            print("=== Compile log ===")
+            for line in compiled.op_log:
+                print(" ", line)
+            print(f"\n=== Segments: {len(compiled.runtime.segments)} ===")
+            for i, seg in enumerate(compiled.runtime.segments):
+                edges_str = ", ".join(
+                    f"({e.src_id}->{e.dst_id} κ={e.kappa:.2f})"
+                    for e in seg.edges
+                )
+                print(f"  seg {i}  t=[{seg.t_start:.2f}, {seg.t_end:.2f}]  "
+                      f"edges=[{edges_str}]")
+            print(f"\n=== Substrates: {len(compiled.runtime.substrates)} ===")
+            for sid, sub in compiled.runtime.substrates.items():
+                print(f"  sub {sid}  name={sub.name}")
+            print(f"\n=== Outputs: {compiled.output_names}")
+            return 0
+
+        verbose = (mode == "verbose")
+        attach_trace = (mode == "trace")
+        do_plot = (mode == "plot")
+
+        # L5 — detect per-output ensemble requests (over_seeds > 1) and
+        # re-run the program for those.  We honour them in addition to a
+        # --seeds CLI flag.
+        per_output_seeds = []
+        for entry in compiled.output_names:
+            if isinstance(entry, tuple) and entry[0] == "OBSERVE":
+                # entry: ("OBSERVE", name, metrics, over_seeds[, stream_to])
+                ns = entry[3]
+                if ns > 1:
+                    per_output_seeds.append(ns)
+        max_per_out_seeds = max(per_output_seeds) if per_output_seeds else 1
+
+        if seeds <= 1 and max_per_out_seeds <= 1:
+            if verbose:
+                print(f"Compiled: {len(compiled.runtime.substrates)} substrates, "
+                      f"{len(compiled.runtime.segments)} segments, "
+                      f"total t = {compiled.runtime.global_t:.2f}")
+            if attach_trace:
+                compiled.runtime.on_segment_end = _trace_callback(compiled)
+            result = compiled.runtime.run(verbose=verbose)
+            if result.get("diverged"):
+                print(f"!! DIVERGED at {result.get('diverged_at')}",
+                      file=sys.stderr)
+                return 1
+            out = decode_outputs(compiled)
+            for name, value in out.items():
+                print(f"{name} = {value}")
+            _print_probe_log(compiled)
+            if do_plot:
+                _auto_plot(compiled, path)
+            return 0
+
+        # If any OBSERVE asked for over_seeds > 1, run that many times
+        # even without a --seeds CLI flag.
+        if seeds <= 1 and max_per_out_seeds > 1:
+            seeds = max_per_out_seeds
+
+        # --seeds N : ensemble (also triggered by OBSERVE over_seeds=N)
+        outs = {}
+        diverge_count = 0
+        for s in range(seeds):
+            prog_ast = parse(src)
+            compiled_s = Compiler().compile(prog_ast)
+            for sid, sub in compiled_s.runtime.substrates.items():
+                sub.rng = np.random.default_rng(1000 + s + sid)
+            result = compiled_s.runtime.run(verbose=False)
+            if result.get("diverged"):
+                diverge_count += 1
+                continue
+            decoded = decode_outputs(compiled_s)
+            for name, value in decoded.items():
+                outs.setdefault(name, []).append(value)
+        if diverge_count:
+            print(f"!! {diverge_count}/{seeds} runs diverged", file=sys.stderr)
+        for name, vals in outs.items():
+            # value may be: scalar (legacy OUT), dict (OBSERVE), or bool (assert)
+            if isinstance(vals[0], dict):
+                # Per-metric aggregate
+                agg = {}
+                for metric in vals[0]:
+                    metric_vals = [v[metric] for v in vals
+                                   if isinstance(v.get(metric), (int, float))]
+                    if metric_vals:
+                        arr = np.asarray(metric_vals, dtype=float)
+                        agg[metric] = (float(arr.mean()), float(arr.std(ddof=0)))
+                    else:
+                        agg[metric] = (None, None)
+                parts = [f"{m}={mu:.4f}±{sd:.4f}" for m, (mu, sd) in agg.items()
+                         if mu is not None]
+                print(f"{name} = {{ {', '.join(parts)} }}   (over {len(vals)} runs)")
+            elif isinstance(vals[0], bool):
+                pass_n = sum(1 for v in vals if v)
+                print(f"{name} = {pass_n}/{len(vals)} runs PASS")
+            else:
+                arr = np.asarray([float(v) for v in vals], dtype=float)
+                print(f"{name} = {arr.mean():.3f} ± {arr.std(ddof=0):.3f}   "
+                      f"(over {len(vals)} runs)")
+        return 0
+
+    except LexError as e:
+        print(f"triadc: lex error: {e}", file=sys.stderr)
+        return 1
+    except ParseError as e:
+        print(f"triadc: parse error: {e}", file=sys.stderr)
+        return 1
+    except CompileError as e:
+        print(f"triadc: compile error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

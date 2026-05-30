@@ -1,0 +1,17 @@
+print("=== Convergencia dt MODO LINEAR (P1 only, N=128, T=2.0) ===")
+print("")
+
+let r1 = solver_solve({"N": 128, "T": 2.0, "dt": 0.02, "seed": 42, "mode": 0})
+print(f"dt=0.020: norm={r1["norm"]:.10f}  peak={r1["peak"]:.10f}")
+
+let r2 = solver_solve({"N": 128, "T": 2.0, "dt": 0.01, "seed": 42, "mode": 0})
+print(f"dt=0.010: norm={r2["norm"]:.10f}  peak={r2["peak"]:.10f}")
+
+let r3 = solver_solve({"N": 128, "T": 2.0, "dt": 0.005, "seed": 42, "mode": 0})
+print(f"dt=0.005: norm={r3["norm"]:.10f}  peak={r3["peak"]:.10f}")
+
+let r4 = solver_solve({"N": 128, "T": 2.0, "dt": 0.001, "seed": 42, "mode": 0})
+print(f"dt=0.001: norm={r4["norm"]:.10f}  peak={r4["peak"]:.10f}")
+
+let r5 = solver_solve({"N": 128, "T": 2.0, "dt": 0.0005, "seed": 42, "mode": 0})
+print(f"dt=0.0005: norm={r5["norm"]:.10f}  peak={r5["peak"]:.10f}")

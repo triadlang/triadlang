@@ -1,0 +1,68 @@
+import triad.tensor as T;
+import triad.nn as nn;
+
+// Baseline causal transformer — next-token prediction on a fixed sequence.
+// Task: learn to predict the next token in a repeating pattern.
+// vocab = 6 tokens, sequence is a deterministic cycle the model must memorize.
+
+let vocab_size = 6;
+let seq_len = 16;
+
+// Repeating pattern: 0 1 2 3 4 5 0 1 2 3 ... (period 6)
+// Input  = pattern[0:seq_len], target = pattern[1:seq_len+1]
+let pattern = [];
+for i in range(seq_len + 1) {
+    pattern.push(i % vocab_size);
+}
+
+let inputs = T.tensor([pattern[0:seq_len]]);        // (1, seq_len)
+let targets = T.tensor(pattern[1:seq_len + 1]);     // (seq_len,)
+
+let model = nn.Transformer(
+    vocab_size,
+    d_model=32,
+    n_heads=4,
+    n_layers=2,
+    d_ff=64,
+    max_len=32
+);
+
+let optimizer = nn.Adam(model.parameters(), lr=0.01);
+
+print(f"Baseline causal transformer");
+print(f"  vocab={vocab_size}  seq_len={seq_len}  params={len(model.parameters())} tensors");
+print(f"  task: predict next token in period-{vocab_size} cycle");
+print("");
+
+for epoch in range(150) {
+    let logits = model(inputs);              // (1, seq_len, vocab)
+    let flat = logits.reshape(seq_len, vocab_size);
+    let loss = T.cross_entropy(flat, targets);
+    optimizer.zero_grad();
+    loss.backward();
+    optimizer.step();
+    if epoch % 15 == 0 {
+        print(f"  epoch {epoch:3d}: loss = {loss.item():.5f}");
+    }
+}
+
+print("");
+print("--- Predictions after training ---");
+let final_logits = model(inputs).reshape(seq_len, vocab_size);
+let correct = 0;
+for i in range(seq_len) {
+    let row = final_logits[i];
+    let best = 0;
+    let best_val = row[0].item();
+    for j in range(vocab_size) {
+        if row[j].item() > best_val {
+            best_val = row[j].item();
+            best = j;
+        }
+    }
+    let tgt = targets[i].item();
+    if best == tgt {
+        correct = correct + 1;
+    }
+}
+print(f"  accuracy: {correct}/{seq_len}");

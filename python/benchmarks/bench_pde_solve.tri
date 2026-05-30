@@ -1,0 +1,13 @@
+import triad;
+import time;
+
+let start = time.now();
+
+let params = triad.regime("B0");
+let result = triad.solve(params, T=2.0);
+
+let elapsed = time.now() - start;
+
+print(f"TriadLang NumPy/FFT solver: {elapsed:.4f}s");
+print(f"  k_star={result.k_star:.6f}, crystallinity={result.crystallinity:.6f}");
+print(f"  peak={result.peak:.6f}, norm={result.norm:.6f}");

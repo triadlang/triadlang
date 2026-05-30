@@ -1,0 +1,11 @@
+print("=== Native C: Ablation P1 / P1+P3 / P1+P2+P3 ===")
+print("")
+
+let r1 = solver_solve({"N": 128, "T": 5.0, "dt": 0.005, "seed": 42, "mode": 0})
+print(f"      P1: norm={r1["norm"]:.6f}  peak={r1["peak"]:.6f}")
+
+let r2 = solver_solve({"N": 128, "T": 5.0, "dt": 0.005, "seed": 42, "mode": 1})
+print(f"   P1+P3: norm={r2["norm"]:.6f}  peak={r2["peak"]:.6f}")
+
+let r3 = solver_solve({"N": 128, "T": 5.0, "dt": 0.005, "seed": 42, "mode": 2})
+print(f"P1+P2+P3: norm={r3["norm"]:.6f}  peak={r3["peak"]:.6f}")

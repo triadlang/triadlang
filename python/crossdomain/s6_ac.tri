@@ -1,0 +1,7 @@
+@T(18.0)
+reg climate : ENSO_recharge = 4;
+reg a : anti_collapse = 4;
+reg b : anti_collapse = 4;
+reg c : anti_collapse = 4;
+ring(climate, a, b, c) kappa=-2.5 for T=18.0;
+OBSERVE climate k_star, crystallinity, peak, atom_count;

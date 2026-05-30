@@ -1,0 +1,5 @@
+let r = solver_solve({"N": 128, "T": 2.0, "dt": 0.005, "seed": 42, "mode": 0})
+print(f"norm={r["norm"]:.10f}  peak={r["peak"]:.10f}")
+let d = r["density"]
+print(f"density[0]={d[0]:.10e}")
+print(f"density[64]={d[64]:.10f}")

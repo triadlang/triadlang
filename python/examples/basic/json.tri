@@ -1,0 +1,10 @@
+import json;
+
+let data = {"name": "TriadLang", "version": 1, "universal": true};
+
+let text = json.stringify(data);
+print("JSON: " + text);
+
+let parsed = json.parse(text);
+print("parsed name: " + str(parsed["name"]));
+print("parsed version: " + str(parsed["version"]));

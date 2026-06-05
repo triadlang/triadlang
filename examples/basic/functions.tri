@@ -1,0 +1,19 @@
+fn add(a, b) {
+    return a + b;
+}
+
+fn greet(name) {
+    return "Hello, " + name + "!";
+}
+
+print(add(2, 3));
+print(greet("TriadLang"));
+
+fn factorial(n) {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+print("5! = " + str(factorial(5)));

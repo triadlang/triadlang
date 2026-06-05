@@ -1,0 +1,9 @@
+import numpy;
+
+let a = numpy.array([1, 2, 3, 4, 5]);
+let s = numpy.sum(a);
+print("numpy sum = " + str(s));
+let m = numpy.mean(a);
+print("numpy mean = " + str(m));
+let b = a * 2;
+print("a * 2 = " + str(b));

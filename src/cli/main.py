@@ -1,0 +1,551 @@
+from __future__ import annotations
+import sys
+import os
+PY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(PY_ROOT) if os.path.basename(PY_ROOT) in ('python', 'src') else PY_ROOT
+if PY_ROOT not in sys.path:
+    sys.path.insert(0, PY_ROOT)
+
+def cmd_run(args):
+    sys.setrecursionlimit(50000)
+    backend = 'solver'
+    safe = False
+    remaining = []
+    i = 0
+    while i < len(args):
+        if args[i] == '--backend' and i + 1 < len(args):
+            backend = args[i + 1]
+            i += 2
+        elif args[i] == '--safe':
+            safe = True
+            i += 1
+        else:
+            remaining.append(args[i])
+            i += 1
+    args = remaining
+    if not args:
+        print('usage: triad run <file.tri> [--backend solver|vm]', file=sys.stderr)
+        return 1
+    path = args[0]
+    if not os.path.exists(path):
+        print(f'error: file not found: {path}', file=sys.stderr)
+        return 1
+    from frontend.parser_universal import parse, ParseError
+    from frontend.lexer_universal import LexError
+    from runtime.compiler_runtime import TriadCompiler, CompileError, set_safe_mode
+    try:
+        with open(path) as f:
+            src = f.read()
+        mod = parse(src, path)
+        set_safe_mode(safe)
+        compiler = TriadCompiler()
+        if backend == 'vm':
+            compiler._backend = 'vm'
+        compiler.compile_and_run(mod)
+        return 0
+    except (LexError, ParseError) as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except CompileError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except Exception as e:
+        sourcemap = compiler._sourcemap if compiler._sourcemap else None
+        if sourcemap and sys.exc_info()[2] is not None:
+            tb_text = sourcemap.format_traceback(sys.exc_info()[2], src)
+            print(f'{tb_text}\n{type(e).__name__}: {e}', file=sys.stderr)
+        else:
+            print(f'runtime error: {e}', file=sys.stderr)
+        return 1
+
+def cmd_check(args):
+    if not args:
+        print('usage: triad check <file.tri>', file=sys.stderr)
+        return 1
+    path = args[0]
+    if not os.path.exists(path):
+        print(f'error: file not found: {path}', file=sys.stderr)
+        return 1
+    from frontend.parser_universal import parse, ParseError
+    from frontend.lexer_universal import LexError
+    from compiler.typecheck_universal import typecheck, TypeCheckError
+    try:
+        with open(path) as f:
+            src = f.read()
+        mod = parse(src, path)
+        typecheck(mod)
+        print(f'check: {path} OK')
+        return 0
+    except (LexError, ParseError) as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except TypeCheckError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+def cmd_compile(args):
+    path = None
+    emit_ir = False
+    emit_json_path = None
+    native = False
+    no_boehm = False
+    output_path = None
+    i = 0
+    while i < len(args):
+        if args[i] == '--emit-ir':
+            emit_ir = True
+        elif args[i] == '--emit-ir-json':
+            i += 1
+            emit_json_path = args[i] if i < len(args) else 'out.json'
+        elif args[i] == '--native':
+            native = True
+        elif args[i] == '--no-boehm':
+            no_boehm = True
+        elif args[i] == '-o':
+            i += 1
+            output_path = args[i] if i < len(args) else 'a.out'
+        else:
+            path = args[i]
+        i += 1
+    if not path:
+        print('usage: triad compile <file.tri> [--emit-ir] [--emit-ir-json out.json] [--native] [-o output]', file=sys.stderr)
+        return 1
+    if not os.path.exists(path):
+        print(f'error: file not found: {path}', file=sys.stderr)
+        return 1
+    from frontend.parser_universal import parse, ParseError
+    from frontend.lexer_universal import LexError
+    from compiler.lower import lower_module
+    from compiler.emit_json import emit_json, emit_json_file
+    try:
+        with open(path) as f:
+            src = f.read()
+        if native:
+            from compiler.c_codegen import compile_to_c
+            import subprocess
+            import tempfile
+            c_code = compile_to_c(src, path)
+            base = os.path.splitext(os.path.basename(path))[0]
+            c_path = output_path + '.c' if output_path else base + '.c'
+            bin_path = output_path or base
+            with open(c_path, 'w') as f:
+                f.write(c_code)
+            rt_dir = os.path.join(REPO_ROOT, 'native', 'c')
+            cc = os.environ.get('CC', 'gcc')
+            cflags = ['-std=c11', '-O2', '-I', os.path.join(rt_dir, 'include')]
+            # prefer the static archive when present: the shared .so may have
+            # been built against a specific cuda runtime and would then fail to
+            # load on machines without it. linking the .a avoids that loadtime
+            # dependency entirely.
+            static_lib = os.path.join(rt_dir, 'libtriad_rt.a')
+            if os.path.exists(static_lib):
+                libs = [static_lib, '-lm', '-lpthread']
+            else:
+                libs = ['-L', rt_dir, '-ltriad_rt', '-lm']
+            _fftw_inc = os.path.join(os.path.expanduser('~'), '.local', 'include', 'fftw3.h')
+            if os.path.exists('/usr/include/fftw3.h'):
+                cflags.append('-DUSE_FFTW')
+                libs.append('-lfftw3')
+            elif os.path.exists(_fftw_inc):
+                cflags.append('-DUSE_FFTW')
+                cflags.extend(['-I', os.path.dirname(_fftw_inc)])
+                _fftw_lib = os.path.join(os.path.expanduser('~'), '.local', 'lib')
+                libs.extend(['-L', _fftw_lib, '-lfftw3'])
+            gc_header = os.path.exists('/usr/include/gc/gc.h')
+            if no_boehm or not gc_header:
+                cflags.append('-DTRIAD_NO_BOEHM')
+            else:
+                libs.append('-lgc')
+            cmd = [cc] + cflags + [c_path] + libs + ['-o', bin_path]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f'cc error:\n{result.stderr}', file=sys.stderr)
+                return 1
+            if result.stderr:
+                for line in result.stderr.strip().split('\n'):
+                    if 'warning' in line:
+                        print(f'  {line}')
+            print(f'compiled {path} -> {bin_path} (native)')
+            return 0
+        mod = parse(src, path)
+        ir = lower_module(mod)
+        if emit_json_path:
+            emit_json_file(ir, emit_json_path)
+            print(f'IR written to {emit_json_path}')
+        elif emit_ir:
+            print(emit_json(ir))
+        else:
+            print(emit_json(ir))
+        return 0
+    except (LexError, ParseError) as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+def cmd_repl(args):
+    from cli.repl import run_repl
+    run_repl()
+    return 0
+
+def cmd_doctor(args):
+    print('TriadLang Doctor v1.0')
+    print('=' * 40)
+    checks = []
+    v = sys.version_info
+    checks.append(('Python >= 3.10', v >= (3, 10)))
+    for mod_name in ['frontend.lexer_universal', 'frontend.parser_universal', 'frontend.ast_nodes', 'compiler.ir', 'compiler.lower', 'compiler.emit_json', 'runtime.interpreter', 'cli.repl']:
+        try:
+            __import__(mod_name)
+            checks.append((f'import {mod_name}', True))
+        except Exception as e:
+            checks.append((f'import {mod_name}: {e}', False))
+    try:
+        import numpy
+        checks.append(('numpy available', True))
+    except ImportError:
+        checks.append(('numpy (optional, needed for triad-native)', False))
+    ex_dir = os.path.join(REPO_ROOT, 'examples', 'basic')
+    checks.append((f'examples/basic/ exists', os.path.isdir(ex_dir)))
+    for label, ok in checks:
+        status = 'OK' if ok else 'MISSING'
+        print(f'  [{status:7s}] {label}')
+    all_ok = all((ok for _, ok in checks))
+    print()
+    if all_ok:
+        print('All checks passed.')
+    else:
+        print('Some checks failed — see above.')
+    return 0 if all_ok else 1
+
+def cmd_jit_stats(args):
+    # report hot-spot tracking. this counts hot loops during execution; it does
+    # not compile scalar loops natively (that anti-pattern is rejected: speed
+    # comes from the vectorized equation, not scalar loops). run a program first
+    # in the same process to populate counts, or read the live tracker.
+    from runtime.jit_tiered import get_jit
+    stats = get_jit().stats()
+    print('triadlang hot-spot tracker')
+    print('=' * 40)
+    for key in ('enabled', 'threshold', 'compile_count', 'cache_size'):
+        if key in stats:
+            print(f'  {key:14s}: {stats[key]}')
+    counts = stats.get('counts') or {}
+    if counts:
+        print('  loop hit counts:')
+        for name, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+            hot = ' (hot)' if count >= stats.get('threshold', 128) else ''
+            print(f'    {name}: {count}{hot}')
+    else:
+        print('  no loops tracked in this process yet')
+    return 0
+
+
+def cmd_test(args):
+    import subprocess
+    # run the real suites: pytest over src/tests and the end-to-end harness,
+    # then aggregate. this replaces the old smoke_all.py stub.
+    tests_dir = os.path.join(PY_ROOT, 'tests')
+    e2e = os.path.join(REPO_ROOT, 'test_e2e_full.py')
+    env = {**os.environ, 'PYTHONPATH': PY_ROOT}
+    overall = 0
+
+    print('running pytest src/tests ...')
+    rc_pytest = subprocess.call([sys.executable, '-m', 'pytest', tests_dir, '-q'], env=env)
+    if rc_pytest != 0:
+        overall = 1
+
+    if os.path.exists(e2e):
+        print('\nrunning test_e2e_full.py ...')
+        rc_e2e = subprocess.call([sys.executable, e2e], cwd=REPO_ROOT, env=env)
+        if rc_e2e != 0:
+            overall = 1
+    else:
+        print('\ntest_e2e_full.py not found, skipping e2e', file=sys.stderr)
+
+    print('\nall test suites passed.' if overall == 0 else '\nsome test suites failed.')
+    return overall
+
+def cmd_fmt(args):
+    if not args:
+        print('usage: triad fmt <file.tri>', file=sys.stderr)
+        return 1
+    path = args[0]
+    if not os.path.exists(path):
+        print(f'error: file not found: {path}', file=sys.stderr)
+        return 1
+    from frontend.parser_universal import parse, ParseError
+    from frontend.lexer_universal import LexError
+    from compiler.formatter import format_universal
+    try:
+        with open(path) as f:
+            src = f.read()
+        mod = parse(src, path)
+        print(format_universal(mod), end='')
+        return 0
+    except (LexError, ParseError) as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+def cmd_bench(args):
+    if not args:
+        print('usage: triad bench <file.tri>', file=sys.stderr)
+        return 1
+    import time
+    path = args[0]
+    from frontend.parser_universal import parse
+    from runtime.compiler_runtime import TriadCompiler
+    with open(path) as f:
+        src = f.read()
+    mod = parse(src, path)
+    start = time.perf_counter()
+    compiler = TriadCompiler()
+    compiler.compile_and_run(mod)
+    elapsed = time.perf_counter() - start
+    print(f'\nbench: {elapsed:.4f}s')
+    return 0
+
+def cmd_init(args):
+    name = args[0] if args else None
+    if not name:
+        print('usage: triad init <project-name>', file=sys.stderr)
+        return 1
+    from stdlib.registry import init_project
+    # create the project in its own subdirectory ./<name>/ rather than the cwd,
+    # so triad.json, triad_modules/ and .gitignore land in a fresh project root.
+    project_dir = os.path.join('.', name)
+    if os.path.exists(os.path.join(project_dir, 'triad.json')):
+        print(f'triad project already exists at {project_dir}/', file=sys.stderr)
+        return 1
+    os.makedirs(project_dir, exist_ok=True)
+    init_project(name, project_dir=project_dir)
+    print(f'initialized: ./{name}/')
+    return 0
+
+def cmd_install(args):
+    from stdlib.registry import install_package, install_dependencies, load_manifest, save_manifest
+    if not args:
+        installed = install_dependencies()
+        if not installed:
+            print('no dependencies to install')
+        else:
+            for n in installed:
+                print(f'  installed: {n}')
+        return 0
+    source = args[0]
+    name_override = args[1] if len(args) > 1 else None
+    pkg_name = install_package(source, name=name_override)
+    m = load_manifest()
+    if m:
+        m.dependencies[pkg_name] = source
+        save_manifest(m)
+        print(f'  installed: {pkg_name} (added to {m.name})')
+    else:
+        print(f'  installed: {pkg_name}')
+    return 0
+
+def cmd_publish(args):
+    from stdlib.registry import publish_package
+    reg_dir = args[0] if args else None
+    try:
+        path = publish_package(registry_dir=reg_dir)
+        m = None
+        from stdlib.registry import load_manifest
+        m = load_manifest()
+        print(f'published: {m.name}@{m.version} -> {path}')
+        return 0
+    except Exception as e:
+        print(f'error: {e}', file=sys.stderr)
+        return 1
+
+def cmd_list(args):
+    from stdlib.registry import list_installed
+    pkgs = list_installed()
+    if not pkgs:
+        print('no packages installed')
+        return 0
+    print(f"{'name':<20} {'version':<10} {'source':<10} {'description'}")
+    print('-' * 60)
+    for p in pkgs:
+        src = 'symlink' if p['symlink'] else 'copy'
+        desc = p['description'][:30] if p['description'] else ''
+        print(f"{p['name']:<20} {p['version']:<10} {src:<10} {desc}")
+    return 0
+
+def cmd_docgen(args):
+    from compiler.docgen import cmd_docgen as _cmd_docgen
+    return _cmd_docgen(args)
+
+def cmd_debug(args):
+    from runtime.debugger import cmd_debug as _cmd_debug
+    return _cmd_debug(args)
+
+def cmd_lsp(args):
+    from cli.lsp import main as lsp_main
+    lsp_main()
+    return 0
+
+def cmd_serve(args):
+    host = '127.0.0.1'
+    port = 8000
+    reload = False
+    i = 0
+    while i < len(args):
+        if args[i] == '--host' and i + 1 < len(args):
+            host = args[i + 1]; i += 2
+        elif args[i] == '--port' and i + 1 < len(args):
+            port = int(args[i + 1]); i += 2
+        elif args[i] == '--reload':
+            reload = True; i += 1
+        else:
+            i += 1
+    try:
+        import uvicorn
+    except ImportError:
+        print('error: uvicorn not installed. run: pip install "triadlang[api]"', file=sys.stderr)
+        return 1
+    uvicorn.run('api.app:app', host=host, port=port, reload=reload)
+    return 0
+
+def cmd_solve(args):
+    import argparse
+    import json
+    p = argparse.ArgumentParser(prog='triad solve', add_help=True)
+    p.add_argument('--regime', default=None)
+    p.add_argument('--N', type=int, default=128)
+    p.add_argument('--T', type=float, default=20.0)
+    p.add_argument('--L', type=float, default=32.0)
+    p.add_argument('--dt', type=float, default=0.005)
+    p.add_argument('--dim', type=int, choices=[1, 2, 3], default=1)
+    p.add_argument('--output', choices=['json', 'npy'], default='json')
+    p.add_argument('--out-file', default=None)
+    ns = p.parse_args(args)
+
+    from runtime.core.solver import TriadParams, integrate, integrate_2d, integrate_3d
+    from runtime.physics.observables import crystallinity, dominant_wavenumber, peak_density, norm, ipr, fwhm
+    import numpy as np
+
+    if ns.regime:
+        from stdlib.regimes import resolve_regime
+        params = resolve_regime(ns.regime, N=ns.N, L=ns.L, dt=ns.dt)
+        params.T = ns.T
+        params.D = ns.dim
+    else:
+        params = TriadParams(N=ns.N, T=ns.T, L=ns.L, dt=ns.dt, D=ns.dim)
+
+    dispatch = {1: integrate, 2: integrate_2d, 3: integrate_3d}
+    result = dispatch[ns.dim](params)
+
+    psi = result['psi_final']
+    dx = float(result.get('dx', ns.L / ns.N))
+    psi_1d = psi.ravel()
+    k_min = 2.0 * np.pi / ns.L
+
+    obs = {
+        'crystallinity': float(crystallinity(psi_1d, dx)),
+        'k_star': float(dominant_wavenumber(psi_1d, dx, k_min=k_min)),
+        'peak_density': float(peak_density(psi_1d)),
+        'norm': float(norm(psi_1d, dx)),
+        'ipr': float(ipr(psi_1d, dx)),
+        'fwhm': float(fwhm(psi_1d, dx)),
+    }
+
+    if ns.output == 'json':
+        t_arr = result.get('t', result.get('t_traj', np.array([ns.T])))
+        out = {
+            't_final': float(t_arr[-1]) if len(t_arr) > 0 else ns.T,
+            'N': ns.N,
+            'dim': ns.dim,
+            'regime': ns.regime,
+            **obs,
+        }
+        text = json.dumps(out, indent=2)
+        if ns.out_file:
+            with open(ns.out_file, 'w') as f:
+                f.write(text)
+            print(f'saved {ns.out_file}')
+        else:
+            print(text)
+    else:
+        fname = ns.out_file or 'psi_final.npy'
+        np.save(fname, psi)
+        print(f'saved {fname}')
+        for k, v in obs.items():
+            print(f'  {k}: {v:.6f}')
+    return 0
+
+def cmd_observables(args):
+    import argparse
+    import json
+    p = argparse.ArgumentParser(prog='triad observables', add_help=True)
+    p.add_argument('file')
+    p.add_argument('--dx', type=float, default=None)
+    p.add_argument('--L', type=float, default=32.0)
+    p.add_argument('--N', type=int, default=None)
+    ns = p.parse_args(args)
+
+    import numpy as np
+    from runtime.physics.observables import (
+        crystallinity, dominant_wavenumber, peak_density,
+        norm, ipr, fwhm, participation_ratio,
+    )
+
+    psi = np.load(ns.file, allow_pickle=False)
+    psi_1d = psi.ravel()
+    N = ns.N or psi_1d.shape[0]
+    dx = ns.dx if ns.dx is not None else (ns.L / N)
+    k_min = 2.0 * np.pi / ns.L
+
+    result = {
+        'file': ns.file,
+        'shape': list(psi.shape),
+        'dtype': str(psi.dtype),
+        'N_flat': int(N),
+        'dx': float(dx),
+        'crystallinity': float(crystallinity(psi_1d, dx)),
+        'k_star': float(dominant_wavenumber(psi_1d, dx, k_min=k_min)),
+        'peak_density': float(peak_density(psi_1d)),
+        'norm': float(norm(psi_1d, dx)),
+        'ipr': float(ipr(psi_1d, dx)),
+        'fwhm': float(fwhm(psi_1d, dx)),
+        'participation_ratio': float(participation_ratio(psi_1d, dx)),
+    }
+    print(json.dumps(result, indent=2))
+    return 0
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:
+        print('TriadLang')
+        print()
+        print('Usage:')
+        print('  triad run <file.tri>              Run a .tri file')
+        print('  triad check <file.tri>            Type check')
+        print('  triad compile <file.tri> --native [--no-boehm] [-o out]  Compile to native binary')
+        print('  triad repl                        Interactive REPL')
+        print('  triad lsp                         Start LSP server')
+        print('  triad init <name>                 Create new project')
+        print('  triad install [source]            Install package/deps')
+        print('  triad publish                     Publish to local registry')
+        print('  triad list                        List installed packages')
+        print('  triad doctor                      Check installation')
+        print('  triad test                        Run tests')
+        print('  triad bench <file.tri>            Benchmark')
+        print('  triad debug <file.tri> [-b N]     Debug with breakpoints')
+        print('  triad docgen <file|dir> [-f md|html]  Generate docs')
+        print('  triad fmt <file.tri>              Format')
+        print('  triad serve [--host HOST] [--port PORT] [--reload]  Start API server')
+        print('  triad solve [--regime NAME] [--N N] [--T T] [--dim 1|2|3] [--output json|npy]')
+        print('  triad observables <file.npy> [--dx DX] [--L L]')
+        return 0
+    cmd = argv[0]
+    rest = argv[1:]
+    if cmd.endswith('.tri'):
+        return cmd_run([cmd])
+    commands = {'run': cmd_run, 'check': cmd_check, 'compile': cmd_compile, 'repl': cmd_repl, 'lsp': cmd_lsp, 'init': cmd_init, 'install': cmd_install, 'publish': cmd_publish, 'list': cmd_list, 'doctor': cmd_doctor, 'test': cmd_test, 'fmt': cmd_fmt, 'bench': cmd_bench, 'debug': cmd_debug, 'docgen': cmd_docgen, 'serve': cmd_serve, 'solve': cmd_solve, 'observables': cmd_observables, 'jit-stats': cmd_jit_stats}
+    fn = commands.get(cmd)
+    if fn is None:
+        print(f'unknown command: {cmd}', file=sys.stderr)
+        return 1
+    return fn(rest)
+if __name__ == '__main__':
+    sys.exit(main())

@@ -1,0 +1,87 @@
+// TriadLM — language model built on the full Triad equation
+// Each block runs the solver (FFT + P1+P2+P3), not linear projections
+// Written IN TriadLang, running ON the Triad equation
+
+import triad.nn as nn;
+import triad.tensor as tensor;
+import triad.train as train;
+
+let TEXT = "the triad field is a self organizing system that combines three interacting substrates. the first substrate is the wavefunction psi which evolves under the schrodinger equation. the second substrate is the memory field which captures nonlocal temporal correlations. the third substrate is the physical reservoir which provides high dimensional dynamics. these three substrates are coupled through a three body interaction that produces emergent order. the key equation governing the dynamics is the triad equation. here lambda controls the nonlinearity and gamma is the dissipation rate and eta is the stochastic forcing. the fluctuation dissipation theorem connects gamma and eta. the memory field introduces a nonlocal potential. the physical reservoir emulates edge of chaos dynamics. at the edge of chaos the system has maximum computational capacity. the triad ssm uses complex valued states with frequency omega and decay. each block has a memory channel that stores past activations. the coupling term ensures the three substrates interact. the mamba architecture inspired this design. our model extends mamba by adding the memory field and the three body coupling. the fidelity gate ensures the surrogate reproduces the solver output. the attractor observer monitors the long term statistics. save weights and load weights provide serialization. the training loop uses adam optimizer with gradient clipping. the loss function combines prediction error with physics constraints. the full stack includes solver at layer zero and ssm at layer one and surrogate at layer two and observer at layer three. together these four layers form a complete simulation framework.";
+
+print("TriadLM — full equation language model");
+print("======================================");
+
+let tok = nn.CharTokenizer(TEXT);
+let tokens = tok.encode(TEXT);
+
+// repeat tokens 20x for more training data
+let big_tokens = [];
+for i in range(20) {
+    for j in range(len(tokens)) {
+        big_tokens.push(tokens[j]);
+    }
+}
+
+print("vocab_size=" + str(tok.vocab_size) + "  tokens=" + str(len(big_tokens)));
+
+let D_MODEL = 256;
+let N_SOLVER = 256;
+let N_BLOCKS = 6;
+let N_MEMORY = 4;
+let SEQ_LEN = 128;
+let BATCH = 4;
+let EPOCHS = 3000;
+let LR = 0.001;
+
+let model = nn.TriadLM(tok.vocab_size, D_MODEL, N_SOLVER, N_BLOCKS, N_MEMORY);
+let params = model.parameters();
+
+print("params: " + str(len(params)));
+print("architecture: full solver (FFT + P1+P2+P3) per block");
+
+let opt = nn.Adam(params, LR);
+let dataset = nn.TextDataset(big_tokens, SEQ_LEN);
+
+print("training started...");
+print("");
+
+for ep in range(EPOCHS) {
+    let sample = dataset.batch(BATCH);
+    let x = tensor.tensor(sample[0]);
+    let y = tensor.tensor(sample[1]);
+    let loss = model.loss(x, y);
+
+    opt.zero_grad();
+    loss.backward();
+    opt.step();
+
+    if (ep + 1) % 200 == 0 {
+        print("  epoch " + str(ep + 1) + "/" + str(EPOCHS) + "  loss=" + str(float(loss)));
+    }
+
+    if (ep + 1) % 500 == 0 {
+        let prompt = [];
+        for i in range(10) {
+            prompt.push(tokens[i]);
+        }
+        let gen = model.generate(prompt, 60, 0.8, 10);
+        print("  ---");
+        print("  " + tok.decode(gen));
+        print("  ---");
+    }
+}
+
+print("");
+print("training complete");
+train.save_weights(model, "models/triadlm_full.weights");
+print("saved: models/triadlm_full.weights");
+
+let final_prompt = [];
+for i in range(15) {
+    final_prompt.push(tokens[i]);
+}
+let final_gen = model.generate(final_prompt, 150, 0.7, 10);
+let final_text = tok.decode(final_gen);
+print("");
+print("final generation:");
+print(final_text);

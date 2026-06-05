@@ -1,0 +1,6 @@
+from numpy import array, sum as npsum, mean;
+
+let a = array([10, 20, 30]);
+let s = npsum(a);
+let m = mean(a);
+print("from numpy import: sum=" + str(s) + " mean=" + str(m));

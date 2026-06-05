@@ -1,0 +1,14 @@
+import triad;
+import numpy as np;
+
+fn my_potential(x) {
+    return -0.5 * x * x + 0.1 * np.sin(x);
+}
+
+let params = triad.regime("B0", V_ext=my_potential);
+let result = triad.solve(params, T=5.0);
+
+print(f"Custom V_ext results:");
+print(f"  k_star        = {result.k_star}");
+print(f"  crystallinity = {result.crystallinity}");
+print(f"  peak          = {result.peak}");

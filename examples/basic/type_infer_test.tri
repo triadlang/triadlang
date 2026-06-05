@@ -1,0 +1,23 @@
+import numpy as np;
+
+let arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0]);
+
+let total = 0.0;
+for x in arr {
+    total = total + x;
+}
+print(f"np.sum via inference = {total}");
+
+let nums = [10, 20, 30];
+let s = 0;
+for x in nums {
+    s = s + x;
+}
+print(f"list sum = {s}");
+
+let big = np.ones(1000000);
+let big_sum = 0.0;
+for x in big {
+    big_sum = big_sum + x;
+}
+print(f"1M ndarray sum = {big_sum}");

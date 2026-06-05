@@ -1,0 +1,7 @@
+@T(18.0)
+reg climate : ENSO_recharge = 4;
+reg a : HodgkinHuxley = 4;
+reg b : MaxwellWiechert = 4;
+reg c : Cepheid_pulsator = 4;
+ring(climate, a, b, c) kappa=-2.5 for T=18.0;
+OBSERVE climate k_star, crystallinity, peak, atom_count;

@@ -1,0 +1,22 @@
+fn greet(greeting, *names) {
+    for name in names {
+        print(greeting + " " + name);
+    }
+}
+
+greet("Hello", "Alice", "Bob", "Charlie");
+
+fn make_config(**options) {
+    for key in options {
+        print(str(key) + " = " + str(options[key]));
+    }
+}
+
+make_config(debug=true, verbose=false, level=3);
+
+fn forward(*args, **kwargs) {
+    greet(*args);
+    make_config(**kwargs);
+}
+
+forward("Hi", "Dave", "Eve", color="blue", size=42);

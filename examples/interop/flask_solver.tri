@@ -1,0 +1,21 @@
+import flask;
+import triad.kernel as kernel;
+import json;
+
+let app = flask.Flask("triad_interop");
+
+fn simulate() {
+    let params = {"regime": "R5_crystal", "seed": 42, "N": 64, "T": 2.0, "dt": 0.01};
+    let result = kernel.run(params);
+    let obs = kernel.extract(result);
+    let response = {"crystallinity": obs["crystallinity"], "peak": obs["peak"], "norm": obs["norm"], "k_star": obs["k_star"]};
+    return flask.jsonify(response);
+}
+
+app.add_url_rule("/simulate", "simulate", simulate);
+
+fn health() {
+    return flask.jsonify({"status": "ok", "engine": "triadlang"});
+}
+
+app.add_url_rule("/health", "health", health);

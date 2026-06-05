@@ -1,0 +1,13 @@
+import triad.memory as mem;
+
+# hopfield-style associative recall through the P2 memory fields. store a few
+# emergent density patterns, then recall one from a corrupted seed. retrieval is
+# emergent energy descent in V_mem; nothing is imposed during recall, and all
+# three pillars run.
+let hm = mem.HopfieldMemory();
+hm.store_pattern();
+hm.store_pattern();
+
+let result = hm.recall_with_seed(0, 8.0);
+print("best match index: " + str(result["best_match"]));
+print("best overlap: " + str(result["best_overlap"]));

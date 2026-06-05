@@ -1,0 +1,20 @@
+type Person {
+    name: String;
+    age: Int;
+}
+
+let p = Person(name="Ana", age=30);
+print(p.name);
+print(p.age);
+
+type Vec2 {
+    x: Float;
+    y: Float;
+}
+
+let v = Vec2(x=3.0, y=4.0);
+print("vector: " + str(v.x) + ", " + str(v.y));
+
+import math;
+let mag = math.sqrt(v.x ** 2 + v.y ** 2);
+print("magnitude: " + str(mag));

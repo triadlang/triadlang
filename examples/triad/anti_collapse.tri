@@ -1,0 +1,8 @@
+// Anti-collapse demonstration — real PDE solver
+// Uses the calibrated anti_collapse regime from stdlib/regimes.py
+@T(18.0)
+reg a : anti_collapse = 4;
+reg b : anti_collapse = 4;
+ring(a, b) kappa=-2.5 for T=18.0;
+OBSERVE a k_star, crystallinity, peak, atom_count;
+OBSERVE b k_star, crystallinity, peak, atom_count;

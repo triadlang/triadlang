@@ -1,0 +1,16 @@
+import math;
+
+let r = math.sqrt(25.0);
+print("sqrt(25) = " + str(r));
+print("pi = " + str(math.pi));
+print("sin(0) = " + str(math.sin(0.0)));
+print("cos(0) = " + str(math.cos(0.0)));
+
+import random;
+let n = random.randint(1, 100);
+print("random number: " + str(n));
+
+import string;
+let parts = string.split("hello world triad");
+print(parts);
+print(string.upper("triadlang"));

@@ -1,0 +1,68 @@
+import triad.tensor as T;
+import triad.nn as nn;
+
+print("=== Linear layer ===");
+let linear = nn.Linear(4, 3);
+let x = T.randn(2, 4, requires_grad=true);
+let out = linear(x);
+print(f"input: {x.shape}  output: {out.shape}");
+let loss = out.sum();
+loss.backward();
+print(f"weight.grad shape: {linear.weight.grad.shape}");
+
+print("");
+print("=== Sequential MLP ===");
+let model = nn.Sequential(
+    nn.Linear(10, 32),
+    nn.ReLU(),
+    nn.Linear(32, 16),
+    nn.ReLU(),
+    nn.Linear(16, 3)
+);
+
+let data = T.randn(8, 10, requires_grad=true);
+let pred = model(data);
+print(f"MLP input: {data.shape}  output: {pred.shape}");
+print(f"params: {len(model.parameters())}");
+
+print("");
+print("=== Conv1d ===");
+let conv = nn.Conv1d(1, 4, kernel_size=3, padding=1);
+let signal = T.randn(1, 16, requires_grad=true);
+let filtered = conv(signal);
+print(f"Conv1d input: {signal.shape}  output: {filtered.shape}");
+
+print("");
+print("=== Training XOR with Adam ===");
+let xor_data = T.tensor([[0,0],[0,1],[1,0],[1,1]]);
+let xor_labels = T.tensor([0, 1, 1, 0]);
+
+let net = nn.Sequential(
+    nn.Linear(2, 16),
+    nn.Tanh(),
+    nn.Linear(16, 2)
+);
+
+let optimizer = nn.Adam(net.parameters(), lr=0.05);
+
+for epoch in range(200) {
+    let logits = net(xor_data);
+    let l = T.cross_entropy(logits, xor_labels);
+    optimizer.zero_grad();
+    l.backward();
+    optimizer.step();
+    if epoch % 50 == 0 {
+        print(f"  epoch {epoch}: loss={l.item():.4f}");
+    }
+}
+
+let final_logits = net(xor_data);
+print(f"  final predictions:");
+for i in range(4) {
+    let row = xor_data[i];
+    let pred_class = 0;
+    if final_logits[i][1] > final_logits[i][0] {
+        pred_class = 1;
+    }
+    print(f"    {row} -> {pred_class} (target: {xor_labels[i]})");
+}

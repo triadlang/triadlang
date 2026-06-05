@@ -1,0 +1,7 @@
+import triad.kernel as kernel;
+
+let params = {"regime": "R5_crystal", "seed": 42, "N": 64, "T": 2.0, "dt": 0.01};
+let result = kernel.run(params);
+let observables = kernel.extract(result);
+let crystallinity = observables["crystallinity"];
+print("headless crystallinity = " + str(crystallinity));

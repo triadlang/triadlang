@@ -1,0 +1,17 @@
+import numpy as np;
+import time;
+
+let N = 1000000;
+
+let start = time.now();
+
+let x = np.linspace(-16.0, 16.0, N);
+let y = np.sin(x);
+let z = np.exp(-1.0 * x * x / 8.0);
+let w = y * z + 0.5 * x;
+let total = np.sum(w);
+let peak = np.max(np.abs(w));
+
+let elapsed = time.now() - start;
+print(f"TriadLang NumPy array ops: {elapsed:.4f}s");
+print(f"  N={N}, sum={total:.6f}, peak={peak:.6f}");

@@ -1,0 +1,32 @@
+import triad.inference as inf;
+import time;
+
+let model = inf.load_model("Qwen/Qwen3-0.6B");
+
+let questions = [
+    "What is the speed of light?",
+    "Name 3 programming languages.",
+    "What is 7 * 8?",
+    "Translate 'hello' to Portuguese.",
+    "Write a one-line poem about the moon.",
+];
+
+let total_tokens = 0;
+let total_time = 0.0;
+
+for q in questions {
+    let t0 = time.now();
+    let result = inf.chat(model, [
+        {"role": "user", "content": q}
+    ], max_new_tokens=256, temperature=0.0, stream=false);
+    let elapsed = time.now() - t0;
+    total_tokens = total_tokens + len(result.all_tokens);
+    total_time = total_time + elapsed;
+
+    print(f"Q: {q}");
+    print(f"A: {result.text}");
+    print(f"  {elapsed:.1f}s | {result.tokens_per_second:.1f} tok/s | think={len(result.think_tokens)} answer={len(result.answer_tokens)}");
+    print();
+}
+
+print(f"total: {total_tokens} tokens in {total_time:.1f}s = {total_tokens/total_time:.1f} tok/s avg");

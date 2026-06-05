@@ -1,0 +1,8 @@
+from numpy import array, zeros;
+
+let a = array([1.0, 2.0, 3.0]);
+let b = zeros(3);
+let c = a + b;
+let idx = a[0];
+print("indexing a[0] = " + str(idx));
+print("a + zeros = " + str(c));

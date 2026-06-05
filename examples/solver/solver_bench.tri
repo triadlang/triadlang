@@ -1,0 +1,22 @@
+fn benchmark(configs) {
+    let results = []
+    for cfg in configs {
+        let r = solver_solve(cfg)
+        let entry = {"N": r["N"], "norm": r["norm"], "peak": r["peak"]}
+        results.push(entry)
+    }
+    return results
+}
+
+let configs = [
+    {"N": 64, "T": 2.0, "dt": 0.01, "seed": 42},
+    {"N": 128, "T": 2.0, "dt": 0.005, "seed": 42},
+    {"N": 256, "T": 2.0, "dt": 0.005, "seed": 42},
+    {"N": 256, "T": 5.0, "dt": 0.005, "seed": 42},
+    {"N": 512, "T": 2.0, "dt": 0.005, "seed": 42},
+]
+
+let results = benchmark(configs)
+for r in results {
+    print(f"N={r["N"]:>3}  norm={r["norm"]:.6f}  peak={r["peak"]:.6f}")
+}

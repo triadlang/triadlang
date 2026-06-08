@@ -4,15 +4,11 @@ _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PKG_DIR not in sys.path:
     sys.path.insert(0, _PKG_DIR)
 
-# the default parser is the universal one: it accepts the modern language
-# (let, fn, classes, control flow, f-strings). the legacy reg/observe/run DSL
-# parser is still available as parse_legacy for the substrate-oriented pipeline.
 from frontend.parser_universal import parse
 from frontend.parser import parse as parse_legacy
 from compiler.triadc import Compiler, CompileConfig, decode_outputs
 from runtime.core.solver import TriadParams, integrate, integrate_2d, integrate_3d
 from stdlib.regimes import resolve_regime, list_regimes
-
 
 def compile_source(src: str, file_path: str = '<triad>'):
     """Parse and execute modern triadlang source.
@@ -27,7 +23,6 @@ def compile_source(src: str, file_path: str = '<triad>'):
     mod.file = file_path
     return TriadCompiler().compile_and_run(mod)
 
-
 def compile_dsl(src: str, config: CompileConfig = None):
     """Compile the legacy reg/observe/run DSL into a runnable program.
 
@@ -36,7 +31,6 @@ def compile_dsl(src: str, config: CompileConfig = None):
     """
     ast = parse_legacy(src)
     return Compiler(config=config).compile(ast)
-
 
 def run(compiled, verbose: bool=False):
     result = compiled.runtime.run(verbose=verbose)

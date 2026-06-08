@@ -142,13 +142,10 @@ class HopfieldMemory:
 
     def __init__(self, params: Optional[TriadParams] = None):
         if params is None:
-            # a full-compliant default: all three pillars active. the
-            # TriadParams defaults already carry Lambda, alpha, Gamma and
-            # f_FDT, so recall runs P1+P2+P3 without any external setup.
+            
             params = TriadParams(N=64, L=16.0, T=10.0)
         self.base_params = params
-        # params is the public alias the rest of the api reads. it is always a
-        # valid, pillar-complete TriadParams even when the caller passed None.
+        
         self.params = params
         self.patterns: list[StoredPattern] = []
         self._rng = np.random.default_rng(params.seed)

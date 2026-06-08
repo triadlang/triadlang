@@ -16,7 +16,6 @@ router = APIRouter()
 
 _TIMEOUT = float(os.environ.get('TRIAD_API_TIMEOUT', '120'))
 
-
 def _resolve_params(req: SolveRequest):
     from runtime.core.solver import TriadParams
     if req.regime:
@@ -31,7 +30,6 @@ def _resolve_params(req: SolveRequest):
             setattr(base, k, v)
         return base
     return req.params.to_triad_params()
-
 
 def _build_solve_result(raw: dict, p) -> SolveResult:
     psi = raw['psi_final']
@@ -49,14 +47,12 @@ def _build_solve_result(raw: dict, p) -> SolveResult:
         **obs,
     )
 
-
 def _run_1d_sync(req: SolveRequest) -> SolveResult:
     from runtime.core.solver import integrate
     p = _resolve_params(req)
     psi0 = b64_to_ndarray(req.psi0_b64) if req.psi0_b64 else None
     raw = integrate(p, psi0=psi0)
     return _build_solve_result(raw, p)
-
 
 def _run_2d_sync(req: SolveRequest) -> SolveResult:
     from runtime.core.solver import integrate_2d
@@ -67,7 +63,6 @@ def _run_2d_sync(req: SolveRequest) -> SolveResult:
     raw = integrate_2d(p, psi0=psi0)
     return _build_solve_result(raw, p)
 
-
 def _run_3d_sync(req: SolveRequest) -> SolveResult:
     from runtime.core.solver import integrate_3d
     p = _resolve_params(req)
@@ -75,7 +70,6 @@ def _run_3d_sync(req: SolveRequest) -> SolveResult:
         p.D = 3
     raw = integrate_3d(p)
     return _build_solve_result(raw, p)
-
 
 def _run_batch_sync(req: BatchSolveRequest) -> BatchSolveResult:
     from runtime.core.solver import integrate, TriadParams
@@ -104,7 +98,6 @@ def _run_batch_sync(req: BatchSolveRequest) -> BatchSolveResult:
         ensemble_crystallinity_mean=float(np.mean(crystallinities)),
         ensemble_crystallinity_std=float(np.std(crystallinities)),
     )
-
 
 async def _stream_adaptive(req: SolveRequest):
     from runtime.core.solver import _integrate_steps
@@ -143,7 +136,6 @@ async def _stream_adaptive(req: SolveRequest):
 
     return StreamingResponse(event_stream(), media_type='text/event-stream')
 
-
 @router.post('/run', response_model=SolveResult, summary='Run 1D Triad PDE solver (P1+P2+P3)')
 async def run_1d(req: SolveRequest):
     loop = asyncio.get_event_loop()
@@ -158,7 +150,6 @@ async def run_1d(req: SolveRequest):
         raise HTTPException(status_code=500, detail=str(exc))
     return result
 
-
 @router.post('/run/2d', response_model=SolveResult, summary='Run 2D Triad PDE solver (P1+P2+P3)')
 async def run_2d(req: SolveRequest):
     loop = asyncio.get_event_loop()
@@ -172,7 +163,6 @@ async def run_2d(req: SolveRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return result
-
 
 @router.post('/run/3d', response_model=SolveResult, summary='Run 3D Triad PDE solver — use small N (default 24)')
 async def run_3d(req: SolveRequest):
@@ -193,7 +183,6 @@ async def run_3d(req: SolveRequest):
         raise HTTPException(status_code=500, detail=str(exc))
     return result
 
-
 @router.post('/run/adaptive', summary='Run adaptive Triad PDE solver with SSE streaming checkpoints')
 async def run_adaptive(req: SolveRequest):
     try:
@@ -201,7 +190,6 @@ async def run_adaptive(req: SolveRequest):
     except ImportError:
         raise HTTPException(status_code=501, detail='_integrate_steps not available in this build')
     return await _stream_adaptive(req)
-
 
 @router.post('/batch', response_model=BatchSolveResult, summary='Run K-seed ensemble of 1D Triad solver')
 async def run_batch(req: BatchSolveRequest):

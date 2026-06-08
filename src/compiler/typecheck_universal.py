@@ -141,12 +141,6 @@ def typecheck(mod: Module) -> None:
                 best_name = candidate
         return best_name
 
-    # conservative type inference. var_types maps a name to one of
-    # 'int','float','str','bool','list' when it can be inferred from a literal
-    # binding, or is absent/None when unknown. inference is intentionally
-    # shallow: it only fires on cases that are unambiguous so it never reports a
-    # false positive on this dynamically-typed language. a name that is ever
-    # reassigned to an unknown type is dropped from var_types.
     var_types: dict[str, str | None] = {}
     _NUMERIC = {'int', 'float'}
 
@@ -185,8 +179,7 @@ def typecheck(mod: Module) -> None:
         if lt is None or rt is None:
             return
         op = e.op
-        # '+' is overloaded: str+str concatenates, number+number adds. mixing a
-        # string with a number is the runtime error this catch is for.
+        
         if op == '+':
             str_side = ('str' in (lt, rt))
             num_side = (lt in _NUMERIC or rt in _NUMERIC)
@@ -196,7 +189,7 @@ def typecheck(mod: Module) -> None:
                     f"a string and a number do not combine ({_pos(e.pos)})\n"
                     f"  help: wrap the number with str(...) to concatenate")
         elif op in ('-', '*', '/', '%', '**'):
-            # arithmetic on a string is never valid (no string repetition here).
+            
             if 'str' in (lt, rt):
                 other = rt if lt == 'str' else lt
                 errors.append(
@@ -311,8 +304,7 @@ def typecheck(mod: Module) -> None:
         elif isinstance(s, AssignStmt):
             check_expr(s.value, scope)
             check_expr(s.target, scope)
-            # reassigning a simple name: update its inferred type. if the new
-            # type cannot be inferred, drop it so we never reason on stale info.
+            
             if isinstance(s.target, Ident):
                 var_types[s.target.name] = _infer(s.value)
         elif isinstance(s, ExprStmt):

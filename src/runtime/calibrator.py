@@ -234,7 +234,6 @@ class GaussNewtonCalibrator:
             "final_observables": history[-1]["observables"] if history else {},
         }
 
-
 def calibrate(params: TriadParams, observables: List[str] = None,
               max_iter: int = 15, verbose: bool = False) -> dict:
     """Self-calibrate a regime's tunable parameters.

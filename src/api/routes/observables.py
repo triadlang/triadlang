@@ -5,7 +5,6 @@ from api.serialization import b64_to_ndarray, ndarray_to_b64
 
 router = APIRouter()
 
-
 @router.post('/compute', response_model=ObservablesResult, summary='Compute all observables from a wavefunction field')
 async def compute_observables(req: ObservablesRequest):
     try:
@@ -34,7 +33,6 @@ async def compute_observables(req: ObservablesRequest):
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
 
 @router.post('/power_spectrum', response_model=PowerSpectrumResult, summary='Return FFT power spectrum (k, P) arrays')
 async def power_spectrum_endpoint(req: PowerSpectrumRequest):

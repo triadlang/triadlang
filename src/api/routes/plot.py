@@ -9,7 +9,6 @@ router = APIRouter()
 
 _TIMEOUT = float(os.environ.get('TRIAD_API_TIMEOUT', '120'))
 
-
 class PlotRequest(BaseModel):
     N: int = 128
     T: float = 10.0
@@ -25,29 +24,24 @@ class PlotRequest(BaseModel):
     seed: int = 0
     record_every: int = 20
 
-
 def _build_plot_response(raw, p, record_every):
     """Extract density field, coordinates, and power spectrum as JSON arrays."""
     psi = raw['psi_final']
     x = raw.get('x', np.linspace(-p.L / 2, p.L / 2, p.N, endpoint=False))
     dx = float(raw.get('dx', p.L / p.N))
 
-    # density
     rho = np.abs(np.asarray(psi).ravel()) ** 2
     x_arr = np.asarray(x).ravel()
 
-    # power spectrum
     from runtime.physics.observables import power_spectrum
     k, P = power_spectrum(np.asarray(psi).ravel(), dx)
     from runtime.backend import asnumpy
     k_arr = asnumpy(k).ravel()
     P_arr = asnumpy(P).ravel()
 
-    # observables
     from api.serialization import compute_standard_observables
     obs = compute_standard_observables(np.asarray(psi), dx, p.L)
 
-    # timeline if history exists
     timeline = []
     history = raw.get('history', [])
     for chk in history:
@@ -74,7 +68,6 @@ def _build_plot_response(raw, p, record_every):
         'timeline': timeline,
     }
 
-
 def _run_plot_sync(req: PlotRequest) -> dict:
     from runtime.core.solver import TriadParams, integrate_adaptive
     from stdlib.regimes import resolve_regime
@@ -96,7 +89,6 @@ def _run_plot_sync(req: PlotRequest) -> dict:
 
     raw = integrate_adaptive(p, checkpoint_every=req.record_every)
     return _build_plot_response(raw, p, req.record_every)
-
 
 @router.post('/plot', summary='Run PDE solver and return JSON arrays for plotting (density, spectrum, timeline)')
 async def plot(req: PlotRequest):

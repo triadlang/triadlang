@@ -9,14 +9,12 @@ if _SRC not in sys.path:
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import runtime.core.solver as _s
     import runtime.physics.observables as _o
     import stdlib.regimes as _r
     yield
-
 
 app = FastAPI(
     title='TriadLang API',
@@ -25,7 +23,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from api.routes import solver, coupled, observables, lang, regimes, adapter, templates, plot  # noqa: E402
+from api.routes import solver, coupled, observables, lang, regimes, adapter, templates, plot  
 
 app.include_router(solver.router, prefix='/solver', tags=['solver'])
 app.include_router(coupled.router, prefix='/coupled', tags=['coupled'])
@@ -45,11 +43,9 @@ except Exception:
 
 from fastapi.responses import HTMLResponse
 
-
 @app.get('/', response_class=HTMLResponse)
 async def dashboard():
     return _DASHBOARD_HTML
-
 
 @app.get('/health')
 async def health():

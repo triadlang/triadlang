@@ -662,9 +662,7 @@ class Interpreter:
         if isinstance(e, YieldExpr):
             return self._eval(e.value, env) if e.value else None
         if isinstance(e, FStringExpr):
-            # match the compiler runtime: literal segments pass through, expr
-            # segments are evaluated and rendered with python's format(), so an
-            # f-string prints the same under the interpreter and under triad run.
+            
             out = []
             for part in e.parts:
                 if part[0] == 'str':

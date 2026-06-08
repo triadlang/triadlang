@@ -8,7 +8,6 @@ _EXAMPLES_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..', '..', 'examples')
 )
 
-
 def _collect_templates() -> list[dict]:
     templates = []
     if not os.path.isdir(_EXAMPLES_ROOT):
@@ -34,7 +33,6 @@ def _collect_templates() -> list[dict]:
             })
     return templates
 
-
 @router.get('/', summary='List all example .tri templates grouped by category')
 async def list_templates(category: str | None = None):
     all_templates = _collect_templates()
@@ -45,7 +43,6 @@ async def list_templates(category: str | None = None):
         'templates': all_templates,
         'categories': categories,
     }
-
 
 @router.get('/{category}/{name}', summary='Get a single template source')
 async def get_template(category: str, name: str):

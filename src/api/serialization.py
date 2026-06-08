@@ -3,17 +3,14 @@ import base64
 import io
 import numpy as np
 
-
 def ndarray_to_b64(arr: np.ndarray) -> str:
     buf = io.BytesIO()
     np.save(buf, arr)
     return base64.b64encode(buf.getvalue()).decode('ascii')
 
-
 def b64_to_ndarray(s: str) -> np.ndarray:
     raw = base64.b64decode(s)
     return np.load(io.BytesIO(raw), allow_pickle=False)
-
 
 def compute_standard_observables(psi_final: np.ndarray, dx: float, L: float) -> dict:
     from runtime.physics.observables import (

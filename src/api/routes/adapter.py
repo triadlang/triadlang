@@ -12,14 +12,10 @@ router = APIRouter()
 
 _TIMEOUT = float(os.environ.get('TRIAD_API_TIMEOUT', '120'))
 
-
-# --- models ---
-
 class AdapterRunRequest(BaseModel):
     source: str
-    adapter: Optional[str] = None  # None = auto-detect via discovery
-    vars: Optional[list[str]] = None  # names to extract from namespace after run
-
+    adapter: Optional[str] = None  
+    vars: Optional[list[str]] = None  
 
 class AdapterRunResult(BaseModel):
     ok: bool
@@ -29,28 +25,21 @@ class AdapterRunResult(BaseModel):
     detected_framework: Optional[str] = None
     error: Optional[str] = None
 
-
 class KernelRunRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
-    observables: Optional[list[str]] = None  # None = ['crystallinity', 'peak', 'norm', 'k_star']
-
+    observables: Optional[list[str]] = None  
 
 class KernelRunResult(BaseModel):
     ok: bool
     observables: dict[str, float] = Field(default_factory=dict)
     error: Optional[str] = None
 
-
 class FrameworkDetectRequest(BaseModel):
     source: str
 
-
 class FrameworkDetectResult(BaseModel):
     detected: list[str]
-    adapter: str  # which adapter would be selected
-
-
-# --- helpers ---
+    adapter: str  
 
 def _json_safe(v) -> Any:
     import numpy as np
@@ -63,7 +52,6 @@ def _json_safe(v) -> Any:
     if isinstance(v, (int, float, str, bool, type(None))):
         return v
     return str(v)
-
 
 def _run_adapter_sync(source: str, adapter_name: Optional[str], extract_vars: list[str]) -> AdapterRunResult:
     stdout_buf = io.StringIO()
@@ -88,14 +76,13 @@ def _run_adapter_sync(source: str, adapter_name: Optional[str], extract_vars: li
 
         try:
             if chosen == 'flask':
-                # for Flask we start the app but do not actually serve it —
-                # we just execute the .tri file and return the namespace
+                
                 adapter = FlaskAdapter(tri_file=tri_path)
                 with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
                     try:
                         adapter.start()
                     except RuntimeError:
-                        pass  # no 'app' variable is fine for extraction
+                        pass  
             else:
                 adapter = HeadlessAdapter(tri_file=tri_path)
                 with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
@@ -125,7 +112,6 @@ def _run_adapter_sync(source: str, adapter_name: Optional[str], extract_vars: li
             vars={},
             error=str(exc),
         )
-
 
 def _run_kernel_sync(params: dict, observables: Optional[list[str]]) -> KernelRunResult:
     try:
@@ -157,7 +143,6 @@ def _run_kernel_sync(params: dict, observables: Optional[list[str]]) -> KernelRu
     except Exception as exc:
         return KernelRunResult(ok=False, error=str(exc))
 
-
 def _dict_to_tri_literal(d: dict) -> str:
     pairs = []
     for k, v in d.items():
@@ -169,12 +154,8 @@ def _dict_to_tri_literal(d: dict) -> str:
             pairs.append(f'"{k}": {v}')
     return '{' + ', '.join(pairs) + '}'
 
-
 def _list_to_tri_literal(lst: list) -> str:
     return '[' + ', '.join(f'"{x}"' for x in lst) + ']'
-
-
-# --- routes ---
 
 @router.post('/run', response_model=AdapterRunResult,
              summary='Execute .tri source via auto-detected or explicit adapter (headless/flask)')
@@ -191,7 +172,6 @@ async def adapter_run(req: AdapterRunRequest):
         raise HTTPException(status_code=504, detail=f'adapter timed out after {_TIMEOUT}s')
     return result
 
-
 @router.post('/kernel/run', response_model=KernelRunResult,
              summary='Call kernel.run(params) + kernel.extract() from .tri kernel module')
 async def kernel_run(req: KernelRunRequest):
@@ -204,7 +184,6 @@ async def kernel_run(req: KernelRunRequest):
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail=f'kernel timed out after {_TIMEOUT}s')
     return result
-
 
 @router.post('/detect', response_model=FrameworkDetectResult,
              summary='Detect which Python framework a .tri source imports')

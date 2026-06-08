@@ -32,12 +32,6 @@ REPO = Path(__file__).resolve().parent.parent.parent.parent
 NATIVE = REPO / "native" / "c" / "parity" / "parity_multi_runtime"
 PY = REPO / "src" / "scripts" / "codegen" / "multi_runtime_to_text.py"
 
-# both sides are deterministic and noiseless (fdt_couple off, f_FDT=0), so the
-# implementations converge to the fp64 floor: the residuals are dominated by
-# IEEE-754 reordering across ~150 split-step iterations, not by any physics
-# difference. these tolerances are the precision floor the two solvers reach,
-# not an imposed target. (previously they were 0.5/0.15, loose enough to hide a
-# real divergence caused by python re-deriving FDT noise from Gamma.)
 PSI_ATOL = 2e-13
 PSI_RTOL = 1e-11
 SCALAR_ATOL = 1e-10

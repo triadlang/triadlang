@@ -4,12 +4,10 @@ from api.models import RegimeInfo, TriadParamsModel
 
 router = APIRouter()
 
-
 @router.get('/', summary='List all available regime names')
 async def list_regimes():
     from stdlib.regimes import list_regimes as _list
     return {'regimes': _list()}
-
 
 @router.get('/{name}', response_model=RegimeInfo, summary='Get TriadParams for a named regime')
 async def get_regime(name: str):

@@ -694,10 +694,7 @@ class CCodeGen:
             return f'({{ TriadValue {tmp}_l = ({left}), {tmp}_r = ({right}); ({tmp}_l.tag == TRIAD_INT && {tmp}_r.tag == TRIAD_INT) ? TRIAD_INT({tmp}_l.as.ival % {tmp}_r.as.ival) : TRIAD_FLOAT(fmod(({tmp}_l.tag==TRIAD_INT ? (double){tmp}_l.as.ival : {tmp}_l.as.fval), ({tmp}_r.tag==TRIAD_INT ? (double){tmp}_r.as.ival : {tmp}_r.as.fval))); }})'
         c_op = {'+': '+', '-': '-', '*': '*', '/': '/'}.get(op, '+')
         if op == '+':
-            # '+' is overloaded for string concatenation. if either operand is a
-            # string, stringify both and concat; otherwise it is numeric. without
-            # the string branch, str+str read .fval out of a union holding .sval
-            # and produced garbage.
+            
             return (f'({{ TriadValue {tmp}_l = ({left}), {tmp}_r = ({right}); '
                     f'({tmp}_l.tag == TRIAD_STRING || {tmp}_r.tag == TRIAD_STRING) ? '
                     f'(TriadValue){{.tag = TRIAD_STRING, .as = {{.sval = '

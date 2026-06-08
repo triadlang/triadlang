@@ -5,8 +5,7 @@ from compiler.ir import *
 def lower_module(mod: Module, optimize: bool = True, opt_level: int = 2) -> IRModule:
     ir = IRModule(name=mod.name, body=[lower_stmt(s) for s in mod.body])
     if optimize:
-        # constant folding and dead code elimination run on the IR, where the
-        # node structure makes the folds safe (no regex over source text).
+        
         from compiler.ir_passes import optimize as _optimize_ir
         ir = _optimize_ir(ir, level=opt_level)
     return ir

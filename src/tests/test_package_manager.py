@@ -204,7 +204,7 @@ def test_cli_init():
         try:
             ret = cmd_init(['myproject'])
             assert ret == 0
-            # triad init creates the project in its own ./<name>/ subdirectory.
+            
             assert os.path.exists(os.path.join(proj.dir, 'myproject', MANIFEST_FILE))
         finally:
             os.chdir(old_cwd)

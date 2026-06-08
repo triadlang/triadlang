@@ -36,14 +36,7 @@ def dump_run(name: str, p: TriadParams, lines: list) -> None:
 
 def run() -> str:
     lines: list[str] = []
-    # both fixtures are deterministic and noiseless so the python and c solvers
-    # can be compared byte-for-byte. fdt_couple is disabled here: with it on,
-    # the python solver would re-derive f_FDT from Gamma and inject FDT noise
-    # even though f_FDT is set to 0, which the c side does not do. that mismatch
-    # is a noise realization difference, not a solver-math difference, so for the
-    # parity check we keep both sides genuinely noiseless. (the physical model
-    # still runs all three pillars: Gamma dissipation is active, only the
-    # stochastic FDT term is zeroed for the comparison.)
+    
     p_lin = TriadParams(N=64, L=32.0, dt=0.005, T=0.5, hbar=1.0, m=1.0, Lambda=0.0, alpha=0.0, sigma=2.0, Gamma=0.0, f_FDT=0.0, nu=np.array([]), lam=np.array([]), mode='linear', seed=42, V_ext=None, omega=0.0, D=1, fdt_couple=False)
     dump_run('linear', p_lin, lines)
     p_full = TriadParams(N=64, L=32.0, dt=0.005, T=0.5, hbar=1.0, m=1.0, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.0, nu=np.array([2.0, 0.5, 0.1]), lam=np.array([-0.3, -0.2, -0.1]), mode='full', seed=42, V_ext='harmonic', omega=0.05, D=1, fdt_couple=False)

@@ -2,9 +2,7 @@ from __future__ import annotations
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
-
 V_EXT_LITERAL = Optional[Literal['harmonic', 'double_well', 'gaussian_bump', 'ramp', 'lattice']]
-
 
 class TriadParamsModel(BaseModel):
     L: float = 32.0
@@ -55,13 +53,11 @@ class TriadParamsModel(BaseModel):
             fdt_couple=p.fdt_couple, kT=p.kT,
         )
 
-
 class SolveRequest(BaseModel):
     params: TriadParamsModel = Field(default_factory=TriadParamsModel)
     regime: Optional[str] = None
     psi0_b64: Optional[str] = None
     stream: bool = False
-
 
 class SolveResult(BaseModel):
     psi_final_b64: str
@@ -76,19 +72,16 @@ class SolveResult(BaseModel):
     fwhm: float
     params_used: TriadParamsModel
 
-
 class BatchSolveRequest(BaseModel):
     params: TriadParamsModel = Field(default_factory=TriadParamsModel)
     regime: Optional[str] = None
     K: int = 8
     seeds: Optional[list[int]] = None
 
-
 class BatchSolveResult(BaseModel):
     results: list[SolveResult]
     ensemble_crystallinity_mean: float
     ensemble_crystallinity_std: float
-
 
 class CoupledRunRequest(BaseModel):
     regime: str = 'B0'
@@ -98,7 +91,6 @@ class CoupledRunRequest(BaseModel):
     T: float = 5.0
     N: int = 128
     seed: int = 0
-
 
 class SubstrateResult(BaseModel):
     substrate_id: int
@@ -111,18 +103,15 @@ class SubstrateResult(BaseModel):
     ipr: float
     fwhm: float
 
-
 class CoupledRunResult(BaseModel):
     substrates: list[SubstrateResult]
     elapsed: float
-
 
 class ObservablesRequest(BaseModel):
     psi_b64: str
     dx: float
     k_cutoff: float = 1.0
     L: Optional[float] = None
-
 
 class ObservablesResult(BaseModel):
     crystallinity: float
@@ -133,20 +122,16 @@ class ObservablesResult(BaseModel):
     fwhm: float
     participation_ratio: float
 
-
 class PowerSpectrumRequest(BaseModel):
     psi_b64: str
     dx: float
-
 
 class PowerSpectrumResult(BaseModel):
     k_b64: str
     P_b64: str
 
-
 class LangRunRequest(BaseModel):
     source: str
-
 
 class LangRunResult(BaseModel):
     stdout: str
@@ -154,23 +139,19 @@ class LangRunResult(BaseModel):
     ok: bool
     error: Optional[str] = None
 
-
 class LangCheckResult(BaseModel):
     ok: bool
     errors: list[str]
-
 
 class LangCompileResult(BaseModel):
     ir_json: str
     ok: bool
     error: Optional[str] = None
 
-
 class LangFormatResult(BaseModel):
     source: str
     ok: bool
     error: Optional[str] = None
-
 
 class RegimeInfo(BaseModel):
     name: str

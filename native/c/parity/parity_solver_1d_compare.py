@@ -32,9 +32,7 @@ PY = REPO / "src" / "scripts" / "codegen" / "solver_1d_to_text.py"
 
 LINEAR_MAX_ABS_TOL = 1e-13
 LINEAR_NORM_TOL    = 1e-13
-# both fixtures are now genuinely noiseless on both sides (fdt_couple off), so
-# the full fixture converges to the same fp64 floor as the linear one. the §7.4
-# acceptance bound is 1e-3; the implementations actually agree far below it.
+
 FULL_REL_L2_TOL    = 1e-3
 
 def parse(text: str) -> dict:

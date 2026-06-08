@@ -21,18 +21,14 @@ from compiler.ir import (
     IRFunction, IRCall, IRList, IRIndex, IRField,
 )
 
-
 def _is_int(n):
     return isinstance(n, IRInt)
-
 
 def _is_float(n):
     return isinstance(n, IRFloat)
 
-
 def _num(n):
     return n.value
-
 
 def _fold_binop(node: IRBinOp):
     """Return a folded literal node, or the (operand-folded) original."""
@@ -40,7 +36,6 @@ def _fold_binop(node: IRBinOp):
     right = fold_expr(node.right)
     folded = IRBinOp(op=node.op, left=left, right=right)
 
-    # numeric folding over int/float operands
     if (_is_int(left) or _is_float(left)) and (_is_int(right) or _is_float(right)):
         a, b, op = _num(left), _num(right), node.op
         both_int = _is_int(left) and _is_int(right)
@@ -61,7 +56,7 @@ def _fold_binop(node: IRBinOp):
                     return folded
                 r = a % b
             elif op == '**':
-                # avoid folding to huge values that would bloat the output
+                
                 if isinstance(b, int) and abs(b) > 64:
                     return folded
                 r = a ** b
@@ -76,12 +71,10 @@ def _fold_binop(node: IRBinOp):
             return IRInt(value=int(r))
         return IRFloat(value=float(r))
 
-    # string concatenation over string literals
     if node.op == '+' and isinstance(left, IRString) and isinstance(right, IRString):
         return IRString(value=left.value + right.value)
 
     return folded
-
 
 def _fold_unaryop(node: IRUnaryOp):
     operand = fold_expr(node.operand)
@@ -93,7 +86,6 @@ def _fold_unaryop(node: IRUnaryOp):
     if node.op == 'not' and isinstance(operand, IRBool):
         return IRBool(value=not operand.value)
     return IRUnaryOp(op=node.op, operand=operand)
-
 
 def fold_expr(node):
     if isinstance(node, IRBinOp):
@@ -111,7 +103,6 @@ def fold_expr(node):
     if isinstance(node, IRField):
         return IRField(obj=fold_expr(node.obj), field=node.field)
     return node
-
 
 def _fold_stmt(stmt):
     if isinstance(stmt, IRLet):
@@ -141,16 +132,13 @@ def _fold_stmt(stmt):
                           body=[_fold_stmt(s) for s in stmt.body])
     return stmt
 
-
 def constant_fold(module: IRModule) -> IRModule:
     """Fold constant expressions throughout the module."""
     out = copy.copy(module)
     out.body = [_fold_stmt(s) for s in module.body]
     return out
 
-
 _TERMINATORS = (IRReturn,)
-
 
 def _truthy_const(node):
     """Return True/False if node is a constant truthy/falsy literal, else None."""
@@ -164,7 +152,6 @@ def _truthy_const(node):
         return len(node.value) > 0
     return None
 
-
 def _dce_body(body):
     result = []
     for stmt in body:
@@ -172,23 +159,21 @@ def _dce_body(body):
         if stmt is None:
             continue
         result.append(stmt)
-        # statements after an unconditional return are unreachable.
+        
         if isinstance(stmt, _TERMINATORS):
             break
     return result
-
 
 def _dce_stmt(stmt):
     if isinstance(stmt, IRIf):
         cond_val = _truthy_const(stmt.condition)
         if cond_val is True and not stmt.elif_clauses:
-            # the then-branch always runs; the else is dead. inline the branch
-            # as a single if with an always-true condition but pruned else.
+            
             return IRIf(condition=stmt.condition,
                         then_body=_dce_body(stmt.then_body),
                         elif_clauses=[], else_body=None)
         if cond_val is False and not stmt.elif_clauses:
-            # the then-branch is dead; keep only the else branch (if any).
+            
             if stmt.else_body:
                 return IRIf(condition=IRBool(value=True),
                             then_body=_dce_body(stmt.else_body),
@@ -201,7 +186,7 @@ def _dce_stmt(stmt):
     if isinstance(stmt, IRFor):
         return IRFor(var=stmt.var, iter=stmt.iter, body=_dce_body(stmt.body))
     if isinstance(stmt, IRWhile):
-        # while False { ... } never runs.
+        
         if _truthy_const(stmt.condition) is False:
             return None
         return IRWhile(condition=stmt.condition, body=_dce_body(stmt.body))
@@ -210,13 +195,11 @@ def _dce_stmt(stmt):
                           body=_dce_body(stmt.body))
     return stmt
 
-
 def dead_code_elimination(module: IRModule) -> IRModule:
     """Remove unreachable statements and constant-false branches."""
     out = copy.copy(module)
     out.body = _dce_body(module.body)
     return out
-
 
 def optimize(module: IRModule, level: int = 2) -> IRModule:
     """Run the standard pass pipeline. level 1 folds only; level 2 also runs DCE

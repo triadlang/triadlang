@@ -52,10 +52,7 @@ def build_program() -> tuple[MultiRuntime, list[str]]:
     int_calib = IntCalib()
 
     def make_params(seed: int) -> TriadParams:
-        # full triad: P1 fractional dispersion active (alpha>0, sigma!=2), P2
-        # memory and P3 dissipation live. fdt_couple is off so the run is
-        # deterministic and the c reference (which uses f_FDT=0) can be compared
-        # to fp64; the stochastic FDT term is the only thing zeroed.
+        
         return TriadParams(N=N, L=L, dt=dt, T=T_settle + T_couple, hbar=1.0, m=1.0, omega=1.0, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.0, fdt_couple=False, kT=1.0, lam=np.array([0.05]), nu=np.array([0.5]), mode='full', seed=seed, V_ext='harmonic', D=1)
     rt = MultiRuntime(dt=dt, record_every=4)
     pA = make_params(seed=11)

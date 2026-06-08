@@ -1046,7 +1046,6 @@ class TriadCompiler:
         g['__file__'] = file_path or '__triad__'
         return g
 
-
 def _tri_solver_solve(cfg=None):
     """run the triad p1 plus p2 plus p3 solver from interpreted .tri code."""
     from dataclasses import fields as _dc_fields
@@ -1054,9 +1053,7 @@ def _tri_solver_solve(cfg=None):
     from runtime.core.solver import TriadParams as _TriadParams, integrate as _triad_integrate
 
     raw = dict(cfg or {})
-    # the solver always runs the full P1+P2+P3 model from .tri code. a mode
-    # passed in the config is ignored on purpose: the three pillars are never
-    # isolated for a program, only for the internal numerical audit harness.
+    
     raw.pop('mode', None)
     raw.setdefault('backend', 'cpu')
 
@@ -1075,9 +1072,6 @@ def _tri_solver_solve(cfg=None):
     norm = float(density_final.sum() * dx)
     peak = float(density_final.max()) if density_final.size else 0.0
 
-    # crystallinity from the final psi: fraction of spectral power above a
-    # structure cutoff. matches the C codegen path so triad run and
-    # triad compile --native agree.
     psi_final = _np_local.asarray(r.get('psi_final'))
     if psi_final.size:
         from runtime.physics.observables import crystallinity as _cryst
@@ -1669,9 +1663,6 @@ def _lazy_consciousness_module():
 
 _ALLOWED_PREFIXES: list[str] | None = None
 
-# in safe mode the host-escape builtins (py_call/py_eval/py_exec/ccall) are
-# disabled and imports are limited to a vetted prefix list, so a .tri file from
-# an unknown source cannot reach arbitrary cpython, ctypes or libc.
 _SAFE_MODE: bool = False
 _SAFE_IMPORT_PREFIXES = [
     'triad', 'math', 'random', 'statistics', 'json', 'itertools',
@@ -1695,10 +1686,7 @@ def is_safe_mode() -> bool:
 
 def _tri_import(path: list[str], search_paths: list[str]):
     key = '.'.join(path)
-    # in safe mode, a local .tri file is still importable, but any module-name
-    # import (triad stdlib wrapper or python module) must match the safe prefix
-    # list. this blocks fs/io/os and arbitrary python while keeping the math,
-    # json, random, collections, datetime wrappers and program-local modules.
+    
     if _SAFE_MODE:
         tri_local = _resolve_tri_file(key, path, search_paths)
         if tri_local is not None:

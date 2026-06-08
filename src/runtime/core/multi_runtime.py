@@ -180,9 +180,7 @@ class Segment:
     active_ids: Optional[object] = None
     v_ext_override: dict[int, Callable[[np.ndarray], np.ndarray]] = field(default_factory=dict)
     probes: list = field(default_factory=list)
-    # optional precision-weighted router. when set, the runtime recomputes the
-    # gating from each substrate's FDT precision every step and scales the
-    # coupling strengths accordingly (MoE routing). None means plain coupling.
+    
     router: object = None
 
 @dataclass

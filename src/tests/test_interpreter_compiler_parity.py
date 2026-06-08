@@ -36,7 +36,6 @@ PROGRAMS = {
     'comparison_chain': 'print(1 < 2); print(2 == 2); print(3 != 4); print(5 >= 5);',
 }
 
-
 def _run_interpreter(src: str) -> str:
     mod = parse(src, '<parity>')
     mod.file = '<parity>'
@@ -45,7 +44,6 @@ def _run_interpreter(src: str) -> str:
     with contextlib.redirect_stdout(buf):
         interp.run(mod)
     return buf.getvalue()
-
 
 def _run_compiler(src: str) -> str:
     mod = parse(src, '<parity>')
@@ -56,7 +54,6 @@ def _run_compiler(src: str) -> str:
         compiler.compile_and_run(mod)
     return buf.getvalue()
 
-
 def _check(name: str):
     src = PROGRAMS[name]
     out_interp = _run_interpreter(src)
@@ -66,7 +63,6 @@ def _check(name: str):
         f"  interpreter: {out_interp!r}\n"
         f"  compiler:    {out_comp!r}"
     )
-
 
 def test_arithmetic():
     _check('arithmetic')
@@ -103,7 +99,6 @@ def test_bool_logic():
 
 def test_comparison_chain():
     _check('comparison_chain')
-
 
 if __name__ == '__main__':
     for nm in PROGRAMS:

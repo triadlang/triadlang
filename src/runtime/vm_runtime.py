@@ -41,8 +41,7 @@ class VMRuntime:
         hbar = p.hbar
         Gamma = p.Gamma
         H_lin = hbar ** 2 * k ** 2 / 2.0 + alpha * np.abs(k) ** sigma
-        # half_lin is the unitary kinetic phase only; P3 dissipation is applied
-        # by the DSP opcode in load_strang_step, so Gamma is not folded in here.
+        
         half_lin = np.exp(-1j * H_lin * self.dt / (2 * hbar))
         psi = np.exp(-x ** 2 / 8.0).astype(np.complex128)
         psi /= np.sqrt(np.sum(np.abs(psi) ** 2) * dx)

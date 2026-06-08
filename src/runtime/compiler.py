@@ -80,9 +80,7 @@ class TriadCompiler:
         else:
             lam_split = (-0.3, -0.2, -0.1)
             nu_gen = (2.0, 0.5, 0.1)
-        # fractional dispersion (P1) stays active for every pattern; crystal
-        # uses a gentler alpha and sigma nearer 2 so the standing-wave structure
-        # is preserved while the pillar is never switched off.
+        
         if pattern_type == 'crystal':
             alpha_gen, sigma_gen = (0.1, 1.8)
         else:

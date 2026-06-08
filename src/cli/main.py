@@ -133,10 +133,7 @@ def cmd_compile(args):
             rt_dir = os.path.join(REPO_ROOT, 'native', 'c')
             cc = os.environ.get('CC', 'gcc')
             cflags = ['-std=c11', '-O2', '-I', os.path.join(rt_dir, 'include')]
-            # prefer the static archive when present: the shared .so may have
-            # been built against a specific cuda runtime and would then fail to
-            # load on machines without it. linking the .a avoids that loadtime
-            # dependency entirely.
+            
             static_lib = os.path.join(rt_dir, 'libtriad_rt.a')
             if os.path.exists(static_lib):
                 libs = [static_lib, '-lm', '-lpthread']
@@ -217,10 +214,7 @@ def cmd_doctor(args):
     return 0 if all_ok else 1
 
 def cmd_jit_stats(args):
-    # report hot-spot tracking. this counts hot loops during execution; it does
-    # not compile scalar loops natively (that anti-pattern is rejected: speed
-    # comes from the vectorized equation, not scalar loops). run a program first
-    # in the same process to populate counts, or read the live tracker.
+    
     from runtime.jit_tiered import get_jit
     stats = get_jit().stats()
     print('triadlang hot-spot tracker')
@@ -238,11 +232,9 @@ def cmd_jit_stats(args):
         print('  no loops tracked in this process yet')
     return 0
 
-
 def cmd_test(args):
     import subprocess
-    # run the real suites: pytest over src/tests and the end-to-end harness,
-    # then aggregate. this replaces the old smoke_all.py stub.
+    
     tests_dir = os.path.join(PY_ROOT, 'tests')
     e2e = os.path.join(REPO_ROOT, 'test_e2e_full.py')
     env = {**os.environ, 'PYTHONPATH': PY_ROOT}
@@ -309,8 +301,7 @@ def cmd_init(args):
         print('usage: triad init <project-name>', file=sys.stderr)
         return 1
     from stdlib.registry import init_project
-    # create the project in its own subdirectory ./<name>/ rather than the cwd,
-    # so triad.json, triad_modules/ and .gitignore land in a fresh project root.
+    
     project_dir = os.path.join('.', name)
     if os.path.exists(os.path.join(project_dir, 'triad.json')):
         print(f'triad project already exists at {project_dir}/', file=sys.stderr)

@@ -22,13 +22,7 @@ class TriadParams:
     nu: tuple = (2.0, 0.5, 0.1)
     lam: tuple = (-0.3, -0.2, -0.1)
     mode: str = 'full'
-    # mode is a solver-level numerical audit knob, not a Triad regime selector.
-    # 'full' is the physical model: P1+P2+P3 always active together.
-    # 'linear' and 'thermal' exist only so that test_solver_audit.py can verify
-    # propagator unitarity (norm conservation to fp64) and dt-convergence, which
-    # are mathematically checkable only when Gamma=0 and Lambda=0. no regime,
-    # template, compiler config, or .tri program ever sets mode away from 'full':
-    # the three pillars are never isolated by design. see _effective_params.
+    
     seed: int = 0
     record_every: int = 4
     D: int = 1

@@ -40,12 +40,7 @@ class TriadVM:
         self._ip = 0
 
     def load_strang_step(self) -> list[Instruction]:
-        # P3 dissipation is an explicit DSP opcode on each kinetic half-step,
-        # so the three pillars are all visible in the program: P1 (FWD/NLF/INV
-        # kinetic plus fractional dispersion), P2 (POT/MEM nonlinear and memory
-        # potential), P3 (DSP dissipation plus NOI FDT noise). half_lin carries
-        # only the unitary kinetic phase; DSP applies the Gamma decay separately
-        # so dissipation is never folded silently into the kinetic step.
+        
         return [Instruction('FWD'), Instruction('NLF', (0.5,)), Instruction('INV'), Instruction('DSP', (0.5,)), Instruction('POT'), Instruction('MEM'), Instruction('CPL'), Instruction('NOI'), Instruction('FWD'), Instruction('NLF', (0.5,)), Instruction('INV'), Instruction('DSP', (0.5,))]
 
     def load_full_run(self, n_steps: int) -> list[Instruction]:
@@ -120,8 +115,7 @@ def create_vm_state(N: int=128, L: float=32.0, Lambda: float=-0.5, Gamma: float=
     sigma = kwargs.get('sigma', 1.5)
     hbar = 1.0
     H_lin = hbar ** 2 * k ** 2 / 2.0 + alpha * np.abs(k) ** sigma
-    # half_lin carries only the unitary kinetic phase; P3 dissipation is the
-    # separate DSP opcode in load_strang_step, so Gamma is not folded in here.
+    
     half_lin = np.exp(-1j * H_lin * dt / (2 * hbar))
     V_ext = 0.5 * 1.0 * 0.05 ** 2 * x ** 2
     noise_amp = np.sqrt(f_FDT * dt / dx) if f_FDT > 0 else 0.0

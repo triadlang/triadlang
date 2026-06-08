@@ -340,8 +340,7 @@ class TriadTensor:
         return self._data.__dlpack_device__()
 
     def __array_namespace__(self, /, *, api_version=None):
-        # api_version name is mandated by the python array-api spec; kept even
-        # though unused. whitelisted in .vulture_whitelist.py.
+        
         import numpy as _np
         return _np
 

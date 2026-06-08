@@ -58,7 +58,7 @@ def test_type_ok_str_with_str_cast():
     typecheck(parse('let n = 5; print("v=" + str(n));'))
 
 def test_type_ok_reassign_changes_type():
-    # x starts int then becomes str; the later concat must not be flagged.
+    
     typecheck(parse('let x = 5; x = "now a string"; let y = x + "!";'))
 
 if __name__ == '__main__':

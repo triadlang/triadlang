@@ -231,29 +231,24 @@ def substrate_gate(state: QubitState, gate_type: str='evolve', T: float=1.0, dt:
     L = 32.0
     psi_sub = encode_to_substrate(state, N_grid, L)
     from runtime.core.solver import TriadParams, integrate
-    # every gate runs the full P1+P2+P3 model. a gate emphasises one term
-    # (kerr -> strong nonlinearity, decohere -> strong dissipation, memory ->
-    # strong memory feedback) but never switches a pillar off: each keeps a
-    # baseline floor of fractional dispersion (alpha>0, sigma!=2), dissipation
-    # plus FDT noise (Gamma>0, f_FDT>0), nonlinearity (Lambda!=0) and a non-zero
-    # memory coupling. the pillars are never isolated.
+    
     regime = gate_type
     _floor = dict(alpha=0.1, sigma=1.7, Gamma=0.01, f_FDT=0.0004,
                   nu=(2.0, 0.5, 0.1), lam=(-0.05, -0.03, -0.02))
     if gate_type == 'evolve':
         p = TriadParams(N=N_grid, L=L, T=T, dt=dt, V_ext=None, seed=42, **_floor)
     elif gate_type == 'kerr':
-        # kerr nonlinearity dominates; the other pillars stay at the floor.
+        
         p = TriadParams(N=N_grid, L=L, T=T, dt=dt, Lambda=-1.0, V_ext=None,
                         alpha=0.1, sigma=1.7, Gamma=0.01, f_FDT=0.0004,
                         nu=(0.1, 0.5), lam=(-0.02, -0.02), seed=42)
     elif gate_type == 'decohere':
-        # dissipation/noise dominate; nonlinearity and memory stay at the floor.
+        
         p = TriadParams(N=N_grid, L=L, T=T, dt=dt, Lambda=-0.1, V_ext=None,
                         Gamma=0.05, f_FDT=0.002, alpha=0.1, sigma=1.7,
                         nu=(0.1, 0.5), lam=(-0.02, -0.02), seed=42)
     elif gate_type == 'memory':
-        # memory feedback dominates; the other pillars stay at the floor.
+        
         p = TriadParams(N=N_grid, L=L, T=T, dt=dt, Lambda=-0.1, V_ext=None,
                         Gamma=0.01, f_FDT=0.0004, alpha=0.1, sigma=1.7,
                         nu=(2.0, 0.5, 0.1), lam=(-0.3, -0.2, -0.1), seed=42)

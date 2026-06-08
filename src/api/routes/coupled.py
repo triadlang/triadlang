@@ -16,7 +16,6 @@ _COUPLING_MAP = {
     'none': 'none',
 }
 
-
 def _run_coupled_sync(req: CoupledRunRequest) -> CoupledRunResult:
     from runtime.core.equation_runtime import EquationRuntime
     from runtime.backend import asnumpy
@@ -54,7 +53,6 @@ def _run_coupled_sync(req: CoupledRunRequest) -> CoupledRunResult:
 
     return CoupledRunResult(substrates=substrate_results, elapsed=elapsed)
 
-
 @router.post('/run', response_model=CoupledRunResult, summary='Run coupled multi-substrate Triad system')
 async def run_coupled(req: CoupledRunRequest):
     loop = asyncio.get_event_loop()
@@ -68,7 +66,6 @@ async def run_coupled(req: CoupledRunRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return result
-
 
 @router.get('/regimes', summary='List all available regime names for coupled runs')
 async def list_coupled_regimes():

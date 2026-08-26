@@ -1,0 +1,8 @@
+import triad.qalgo as qa;
+
+print("Grover — search among 16 states");
+let alvo = 11;
+let r = qa.grover(4, alvo, shots=2000, seed=9);
+print(f"target: |{r["target"]}>  iterations: {r["iterations"]}");
+print(f"hit rate: {100.0 * r["success_rate"]:.1f}%");
+print(f"top counts: {r["counts"]}");

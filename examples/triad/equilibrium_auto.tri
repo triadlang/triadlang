@@ -1,0 +1,53 @@
+import triad.tensor as T;
+import triad.equilibrium as eqm;
+import triad.ntri as np;
+import time;
+
+if not cuda_available() {
+    print("este exemplo requer GPU + cupy (device cuda); nada a medir nesta maquina.");
+    exit(0);
+}
+
+let rng = np.random.default_rng(0);
+let PEQ = 256;
+let GRD = 2048;
+
+fn cadeia(dev) {
+    let a = T.tensor(rng.standard_normal([PEQ, PEQ]), device=dev, dtype="float32");
+    for i in range(100) {
+        a = T.bmm(a, a) * 0.001;
+    }
+    return a;
+}
+
+fn grande(dev) {
+    let a = T.tensor(rng.standard_normal([GRD, GRD]), device=dev, dtype="float32");
+    return T.bmm(a, a);
+}
+
+let t0 = time.perf_counter();
+for i in range(8) { cadeia("cpu"); }
+for i in range(4) { grande("cuda"); }
+T.sync();
+let tempo_mao = time.perf_counter() - t0;
+print(f"anotado a mao : {tempo_mao:.2f}s");
+
+let eq = eqm.Equilibrium();
+let t1 = time.perf_counter();
+let dev_peq = eq.matmul_device(PEQ, PEQ, PEQ, n_calls=100);
+let dev_grd = eq.matmul_device(GRD, GRD, GRD, n_calls=1);
+let d1 = "cpu";
+if dev_peq == "gpu" { d1 = "cuda"; }
+let d2 = "cpu";
+if dev_grd == "gpu" { d2 = "cuda"; }
+for i in range(8) { cadeia(d1); }
+for i in range(4) { grande(d2); }
+T.sync();
+let tempo_campo = time.perf_counter() - t1;
+print(f"campo decidiu : {tempo_campo:.2f}s  (pequenos->{dev_peq}, grandes->{dev_grd})");
+
+if tempo_campo <= tempo_mao * 1.1 {
+    print("ACEITE F5: PASSOU");
+} else {
+    print("ACEITE F5: nao passou");
+}

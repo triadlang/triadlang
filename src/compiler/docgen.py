@@ -1,8 +1,9 @@
 from __future__ import annotations
+
 import os
 import re
 import sys
-from typing import Optional
+
 
 def parse_tri_docs(source: str) -> dict:
     lines = source.split('\n')
@@ -39,7 +40,7 @@ def parse_tri_docs(source: str) -> dict:
         i += 1
     return result
 
-def _parse_fn(lines: list[str], start: int) -> Optional[dict]:
+def _parse_fn(lines: list[str], start: int) -> dict | None:
     line = lines[start].lstrip()
     m = re.match('fn\\s+(\\w+)\\s*\\(([^)]*)\\)', line)
     if not m:
@@ -54,7 +55,7 @@ def _parse_fn(lines: list[str], start: int) -> Optional[dict]:
             doc = next_line[2:].strip()
     return {'name': name, 'params': params, 'doc': doc, 'line': start + 1}
 
-def _parse_class(lines: list[str], start: int) -> Optional[dict]:
+def _parse_class(lines: list[str], start: int) -> dict | None:
     line = lines[start].lstrip()
     m = re.match('class\\s+(\\w+)(?:\\s*<\\s*(\\w+))?', line)
     if not m:
@@ -87,7 +88,7 @@ def _parse_class(lines: list[str], start: int) -> Optional[dict]:
         i += 1
     return {'name': name, 'parent': parent, 'fields': fields, 'methods': methods, 'doc': doc, 'line': start + 1}
 
-def _parse_type(lines: list[str], start: int) -> Optional[dict]:
+def _parse_type(lines: list[str], start: int) -> dict | None:
     line = lines[start].lstrip()
     m = re.match('type\\s+(\\w+)', line)
     if not m:
@@ -114,7 +115,7 @@ def _parse_type(lines: list[str], start: int) -> Optional[dict]:
         i += 1
     return {'name': name, 'fields': fields, 'doc': doc, 'line': start + 1}
 
-def _parse_const(line: str) -> Optional[dict]:
+def _parse_const(line: str) -> dict | None:
     m = re.match('const\\s+(\\w+)\\s*=\\s*(.+)', line)
     if not m:
         return None
@@ -162,12 +163,12 @@ def to_markdown(doc: dict, filename: str='') -> str:
             if t['doc']:
                 parts.append(f"{t['doc']}\n")
             if t['fields']:
-                parts.append('Fields: ' + ', '.join((f'`{f}`' for f in t['fields'])))
+                parts.append('Fields: ' + ', '.join(f'`{f}`' for f in t['fields']))
                 parts.append('')
     if doc['functions']:
         parts.append('## Functions\n')
         for fn in doc['functions']:
-            param_str = ', '.join((_param_str(p) for p in fn['params']))
+            param_str = ', '.join(_param_str(p) for p in fn['params'])
             parts.append(f"### `fn {fn['name']}({param_str})`\n")
             if fn['doc']:
                 parts.append(f"{fn['doc']}\n")
@@ -180,17 +181,17 @@ def to_markdown(doc: dict, filename: str='') -> str:
             if cls['doc']:
                 parts.append(f"{cls['doc']}\n")
             if cls['fields']:
-                parts.append('**Fields:** ' + ', '.join((f"`{f['name']}`" + (f" = `{f['default']}`" if f['default'] else '') for f in cls['fields'])))
+                parts.append('**Fields:** ' + ', '.join(f"`{f['name']}`" + (f" = `{f['default']}`" if f['default'] else '') for f in cls['fields']))
                 parts.append('')
             if cls['methods']:
                 parts.append('**Methods:**\n')
                 for m in cls['methods']:
-                    mp = ', '.join((_param_str(p) for p in m['params']))
+                    mp = ', '.join(_param_str(p) for p in m['params'])
                     parts.append(f"- `fn {m['name']}({mp})`")
                 parts.append('')
     return '\n'.join(parts)
 
-def _param_str(p: dict) -> str:
+def _param_str(p: dict[str, object]) -> str:
     if p.get('kind') == 'kwargs':
         return f"**{p['name']}"
     if p.get('kind') == 'args':
@@ -244,7 +245,7 @@ def cmd_docgen(args):
     import argparse as _ap
     p = _ap.ArgumentParser(prog='triad docgen')
     p.add_argument('path', help='.tri file or directory')
-    p.add_argument('--format', '-f', choices=['markdown', 'html'], default='markdown')
+    p.add_argument('--format', '-f', choices=['markdown', 'md', 'html'], default='markdown')
     p.add_argument('--output', '-o', help='Output file (default: stdout)')
     p.add_argument('--recursive', '-r', action='store_true', help='Process directory recursively')
     parsed = p.parse_args(args)
@@ -291,3 +292,4 @@ def cmd_docgen(args):
         print(f'error: path not found: {path}', file=sys.stderr)
         return 1
     return 0
+

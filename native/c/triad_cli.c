@@ -1,15 +1,3 @@
-/* triad_cli.c — Native `triad` CLI (Phase 5: `check` only).
- *
- * Behaviour mirrors cli/main.py cmd_check exactly:
- *   - No args: stderr "usage: triad check <file.tri>", exit 1.
- *   - File missing: stderr "error: file not found: <path>", exit 1.
- *   - Lex/Parse error: stderr str(error) using the LexError/ParseError
- *     `_format()` shape, exit 1.
- *   - TypeCheckError: stderr "\n".join(errors), exit 1.
- *   - Success: stdout "check: <path> OK", exit 0.
- *
- * Phases 6+ will extend this CLI with run/compile/repl/etc.
- */
 #include "triad_check.h"
 
 #include <stdio.h>
@@ -36,11 +24,6 @@ static char *slurp(const char *path) {
     return buf;
 }
 
-/* Re-build a LexError/ParseError style message:
- *   "error[LEX]: <msg>\n  file: <f>\n  line: <l>\n  col: <c>"
- * with the optional segments emitted only when their value is set
- * (mirrors `_format()` in lexer_universal.py / parser_universal.py).
- */
 static void emit_diag(FILE *out, const TriadDiag *d) {
     fprintf(out, "error[%s]: %s",
             d->kind ? d->kind : "?",
@@ -52,7 +35,7 @@ static void emit_diag(FILE *out, const TriadDiag *d) {
 }
 
 static int cmd_check(int argc, char **argv) {
-    /* argv[0] = "check"; argv[1] = file (if present) */
+
     if (argc < 2) {
         fprintf(stderr, "usage: triad check <file.tri>\n");
         return 1;

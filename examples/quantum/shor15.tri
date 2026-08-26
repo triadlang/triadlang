@@ -1,0 +1,8 @@
+import triad.qalgo as qa;
+
+print("Shor — fatorando com order-finding");
+let r15 = qa.shor_factor(15, a=7, seed=5);
+print(f"N=15, a=7  ->  ordem {r15["order"]}  fatores {r15["factors"]}");
+
+let r21 = qa.shor_factor(21, a=2, seed=3);
+print(f"N=21, a=2  ->  ordem {r21["order"]}  fatores {r21["factors"]}");

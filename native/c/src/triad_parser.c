@@ -1,8 +1,3 @@
-/* triad_parser.c — Port of frontend/parser_universal.py.
- *
- * The Python parser uses a recursive descent + precedence-climbing
- * scheme. We mirror it structure-for-structure.
- */
 #include "triad_frontend.h"
 
 #include <ctype.h>
@@ -11,8 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ── Parser state ───────────────────────────────────────────────── */
 
 typedef struct {
     TriadArena           *arena;
@@ -24,8 +17,6 @@ typedef struct {
     jmp_buf               err_jmp;
 } Pz;
 
-/* growable pointer array for any list of ast nodes / strings, freed
- * after copy into arena. */
 typedef struct {
     void  **items;
     size_t  len;
@@ -50,8 +41,6 @@ static void *pvec_to_arena_ptrs(TriadArena *a, PVec *v, size_t elem_sz) {
     return out;
 }
 
-/* ── Errors ─────────────────────────────────────────────────────── */
-
 static void NORETURN_parse_error(Pz *P, int line, int col, const char *fmt, ...)
     __attribute__((noreturn));
 
@@ -71,12 +60,10 @@ static void NORETURN_parse_error(Pz *P, int line, int col, const char *fmt, ...)
     longjmp(P->err_jmp, 1);
 }
 
-/* ── Token helpers ──────────────────────────────────────────────── */
-
 static const TriadToken *p_peek(Pz *P, size_t off) {
     size_t idx = P->i + off;
     if (idx < P->ntoks) return &P->toks[idx];
-    return &P->toks[P->ntoks - 1]; /* EOF */
+    return &P->toks[P->ntoks - 1];
 }
 
 static const TriadToken *p_eat(Pz *P) {
@@ -148,8 +135,6 @@ static void p_eat_semi(Pz *P) {
     if (p_at(P, TRIAD_TOK_SYMBOL, ";")) p_eat(P);
 }
 
-/* ── Position helper ────────────────────────────────────────────── */
-
 static TriadPos cur_pos(Pz *P) {
     const TriadToken *t = p_peek(P, 0);
     TriadPos pos;
@@ -159,16 +144,12 @@ static TriadPos cur_pos(Pz *P) {
     return pos;
 }
 
-/* ── Node allocation ────────────────────────────────────────────── */
-
 static TriadAstNode *new_node(Pz *P, TriadAstKind k, TriadPos pos) {
     TriadAstNode *n = (TriadAstNode *)triad_arena_calloc(P->arena, sizeof(TriadAstNode));
     n->kind = k;
     n->pos  = pos;
     return n;
 }
-
-/* ── Forward decls ──────────────────────────────────────────────── */
 
 static TriadAstNode *parse_stmt(Pz *P);
 static TriadAstNode *parse_expr(Pz *P);
@@ -177,6 +158,11 @@ static TriadAstNode *parse_and(Pz *P);
 static TriadAstNode *parse_not(Pz *P);
 static TriadAstNode *parse_comparison(Pz *P);
 static TriadAstNode *parse_add(Pz *P);
+static TriadAstNode *parse_add_inner(Pz *P);
+static TriadAstNode *parse_bitwise_or(Pz *P);
+static TriadAstNode *parse_bitwise_xor(Pz *P);
+static TriadAstNode *parse_bitwise_and(Pz *P);
+static TriadAstNode *parse_shift(Pz *P);
 static TriadAstNode *parse_mul(Pz *P);
 static TriadAstNode *parse_power(Pz *P);
 static TriadAstNode *parse_unary(Pz *P);
@@ -189,11 +175,9 @@ static void parse_call_args(Pz *P,
                             TriadAstNode ***args, size_t *args_len,
                             TriadKwArg     **kwargs, size_t *kwargs_len);
 
-/* ── Statement parsers ──────────────────────────────────────────── */
-
 static TriadAstNode *parse_let(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* let */
+    p_eat(P);
     if (p_at(P, TRIAD_TOK_SYMBOL, "(")) {
         p_eat(P);
         PVec names = {0};
@@ -210,6 +194,7 @@ static TriadAstNode *parse_let(Pz *P) {
         n->u.destruct.names_len = names.len;
         n->u.destruct.names     = (const char **)pvec_to_arena_ptrs(P->arena, &names, sizeof(const char *));
         n->u.destruct.value     = val;
+        n->u.destruct.star_idx  = -1;
         return n;
     }
     if (p_at(P, TRIAD_TOK_SYMBOL, "{")) {
@@ -252,7 +237,7 @@ static TriadAstNode *parse_let(Pz *P) {
 
 static TriadAstNode *parse_const(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* const */
+    p_eat(P);
     const char *name = p_expect_ident_or_kw(P)->text;
     p_expect_sym(P, "=");
     TriadAstNode *val = parse_expr(P);
@@ -265,8 +250,8 @@ static TriadAstNode *parse_const(Pz *P) {
 
 static TriadAstNode *parse_fn(Pz *P, int async_) {
     TriadPos p = cur_pos(P);
-    if (async_) p_eat(P); /* async */
-    p_eat(P); /* fn */
+    if (async_) p_eat(P);
+    p_eat(P);
     const char *name = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
     p_expect_sym(P, "(");
     TriadParam *params = NULL;
@@ -340,7 +325,7 @@ static void parse_block(Pz *P, TriadAstNode ***body, size_t *body_len) {
 
 static TriadAstNode *parse_if(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* if */
+    p_eat(P);
     TriadAstNode *cond = parse_expr(P);
     TriadAstNode **then = NULL; size_t then_len = 0;
     parse_block(P, &then, &then_len);
@@ -382,7 +367,7 @@ static TriadAstNode *parse_if(Pz *P) {
 
 static TriadAstNode *parse_for(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* for */
+    p_eat(P);
     const char *var = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
     p_expect_kw(P, "in");
     TriadAstNode *it = parse_expr(P);
@@ -411,7 +396,7 @@ static TriadAstNode *parse_while(Pz *P) {
 
 static TriadAstNode *parse_return(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* return */
+    p_eat(P);
     TriadAstNode *val = NULL;
     if (!p_at(P, TRIAD_TOK_SYMBOL, ";") && !p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
         val = parse_expr(P);
@@ -424,7 +409,7 @@ static TriadAstNode *parse_return(Pz *P) {
 
 static TriadAstNode *parse_yield_stmt(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* yield */
+    p_eat(P);
     TriadAstNode *val = NULL;
     if (!p_at(P, TRIAD_TOK_SYMBOL, ";") && !p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
         val = parse_expr(P);
@@ -437,7 +422,7 @@ static TriadAstNode *parse_yield_stmt(Pz *P) {
 
 static TriadAstNode *parse_type_decl(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* type */
+    p_eat(P);
     const char *name = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
     p_expect_sym(P, "{");
     PVec fields = {0};
@@ -479,13 +464,25 @@ static TriadAstNode *parse_type_decl(Pz *P) {
 
 static TriadAstNode *parse_class(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* class */
+    p_eat(P);
     const char *name = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
-    const char *parent = NULL;
-    if (p_at(P, TRIAD_TOK_SYMBOL, ":")) {
+    PVec parents = {0};
+    if (p_at(P, TRIAD_TOK_KEYWORD, "inherits") || p_at_ident_val(P, "inherits")) {
         p_eat(P);
-        parent = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+        pvec_push(&parents, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+        while (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
+            p_eat(P);
+            pvec_push(&parents, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+        }
+    } else if (p_at(P, TRIAD_TOK_SYMBOL, ":")) {
+        p_eat(P);
+        pvec_push(&parents, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+        while (p_at(P, TRIAD_TOK_SYMBOL, ":")) {
+            p_eat(P);
+            pvec_push(&parents, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+        }
     }
+    const char *parent = parents.len ? (const char *)parents.items[0] : NULL;
     p_expect_sym(P, "{");
     PVec fields = {0};
     PVec methods = {0};
@@ -515,6 +512,8 @@ static TriadAstNode *parse_class(Pz *P) {
     TriadAstNode *n = new_node(P, TRIAD_AST_CLASS_DECL, p);
     n->u.type_decl.name   = name;
     n->u.type_decl.parent = parent;
+    n->u.type_decl.parents_len = parents.len;
+    n->u.type_decl.parents = (const char **)pvec_to_arena_ptrs(P->arena, &parents, sizeof(const char *));
     if (fields.len) {
         TriadTypeField *arr = (TriadTypeField *)triad_arena_alloc(P->arena, fields.len * sizeof(TriadTypeField));
         for (size_t k = 0; k < fields.len; ++k) arr[k] = *(TriadTypeField *)fields.items[k];
@@ -529,7 +528,7 @@ static TriadAstNode *parse_class(Pz *P) {
 
 static TriadAstNode *parse_match(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* match */
+    p_eat(P);
     TriadAstNode *subject = parse_expr(P);
     p_expect_sym(P, "{");
     p_skip_semis(P);
@@ -581,7 +580,7 @@ static TriadAstNode *parse_match(Pz *P) {
 
 static TriadAstNode *parse_import(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* import */
+    p_eat(P);
     PVec path = {0};
     pvec_push(&path, (void *)p_expect_ident_or_kw(P)->text);
     while (p_at(P, TRIAD_TOK_SYMBOL, ".")) {
@@ -603,7 +602,7 @@ static TriadAstNode *parse_import(Pz *P) {
 
 static TriadAstNode *parse_from_import(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* from */
+    p_eat(P);
     PVec path = {0};
     pvec_push(&path, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
     while (p_at(P, TRIAD_TOK_SYMBOL, ".")) {
@@ -612,10 +611,23 @@ static TriadAstNode *parse_from_import(Pz *P) {
     }
     p_expect_kw(P, "import");
     PVec names = {0};
+    PVec aliases = {0};
     pvec_push(&names, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+    if (p_at(P, TRIAD_TOK_KEYWORD, "as") || p_at_ident_val(P, "as")) {
+        p_eat(P);
+        pvec_push(&aliases, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+    } else {
+        pvec_push(&aliases, NULL);
+    }
     while (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
         p_eat(P);
         pvec_push(&names, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+        if (p_at(P, TRIAD_TOK_KEYWORD, "as") || p_at_ident_val(P, "as")) {
+            p_eat(P);
+            pvec_push(&aliases, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+        } else {
+            pvec_push(&aliases, NULL);
+        }
     }
     p_eat_semi(P);
     TriadAstNode *n = new_node(P, TRIAD_AST_FROM_IMPORT, p);
@@ -623,20 +635,48 @@ static TriadAstNode *parse_from_import(Pz *P) {
     n->u.from_import.path = (const char **)pvec_to_arena_ptrs(P->arena, &path, sizeof(const char *));
     n->u.from_import.names_len = names.len;
     n->u.from_import.names = (const char **)pvec_to_arena_ptrs(P->arena, &names, sizeof(const char *));
+    n->u.from_import.aliases = (const char **)pvec_to_arena_ptrs(P->arena, &aliases, sizeof(const char *));
     return n;
 }
 
 static TriadAstNode *parse_try(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* try */
+    p_eat(P);
     TriadAstNode **body = NULL; size_t blen = 0;
     parse_block(P, &body, &blen);
     const char *catch_var = NULL;
+    PVec exceptions = {0};
+    int has_catch = 0;
     TriadAstNode **catch_body = NULL; size_t clen = 0;
     TriadAstNode **finally_body = NULL; size_t flen = 0;
     if (p_at(P, TRIAD_TOK_KEYWORD, "catch")) {
+        has_catch = 1;
         p_eat(P);
-        if (p_at_kind(P, TRIAD_TOK_IDENT)) {
+        if (p_at(P, TRIAD_TOK_SYMBOL, "(")) {
+            p_eat(P);
+            pvec_push(&exceptions, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+            while (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
+                p_eat(P);
+                pvec_push(&exceptions, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+            }
+            if (p_at(P, TRIAD_TOK_KEYWORD, "as") || p_at_ident_val(P, "as")) {
+                p_eat(P);
+                catch_var = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+            }
+            p_expect_sym(P, ")");
+        } else if (p_at_kind(P, TRIAD_TOK_IDENT)) {
+            const char *ident = p_peek(P, 0)->text;
+            p_eat(P);
+            if (p_at(P, TRIAD_TOK_SYMBOL, "{")) {
+                catch_var = ident;
+            } else {
+                pvec_push(&exceptions, (void *)ident);
+            }
+        }
+        if (catch_var == NULL && (p_at(P, TRIAD_TOK_KEYWORD, "as") || p_at_ident_val(P, "as"))) {
+            p_eat(P);
+            catch_var = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+        } else if (catch_var == NULL && p_at_kind(P, TRIAD_TOK_IDENT)) {
             catch_var = p_peek(P, 0)->text;
             p_eat(P);
         }
@@ -654,12 +694,15 @@ static TriadAstNode *parse_try(Pz *P) {
     n->u.try_catch.catch_body_len = clen;
     n->u.try_catch.finally_body = finally_body;
     n->u.try_catch.finally_body_len = flen;
+    n->u.try_catch.exceptions_len = exceptions.len;
+    n->u.try_catch.exceptions = (const char **)pvec_to_arena_ptrs(P->arena, &exceptions, sizeof(const char *));
+    n->u.try_catch.has_catch = has_catch;
     return n;
 }
 
 static TriadAstNode *parse_throw(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* throw */
+    p_eat(P);
     TriadAstNode *val = NULL;
     if (!p_at(P, TRIAD_TOK_SYMBOL, ";") && !p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
         val = parse_expr(P);
@@ -670,11 +713,9 @@ static TriadAstNode *parse_throw(Pz *P) {
     return n;
 }
 
-/* ── Triad-native ──────────────────────────────────────────────── */
-
 static TriadAstNode *parse_reg(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* reg */
+    p_eat(P);
     const char *name = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
     const char *regime = NULL;
     if (p_at(P, TRIAD_TOK_SYMBOL, ":")) {
@@ -721,7 +762,7 @@ static TriadAstNode *parse_reg(Pz *P) {
 
 static TriadAstNode *parse_entity(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* entity */
+    p_eat(P);
     const char *name = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
     const char *base = NULL;
     if (p_at(P, TRIAD_TOK_SYMBOL, ":")) {
@@ -747,7 +788,7 @@ static TriadAstNode *parse_entity(Pz *P) {
                 e->value = v;
                 pvec_push(&fields, e);
             } else {
-                /* memory depth=4 form */
+
                 while (!p_at(P, TRIAD_TOK_SYMBOL, ";") &&
                        !p_at(P, TRIAD_TOK_SYMBOL, "}") &&
                        !p_at_kind(P, TRIAD_TOK_EOF)) {
@@ -794,9 +835,86 @@ static TriadAstNode *parse_entity(Pz *P) {
 }
 
 static TriadAstNode *parse_run(Pz *P);
+static TriadAstNode *parse_substrate(Pz *P) {
+    TriadPos p = cur_pos(P);
+    p_eat(P);
+    const char *name = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+    TriadAstNode *n = new_node(P, TRIAD_AST_SUBSTRATE, p);
+    n->u.substrate_decl.name = name;
+
+    if (p_at(P, TRIAD_TOK_KEYWORD, "composed_of")) {
+        p_eat(P);
+        PVec members = {0};
+        PVec props = {0};
+        p_expect_sym(P, "(");
+        pvec_push(&members, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+        while (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
+            p_eat(P);
+            pvec_push(&members, (void *)p_expect(P, TRIAD_TOK_IDENT, NULL)->text);
+        }
+        p_expect_sym(P, ")");
+        if (p_at(P, TRIAD_TOK_SYMBOL, "{")) {
+            p_eat(P);
+            while (!p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
+                const char *k = p_eat(P)->text;
+                p_expect_sym(P, ":");
+                TriadAstNode *v = parse_expr(P);
+                p_eat_semi(P);
+                TriadStrEntry *e = (TriadStrEntry *)triad_arena_calloc(P->arena, sizeof(TriadStrEntry));
+                e->key = k;
+                e->value = v;
+                pvec_push(&props, e);
+            }
+            p_expect_sym(P, "}");
+        }
+        p_eat_semi(P);
+        n->u.substrate_decl.is_composed = 1;
+        n->u.substrate_decl.members_len = members.len;
+        n->u.substrate_decl.members = (const char **)pvec_to_arena_ptrs(P->arena, &members, sizeof(const char *));
+        if (props.len) {
+            TriadStrEntry *arr = (TriadStrEntry *)triad_arena_alloc(P->arena, props.len * sizeof(TriadStrEntry));
+            for (size_t k = 0; k < props.len; ++k) arr[k] = *(TriadStrEntry *)props.items[k];
+            n->u.substrate_decl.properties = arr;
+            n->u.substrate_decl.properties_len = props.len;
+        }
+        pvec_free(&members);
+        pvec_free(&props);
+        return n;
+    }
+
+    if (p_at(P, TRIAD_TOK_SYMBOL, ":")) {
+        p_eat(P);
+        n->u.substrate_decl.regime = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+    }
+    PVec overrides = {0};
+    if (p_at(P, TRIAD_TOK_SYMBOL, "{")) {
+        p_eat(P);
+        while (!p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
+            const char *k = p_eat(P)->text;
+            p_expect_sym(P, ":");
+            TriadAstNode *v = parse_expr(P);
+            p_eat_semi(P);
+            TriadStrEntry *e = (TriadStrEntry *)triad_arena_calloc(P->arena, sizeof(TriadStrEntry));
+            e->key = k;
+            e->value = v;
+            pvec_push(&overrides, e);
+        }
+        p_expect_sym(P, "}");
+    }
+    p_eat_semi(P);
+    if (overrides.len) {
+        TriadStrEntry *arr = (TriadStrEntry *)triad_arena_alloc(P->arena, overrides.len * sizeof(TriadStrEntry));
+        for (size_t k = 0; k < overrides.len; ++k) arr[k] = *(TriadStrEntry *)overrides.items[k];
+        n->u.substrate_decl.overrides = arr;
+        n->u.substrate_decl.overrides_len = overrides.len;
+    }
+    pvec_free(&overrides);
+    return n;
+}
+
 static TriadAstNode *parse_world(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* world */
+    p_eat(P);
     const char *name = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
     p_expect_sym(P, "{");
     PVec fields = {0};
@@ -849,11 +967,21 @@ static TriadAstNode *parse_couple(Pz *P) {
         p_expect_sym(P, "=");
         kappa = parse_expr(P);
     }
+    TriadAstNode *duration = NULL;
+    if (p_at(P, TRIAD_TOK_KEYWORD, "for") || p_at_ident_val(P, "for")) {
+        p_eat(P);
+        if (p_at_ident_val(P, "T")) {
+            p_eat(P);
+            p_expect_sym(P, "=");
+        }
+        duration = parse_expr(P);
+    }
     p_eat_semi(P);
     TriadAstNode *n = new_node(P, TRIAD_AST_COUPLE, p);
     n->u.couple_stmt.src = src;
     n->u.couple_stmt.dst = dst;
     n->u.couple_stmt.kappa = kappa;
+    n->u.couple_stmt.duration = duration;
     return n;
 }
 
@@ -955,7 +1083,7 @@ static TriadAstNode *parse_observe(Pz *P) {
 
 static TriadAstNode *parse_run(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* run */
+    p_eat(P);
     TriadAstNode *dur = NULL;
     if (!p_at(P, TRIAD_TOK_SYMBOL, ";") && !p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
         if (p_at_kind(P, TRIAD_TOK_IDENT) && strcmp(p_peek(P, 0)->text, "T") == 0) {
@@ -970,15 +1098,127 @@ static TriadAstNode *parse_run(Pz *P) {
     return n;
 }
 
+static TriadAstNode *parse_evolve(Pz *P) {
+    TriadPos p = cur_pos(P);
+    p_eat(P);
+    const char *target = NULL;
+    if (p_at_kind(P, TRIAD_TOK_IDENT)) {
+        target = p_peek(P, 0)->text;
+        p_eat(P);
+    }
+    TriadAstNode *dur = NULL;
+    if (p_at(P, TRIAD_TOK_KEYWORD, "for")) {
+        p_eat(P);
+    }
+    if (!p_at(P, TRIAD_TOK_SYMBOL, ";") && !p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
+        if (p_at_kind(P, TRIAD_TOK_IDENT) && strcmp(p_peek(P, 0)->text, "T") == 0) {
+            p_eat(P);
+            p_expect_sym(P, "=");
+        }
+        dur = parse_expr(P);
+    }
+    p_eat_semi(P);
+    TriadAstNode *n = new_node(P, TRIAD_AST_RUN, p);
+    n->u.run_stmt.duration = dur;
+    n->u.run_stmt.target = target;
+    return n;
+}
+
+static TriadAstNode *parse_sequence(Pz *P) {
+    TriadPos p = cur_pos(P);
+    p_eat(P);
+    TriadAstNode *inputs = parse_expr(P);
+    p_expect_kw(P, "via");
+    const char *target = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+    TriadAstNode *each_for = NULL;
+    if (p_at(P, TRIAD_TOK_KEYWORD, "each_for")) {
+        p_eat(P);
+        if (p_at_kind(P, TRIAD_TOK_IDENT) && strcmp(p_peek(P, 0)->text, "T") == 0) {
+            p_eat(P);
+            p_expect_sym(P, "=");
+        }
+        each_for = parse_expr(P);
+    }
+    p_eat_semi(P);
+    TriadAstNode *n = new_node(P, TRIAD_AST_SEQUENCE, p);
+    n->u.sequence_stmt.inputs = inputs;
+    n->u.sequence_stmt.target = target;
+    n->u.sequence_stmt.each_for = each_for;
+    return n;
+}
+
+static TriadAstNode *parse_with(Pz *P, int async_kind) {
+    TriadPos p = cur_pos(P);
+    if (async_kind) p_eat(P);
+    p_eat(P);
+    TriadAstNode *expr = parse_expr(P);
+    const char *var = NULL;
+    if (p_at(P, TRIAD_TOK_KEYWORD, "as") || p_at_ident_val(P, "as")) {
+        p_eat(P);
+        var = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+    }
+    TriadAstNode **body = NULL; size_t body_len = 0;
+    parse_block(P, &body, &body_len);
+    TriadAstNode *n = new_node(P, async_kind ? TRIAD_AST_ASYNC_WITH : TRIAD_AST_WITH, p);
+    n->u.with_stmt.expr = expr;
+    n->u.with_stmt.var = var;
+    n->u.with_stmt.body = body;
+    n->u.with_stmt.body_len = body_len;
+    return n;
+}
+
+static TriadAstNode *parse_assert_stmt(Pz *P) {
+    TriadPos p = cur_pos(P);
+    p_eat(P);
+    TriadAstNode *cond = parse_expr(P);
+    TriadAstNode *msg = NULL;
+    if (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
+        p_eat(P);
+        msg = parse_expr(P);
+    }
+    p_eat_semi(P);
+    TriadAstNode *n = new_node(P, TRIAD_AST_ASSERT, p);
+    n->u.assert_stmt.condition = cond;
+    n->u.assert_stmt.message = msg;
+    return n;
+}
+
+static TriadAstNode *parse_del_stmt(Pz *P) {
+    TriadPos p = cur_pos(P);
+    p_eat(P);
+    TriadAstNode *target = parse_expr(P);
+    p_eat_semi(P);
+    TriadAstNode *n = new_node(P, TRIAD_AST_DEL, p);
+    n->u.del_stmt.target = target;
+    return n;
+}
+
+static TriadAstNode *parse_async_for(Pz *P) {
+    TriadPos p = cur_pos(P);
+    p_eat(P);
+    p_expect_kw(P, "for");
+    const char *var = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+    p_expect_kw(P, "in");
+    TriadAstNode *iter = parse_expr(P);
+    TriadAstNode **body = NULL; size_t body_len = 0;
+    parse_block(P, &body, &body_len);
+    TriadAstNode *n = new_node(P, TRIAD_AST_ASYNC_FOR, p);
+    n->u.for_stmt.var = var;
+    n->u.for_stmt.iter = iter;
+    n->u.for_stmt.body = body;
+    n->u.for_stmt.body_len = body_len;
+    return n;
+}
+
 static TriadAstNode *parse_annotation(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* @ */
+    p_eat(P);
     const char *name = p_peek(P, 0)->text;
     p_eat(P);
     const char *args = "";
     if (p_at(P, TRIAD_TOK_SYMBOL, "(")) {
         p_eat(P);
-        /* concatenate raw token text up to ) */
+
         Pz tmp = *P;
         (void)tmp;
         size_t total = 0;
@@ -1008,9 +1248,23 @@ static TriadAstNode *parse_annotation(Pz *P) {
     return n;
 }
 
-/* ── Expressions ────────────────────────────────────────────────── */
+static TriadAstNode *parse_expr(Pz *P) {
+    TriadAstNode *val = parse_or(P);
 
-static TriadAstNode *parse_expr(Pz *P) { return parse_or(P); }
+    if (p_at(P, TRIAD_TOK_KEYWORD, "if")) {
+        TriadPos tp = cur_pos(P);
+        p_eat(P);
+        TriadAstNode *cond = parse_or(P);
+        p_expect_kw(P, "else");
+        TriadAstNode *alt = parse_expr(P);
+        TriadAstNode *n = new_node(P, TRIAD_AST_TERNARY, tp);
+        n->u.ternary.condition = cond;
+        n->u.ternary.then_val = val;
+        n->u.ternary.else_val = alt;
+        return n;
+    }
+    return val;
+}
 
 static TriadAstNode *parse_or(Pz *P) {
     TriadAstNode *left = parse_and(P);
@@ -1056,14 +1310,109 @@ static TriadAstNode *parse_not(Pz *P) {
 static int is_cmp_op(const char *v) {
     return strcmp(v, "==") == 0 || strcmp(v, "!=") == 0 ||
            strcmp(v, "<")  == 0 || strcmp(v, "<=") == 0 ||
-           strcmp(v, ">")  == 0 || strcmp(v, ">=") == 0;
+           strcmp(v, ">")  == 0 || strcmp(v, ">=") == 0 ||
+           strcmp(v, "is") == 0 || strcmp(v, "in") == 0 ||
+           strcmp(v, "not_in") == 0 || strcmp(v, "is_not") == 0;
 }
 
 static TriadAstNode *parse_comparison(Pz *P) {
-    TriadAstNode *left = parse_add(P);
-    while (p_at_kind(P, TRIAD_TOK_SYMBOL) && is_cmp_op(p_peek(P, 0)->text)) {
+    TriadAstNode *first = parse_add(P);
+    if ((p_at_kind(P, TRIAD_TOK_SYMBOL) && is_cmp_op(p_peek(P, 0)->text)) ||
+        (p_at(P, TRIAD_TOK_KEYWORD, "in")) || (p_at(P, TRIAD_TOK_KEYWORD, "is")) ||
+        (p_at(P, TRIAD_TOK_KEYWORD, "not"))) {
+        PVec ops_v = {0};
+        PVec opds_v = {0};
+        pvec_push(&opds_v, first);
+        while ((p_at_kind(P, TRIAD_TOK_SYMBOL) && is_cmp_op(p_peek(P, 0)->text)) ||
+               (p_at(P, TRIAD_TOK_KEYWORD, "in")) || (p_at(P, TRIAD_TOK_KEYWORD, "is")) ||
+               (p_at(P, TRIAD_TOK_KEYWORD, "not"))) {
+            const char *op_text = p_eat(P)->text;
+
+            if (strcmp(op_text, "is") == 0 && p_at(P, TRIAD_TOK_KEYWORD, "not")) {
+                p_eat(P);
+                op_text = "is_not";
+            } else if (strcmp(op_text, "not") == 0 && p_at(P, TRIAD_TOK_KEYWORD, "in")) {
+                p_eat(P);
+                op_text = "not_in";
+            }
+            const char **opp = (const char **)triad_arena_alloc(P->arena, sizeof(const char *));
+            *opp = op_text;
+            pvec_push(&ops_v, (void *)*opp);
+            pvec_push(&opds_v, parse_add(P));
+        }
+        if (ops_v.len == 1) {
+            TriadAstNode *n = new_node(P, TRIAD_AST_BINOP, first->pos);
+            n->u.op.op = (const char *)ops_v.items[0];
+            n->u.op.left = (TriadAstNode *)opds_v.items[0];
+            n->u.op.right = (TriadAstNode *)opds_v.items[1];
+            pvec_free(&ops_v);
+            pvec_free(&opds_v);
+            return n;
+        }
+
+        TriadAstNode *n = new_node(P, TRIAD_AST_CHAIN_CMP, first->pos);
+        n->u.chain_cmp.ops_len = ops_v.len;
+        n->u.chain_cmp.operands_len = opds_v.len;
+        n->u.chain_cmp.ops = (const char **)pvec_to_arena_ptrs(P->arena, &ops_v, sizeof(const char *));
+        n->u.chain_cmp.operands = (TriadAstNode **)pvec_to_arena_ptrs(P->arena, &opds_v, sizeof(TriadAstNode *));
+        pvec_free(&ops_v);
+        pvec_free(&opds_v);
+        return n;
+    }
+    return first;
+}
+
+static int is_shift_op(const char *v) {
+    return strcmp(v, "<<") == 0 || strcmp(v, ">>") == 0;
+}
+
+static TriadAstNode *parse_bitwise_or(Pz *P) {
+    TriadAstNode *left = parse_bitwise_xor(P);
+    while (p_at_kind(P, TRIAD_TOK_SYMBOL) && strcmp(p_peek(P, 0)->text, "|") == 0) {
         const char *op = p_eat(P)->text;
-        TriadAstNode *right = parse_add(P);
+        TriadAstNode *right = parse_bitwise_xor(P);
+        TriadAstNode *n = new_node(P, TRIAD_AST_BINOP, left->pos);
+        n->u.op.op = op;
+        n->u.op.left = left;
+        n->u.op.right = right;
+        left = n;
+    }
+    return left;
+}
+
+static TriadAstNode *parse_bitwise_xor(Pz *P) {
+    TriadAstNode *left = parse_bitwise_and(P);
+    while (p_at_kind(P, TRIAD_TOK_SYMBOL) && strcmp(p_peek(P, 0)->text, "^") == 0) {
+        const char *op = p_eat(P)->text;
+        TriadAstNode *right = parse_bitwise_and(P);
+        TriadAstNode *n = new_node(P, TRIAD_AST_BINOP, left->pos);
+        n->u.op.op = op;
+        n->u.op.left = left;
+        n->u.op.right = right;
+        left = n;
+    }
+    return left;
+}
+
+static TriadAstNode *parse_bitwise_and(Pz *P) {
+    TriadAstNode *left = parse_shift(P);
+    while (p_at_kind(P, TRIAD_TOK_SYMBOL) && strcmp(p_peek(P, 0)->text, "&") == 0) {
+        const char *op = p_eat(P)->text;
+        TriadAstNode *right = parse_shift(P);
+        TriadAstNode *n = new_node(P, TRIAD_AST_BINOP, left->pos);
+        n->u.op.op = op;
+        n->u.op.left = left;
+        n->u.op.right = right;
+        left = n;
+    }
+    return left;
+}
+
+static TriadAstNode *parse_shift(Pz *P) {
+    TriadAstNode *left = parse_add_inner(P);
+    while (p_at_kind(P, TRIAD_TOK_SYMBOL) && is_shift_op(p_peek(P, 0)->text)) {
+        const char *op = p_eat(P)->text;
+        TriadAstNode *right = parse_add_inner(P);
         TriadAstNode *n = new_node(P, TRIAD_AST_BINOP, left->pos);
         n->u.op.op = op;
         n->u.op.left = left;
@@ -1074,6 +1423,10 @@ static TriadAstNode *parse_comparison(Pz *P) {
 }
 
 static TriadAstNode *parse_add(Pz *P) {
+    return parse_bitwise_or(P);
+}
+
+static TriadAstNode *parse_add_inner(Pz *P) {
     TriadAstNode *left = parse_mul(P);
     while (p_at_kind(P, TRIAD_TOK_SYMBOL) &&
            (strcmp(p_peek(P, 0)->text, "+") == 0 || strcmp(p_peek(P, 0)->text, "-") == 0)) {
@@ -1148,6 +1501,15 @@ static TriadAstNode *parse_unary(Pz *P) {
         n->u.op.right = operand;
         return n;
     }
+    if (p_at(P, TRIAD_TOK_SYMBOL, "~")) {
+        TriadPos p = cur_pos(P);
+        p_eat(P);
+        TriadAstNode *operand = parse_unary(P);
+        TriadAstNode *n = new_node(P, TRIAD_AST_UNARYOP, p);
+        n->u.op.op = "~";
+        n->u.op.right = operand;
+        return n;
+    }
     return parse_postfix(P);
 }
 
@@ -1177,7 +1539,7 @@ static void parse_call_args(Pz *P,
                    p_peek(P, 1)->kind == TRIAD_TOK_SYMBOL &&
                    strcmp(p_peek(P, 1)->text, "=") == 0) {
             const char *name = p_eat(P)->text;
-            p_eat(P); /* = */
+            p_eat(P);
             TriadKwArg *kw = (TriadKwArg *)triad_arena_calloc(P->arena, sizeof(TriadKwArg));
             kw->name = name;
             kw->value = parse_expr(P);
@@ -1246,6 +1608,18 @@ static TriadAstNode *parse_postfix(Pz *P) {
                     TriadAstNode *sl = new_node(P, TRIAD_AST_SLICE, sp);
                     sl->u.slice.start = first; sl->u.slice.end = end; sl->u.slice.step = step;
                     idx_node = sl;
+                } else if (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
+                    PVec elems = {0};
+                    pvec_push(&elems, first);
+                    while (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
+                        p_eat(P);
+                        pvec_push(&elems, parse_expr(P));
+                    }
+                    p_expect_sym(P, "]");
+                    TriadAstNode *tp = new_node(P, TRIAD_AST_TUPLE, sp);
+                    tp->u.list.elements_len = elems.len;
+                    tp->u.list.elements = (TriadAstNode **)pvec_to_arena_ptrs(P->arena, &elems, sizeof(TriadAstNode *));
+                    idx_node = tp;
                 } else {
                     p_expect_sym(P, "]");
                     idx_node = first;
@@ -1257,7 +1631,14 @@ static TriadAstNode *parse_postfix(Pz *P) {
             expr = n;
         } else if (p_at(P, TRIAD_TOK_SYMBOL, ".")) {
             p_eat(P);
-            const char *fname = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+            const TriadToken *ft = p_peek(P, 0);
+            const char *fname;
+            if (ft->kind == TRIAD_TOK_IDENT || ft->kind == TRIAD_TOK_KEYWORD) {
+                fname = ft->text;
+                p_eat(P);
+            } else {
+                fname = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+            }
             if (p_at(P, TRIAD_TOK_SYMBOL, "(")) {
                 p_eat(P);
                 TriadAstNode **args = NULL; size_t args_len = 0;
@@ -1298,9 +1679,33 @@ static TriadAstNode *parse_primary(Pz *P) {
             if (v[k] == '.' || v[k] == 'e' || v[k] == 'E') { has_dot_or_exp = 1; break; }
         }
         if (has_dot_or_exp) {
+
+            if (L > 0 && v[L - 1] == 'j') {
+                char buf[64];
+                size_t blen = L - 1;
+                if (blen >= sizeof(buf)) blen = sizeof(buf) - 1;
+                memcpy(buf, v, blen);
+                buf[blen] = '\0';
+                TriadAstNode *cn = new_node(P, TRIAD_AST_COMPLEX_LIT, p);
+                cn->u.complex_lit.real_val = 0.0;
+                cn->u.complex_lit.imag_val = strtod(buf, NULL);
+                return cn;
+            }
             TriadAstNode *n = new_node(P, TRIAD_AST_FLOAT_LIT, p);
             n->u.float_val = strtod(v, NULL);
             return n;
+        }
+
+        if (L > 0 && v[L - 1] == 'j') {
+            char buf[64];
+            size_t blen = L - 1;
+            if (blen >= sizeof(buf)) blen = sizeof(buf) - 1;
+            memcpy(buf, v, blen);
+            buf[blen] = '\0';
+            TriadAstNode *cn = new_node(P, TRIAD_AST_COMPLEX_LIT, p);
+            cn->u.complex_lit.real_val = 0.0;
+            cn->u.complex_lit.imag_val = strtod(buf, NULL);
+            return cn;
         }
         TriadAstNode *n = new_node(P, TRIAD_AST_INT_LIT, p);
         if (L > 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X'))      n->u.int_val = strtoll(v + 2, NULL, 16);
@@ -1310,6 +1715,19 @@ static TriadAstNode *parse_primary(Pz *P) {
     }
 
     if (t->kind == TRIAD_TOK_STRING) {
+
+
+        if (strcmp(t->text, "b") == 0) {
+            const TriadToken *nx = p_peek(P, 1);
+            if (nx && nx->kind == TRIAD_TOK_STRING) {
+                p_eat(P);
+                p_eat(P);
+                TriadAstNode *n = new_node(P, TRIAD_AST_BYTES_LIT, p);
+                n->u.bytes_lit.bytes_val = nx->text;
+                n->u.bytes_lit.bytes_len = nx->text ? strlen(nx->text) : 0;
+                return n;
+            }
+        }
         p_eat(P);
         TriadAstNode *n = new_node(P, TRIAD_AST_STRING_LIT, p);
         n->u.string_val = t->text;
@@ -1325,7 +1743,7 @@ static TriadAstNode *parse_primary(Pz *P) {
                 aparts[k].is_expr = 0;
                 aparts[k].text    = t->parts[k].text;
             } else {
-                /* Re-lex + re-parse the expression source. */
+
                 TriadTokenList sub = {0};
                 TriadDiag sub_diag = {0};
                 if (triad_tokenize(P->arena, t->parts[k].text, "<fstring>", &sub, &sub_diag) != 0) {
@@ -1343,6 +1761,7 @@ static TriadAstNode *parse_primary(Pz *P) {
                 }
                 aparts[k].is_expr = 1;
                 aparts[k].expr    = parse_expr(&sub_P);
+                aparts[k].fmt_spec = t->parts[k].fmt_spec;
             }
         }
         TriadAstNode *n = new_node(P, TRIAD_AST_FSTRING, p);
@@ -1393,6 +1812,19 @@ static TriadAstNode *parse_primary(Pz *P) {
             n->u.unary_value.value = operand;
             return n;
         }
+        if (strcmp(t->text, "super") == 0) {
+            p_eat(P);
+            p_expect_sym(P, "(");
+            TriadAstNode **args = NULL; size_t args_len = 0;
+            TriadKwArg *kwargs = NULL; size_t kwargs_len = 0;
+            if (!p_at(P, TRIAD_TOK_SYMBOL, ")"))
+                parse_call_args(P, &args, &args_len, &kwargs, &kwargs_len);
+            p_expect_sym(P, ")");
+            TriadAstNode *n = new_node(P, TRIAD_AST_SUPER, p);
+            n->u.super_expr.args = args;
+            n->u.super_expr.args_len = args_len;
+            return n;
+        }
     }
 
     if (t->kind == TRIAD_TOK_IDENT) {
@@ -1412,6 +1844,37 @@ static TriadAstNode *parse_primary(Pz *P) {
             return n;
         }
         TriadAstNode *first = parse_expr(P);
+
+        if (p_at(P, TRIAD_TOK_KEYWORD, "for")) {
+            TriadCompClause *clauses = NULL; size_t clauses_len = 0;
+            PVec cv = {0};
+            while (p_at(P, TRIAD_TOK_KEYWORD, "for")) {
+                p_eat(P);
+                TriadCompClause *c = (TriadCompClause *)triad_arena_calloc(P->arena, sizeof(TriadCompClause));
+                c->var = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+                p_expect_kw(P, "in");
+                c->iter = parse_expr(P);
+                PVec condv = {0};
+                while (p_at(P, TRIAD_TOK_KEYWORD, "if")) {
+                    p_eat(P);
+                    pvec_push(&condv, parse_expr(P));
+                }
+                c->conditions_len = condv.len;
+                if (condv.len) c->conditions = (TriadAstNode **)pvec_to_arena_ptrs(P->arena, &condv, sizeof(TriadAstNode *));
+                else c->conditions = NULL;
+                pvec_push(&cv, c);
+                pvec_free(&condv);
+            }
+            p_expect_sym(P, ")");
+            clauses_len = cv.len;
+            if (cv.len) clauses = (TriadCompClause *)pvec_to_arena_ptrs(P->arena, &cv, sizeof(TriadCompClause));
+            TriadAstNode *n = new_node(P, TRIAD_AST_GEN_COMP, p);
+            n->u.gen_comp.expr = first;
+            n->u.gen_comp.clauses = clauses;
+            n->u.gen_comp.clauses_len = clauses_len;
+            pvec_free(&cv);
+            return n;
+        }
         if (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
             PVec elems = {0};
             pvec_push(&elems, first);
@@ -1474,25 +1937,141 @@ static TriadAstNode *parse_primary(Pz *P) {
 
     if (t->kind == TRIAD_TOK_SYMBOL && strcmp(t->text, "{") == 0) {
         p_eat(P);
-        PVec pairs = {0};
-        while (!p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
+
+        if (p_at(P, TRIAD_TOK_SYMBOL, "}")) {
+            p_eat(P);
+            TriadAstNode *n = new_node(P, TRIAD_AST_MAP, p);
+            n->u.map.pairs = NULL;
+            n->u.map.pairs_len = 0;
+            return n;
+        }
+        TriadAstNode *first = parse_expr(P);
+
+        if (p_at(P, TRIAD_TOK_SYMBOL, ":")) {
+            p_eat(P);
+            TriadAstNode *val_expr = parse_expr(P);
+            if (p_at(P, TRIAD_TOK_KEYWORD, "for")) {
+
+                TriadCompClause *clauses = NULL; size_t clauses_len = 0;
+                PVec cv = {0};
+                while (p_at(P, TRIAD_TOK_KEYWORD, "for")) {
+                    p_eat(P);
+                    TriadCompClause *c = (TriadCompClause *)triad_arena_calloc(P->arena, sizeof(TriadCompClause));
+                    c->var = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+                    p_expect_kw(P, "in");
+                    c->iter = parse_expr(P);
+                    PVec condv = {0};
+                    while (p_at(P, TRIAD_TOK_KEYWORD, "if")) {
+                        p_eat(P);
+                        TriadAstNode *ce = parse_expr(P);
+                        pvec_push(&condv, ce);
+                    }
+                    c->conditions_len = condv.len;
+                    if (condv.len) c->conditions = (TriadAstNode **)pvec_to_arena_ptrs(P->arena, &condv, sizeof(TriadAstNode *));
+                    else c->conditions = NULL;
+                    pvec_push(&cv, c);
+                    pvec_free(&condv);
+                }
+                p_expect_sym(P, "}");
+                clauses_len = cv.len;
+                if (cv.len) clauses = (TriadCompClause *)pvec_to_arena_ptrs(P->arena, &cv, sizeof(TriadCompClause));
+                TriadAstNode *n = new_node(P, TRIAD_AST_DICT_COMP, p);
+                n->u.dict_comp.key_expr = first;
+                n->u.dict_comp.value_expr = val_expr;
+                n->u.dict_comp.clauses = clauses;
+                n->u.dict_comp.clauses_len = clauses_len;
+                pvec_free(&cv);
+                return n;
+            }
+
+            PVec pairs = {0};
             TriadMapPair *pp = (TriadMapPair *)triad_arena_calloc(P->arena, sizeof(TriadMapPair));
-            pp->key = parse_expr(P);
-            p_expect_sym(P, ":");
-            pp->value = parse_expr(P);
+            pp->key = first;
+            pp->value = val_expr;
             pvec_push(&pairs, pp);
-            if (!p_at(P, TRIAD_TOK_SYMBOL, "}")) p_expect_sym(P, ",");
+            if (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
+                p_eat(P);
+                while (!p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
+                    pp = (TriadMapPair *)triad_arena_calloc(P->arena, sizeof(TriadMapPair));
+                    pp->key = parse_expr(P);
+                    p_expect_sym(P, ":");
+                    pp->value = parse_expr(P);
+                    pvec_push(&pairs, pp);
+                    if (!p_at(P, TRIAD_TOK_SYMBOL, "}")) p_expect_sym(P, ",");
+                }
+            }
+            p_expect_sym(P, "}");
+            TriadAstNode *n = new_node(P, TRIAD_AST_MAP, p);
+            if (pairs.len) {
+                TriadMapPair *arr = (TriadMapPair *)triad_arena_alloc(P->arena, pairs.len * sizeof(TriadMapPair));
+                for (size_t k = 0; k < pairs.len; ++k) arr[k] = *(TriadMapPair *)pairs.items[k];
+                n->u.map.pairs = arr;
+                n->u.map.pairs_len = pairs.len;
+            }
+            pvec_free(&pairs);
+            return n;
+        }
+
+        if (p_at(P, TRIAD_TOK_KEYWORD, "for")) {
+
+            TriadCompClause *clauses = NULL; size_t clauses_len = 0;
+            PVec cv = {0};
+            while (p_at(P, TRIAD_TOK_KEYWORD, "for")) {
+                p_eat(P);
+                TriadCompClause *c = (TriadCompClause *)triad_arena_calloc(P->arena, sizeof(TriadCompClause));
+                c->var = p_expect(P, TRIAD_TOK_IDENT, NULL)->text;
+                p_expect_kw(P, "in");
+                c->iter = parse_expr(P);
+                PVec condv = {0};
+                while (p_at(P, TRIAD_TOK_KEYWORD, "if")) {
+                    p_eat(P);
+                    pvec_push(&condv, parse_expr(P));
+                }
+                c->conditions_len = condv.len;
+                if (condv.len) c->conditions = (TriadAstNode **)pvec_to_arena_ptrs(P->arena, &condv, sizeof(TriadAstNode *));
+                else c->conditions = NULL;
+                pvec_push(&cv, c);
+                pvec_free(&condv);
+            }
+            p_expect_sym(P, "}");
+            clauses_len = cv.len;
+            if (cv.len) clauses = (TriadCompClause *)pvec_to_arena_ptrs(P->arena, &cv, sizeof(TriadCompClause));
+            TriadAstNode *n = new_node(P, TRIAD_AST_SET_COMP, p);
+            n->u.set_comp.expr = first;
+            n->u.set_comp.clauses = clauses;
+            n->u.set_comp.clauses_len = clauses_len;
+            pvec_free(&cv);
+            return n;
+        }
+
+        PVec elems = {0};
+        pvec_push(&elems, first);
+        if (p_at(P, TRIAD_TOK_SYMBOL, ",")) {
+            p_eat(P);
+            while (!p_at(P, TRIAD_TOK_SYMBOL, "}") && !p_at_kind(P, TRIAD_TOK_EOF)) {
+                pvec_push(&elems, parse_expr(P));
+                if (!p_at(P, TRIAD_TOK_SYMBOL, "}")) p_expect_sym(P, ",");
+            }
         }
         p_expect_sym(P, "}");
-        TriadAstNode *n = new_node(P, TRIAD_AST_MAP, p);
-        if (pairs.len) {
-            TriadMapPair *arr = (TriadMapPair *)triad_arena_alloc(P->arena, pairs.len * sizeof(TriadMapPair));
-            for (size_t k = 0; k < pairs.len; ++k) arr[k] = *(TriadMapPair *)pairs.items[k];
-            n->u.map.pairs = arr;
-            n->u.map.pairs_len = pairs.len;
-        }
-        pvec_free(&pairs);
+        TriadAstNode *n = new_node(P, TRIAD_AST_SET_LIT, p);
+        n->u.set_lit.elements_len = elems.len;
+        n->u.set_lit.elements = (TriadAstNode **)pvec_to_arena_ptrs(P->arena, &elems, sizeof(TriadAstNode *));
+        pvec_free(&elems);
         return n;
+    }
+
+    if (t->kind == TRIAD_TOK_KEYWORD) {
+        const TriadToken *nx = p_peek(P, 1);
+        if (nx && nx->kind == TRIAD_TOK_SYMBOL && nx->text &&
+            (strcmp(nx->text, "(") == 0 || strcmp(nx->text, "=") == 0 ||
+             strcmp(nx->text, ";") == 0 || strcmp(nx->text, ")") == 0 ||
+             strcmp(nx->text, "]") == 0 || strcmp(nx->text, ",") == 0)) {
+            p_eat(P);
+            TriadAstNode *n = new_node(P, TRIAD_AST_IDENT, p);
+            n->u.ident_name = t->text;
+            return n;
+        }
     }
 
     NORETURN_parse_error(P, t->line, t->col, "unexpected token %s '%s'",
@@ -1501,7 +2080,7 @@ static TriadAstNode *parse_primary(Pz *P) {
 
 static TriadAstNode *parse_lambda(Pz *P) {
     TriadPos p = cur_pos(P);
-    p_eat(P); /* fn */
+    p_eat(P);
     p_expect_sym(P, "(");
     TriadParam *params = NULL; size_t params_len = 0;
     parse_params(P, &params, &params_len);
@@ -1516,8 +2095,6 @@ static TriadAstNode *parse_lambda(Pz *P) {
     return n;
 }
 
-/* ── Top-level dispatch ─────────────────────────────────────────── */
-
 static TriadAstNode *parse_stmt(Pz *P) {
     const TriadToken *t = p_peek(P, 0);
 
@@ -1530,6 +2107,10 @@ static TriadAstNode *parse_stmt(Pz *P) {
             const TriadToken *nx = p_peek(P, 1);
             if (nx->kind == TRIAD_TOK_KEYWORD && strcmp(nx->text, "fn") == 0)
                 return parse_fn(P, 1);
+            if (nx->kind == TRIAD_TOK_KEYWORD && strcmp(nx->text, "for") == 0)
+                return parse_async_for(P);
+            if (nx->kind == TRIAD_TOK_KEYWORD && strcmp(nx->text, "with") == 0)
+                return parse_with(P, 1);
         }
         if (strcmp(v, "if") == 0)       return parse_if(P);
         if (strcmp(v, "for") == 0)      return parse_for(P);
@@ -1544,15 +2125,22 @@ static TriadAstNode *parse_stmt(Pz *P) {
         if (strcmp(v, "import") == 0)   return parse_import(P);
         if (strcmp(v, "from") == 0)     return parse_from_import(P);
         if (strcmp(v, "try") == 0)      return parse_try(P);
+        if (strcmp(v, "with") == 0)     return parse_with(P, 0);
         if (strcmp(v, "throw") == 0)    return parse_throw(P);
+        if (strcmp(v, "assert") == 0)   return parse_assert_stmt(P);
+        if (strcmp(v, "pass") == 0)     { TriadPos p = cur_pos(P); p_eat(P); p_eat_semi(P); return new_node(P, TRIAD_AST_PASS, p); }
+        if (strcmp(v, "del") == 0)      return parse_del_stmt(P);
         if (strcmp(v, "reg") == 0)      return parse_reg(P);
         if (strcmp(v, "entity") == 0)   return parse_entity(P);
         if (strcmp(v, "world") == 0)    return parse_world(P);
+        if (strcmp(v, "substrate") == 0)return parse_substrate(P);
         if (strcmp(v, "couple") == 0)   return parse_couple(P);
         if (strcmp(v, "pair") == 0)     return parse_pair(P);
         if (strcmp(v, "ring") == 0)     return parse_ring(P);
         if (strcmp(v, "observe") == 0 || strcmp(v, "OBSERVE") == 0) return parse_observe(P);
         if (strcmp(v, "run") == 0)      return parse_run(P);
+        if (strcmp(v, "evolve") == 0)   return parse_evolve(P);
+        if (strcmp(v, "sequence") == 0) return parse_sequence(P);
     }
 
     if (t->kind == TRIAD_TOK_SYMBOL && strcmp(t->text, "@") == 0)
@@ -1573,8 +2161,6 @@ static TriadAstNode *parse_stmt(Pz *P) {
     n->u.expr_stmt.expr = expr;
     return n;
 }
-
-/* ── Public entry ───────────────────────────────────────────────── */
 
 TriadAstNode *triad_parse_tokens(TriadArena *arena, const TriadTokenList *tokens,
                                  const char *file, TriadDiag *diag) {

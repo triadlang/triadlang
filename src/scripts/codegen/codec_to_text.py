@@ -1,9 +1,22 @@
 import argparse
 import os
 import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import numpy as np
-from runtime.codec.codec import IntCalib, FloatCalib, encode_int, decode_int, encode_bool, decode_bool, encode_float, decode_float, DEFAULT_K_MIN, DEFAULT_K_STEP
+from runtime.codec.codec import (
+    DEFAULT_K_MIN,
+    DEFAULT_K_STEP,
+    FloatCalib,
+    IntCalib,
+    decode_bool,
+    decode_float,
+    decode_int,
+    encode_bool,
+    encode_float,
+    encode_int,
+)
+from triad import ntri as np
+
 NUM_SAMPLES = 4
 
 def _f(x: float) -> str:
@@ -27,7 +40,7 @@ def _emit_psi(psi: np.ndarray) -> str:
 def _norm(psi: np.ndarray, dx: float) -> float:
     return float((np.abs(psi) ** 2).sum() * dx)
 
-def dump_int_fixture(value: int, L: float, N: int, calib: IntCalib, lines: list) -> None:
+def dump_int_fixture(value: int, L: float, N: int, calib: IntCalib, lines: list[str]) -> None:
     psi = encode_int(value, calib, L, N)
     dx = L / N
     lines.append(f'enc_int {_i(value)} {_f(L)} {_i(N)} {_f(calib.k_min)} {_f(calib.k_step)} psi {_emit_psi(psi)}')
@@ -36,7 +49,7 @@ def dump_int_fixture(value: int, L: float, N: int, calib: IntCalib, lines: list)
     lines.append(f'rt_int {_i(value)} -> {_i(dec)}')
     lines.append(f'norm_ok int {_i(value)} {_f(_norm(psi, dx) - 1.0)}')
 
-def dump_bool_fixture(value: bool, L: float, N: int, lines: list) -> None:
+def dump_bool_fixture(value: bool, L: float, N: int, lines: list[str]) -> None:
     psi = encode_bool(value, L, N)
     dx = L / N
     lines.append(f'enc_bool {_i(int(value))} {_f(L)} {_i(N)} psi {_emit_psi(psi)}')
@@ -50,7 +63,7 @@ def dump_bool_fixture(value: bool, L: float, N: int, lines: list) -> None:
     lines.append(f'dec_bool {_i(int(value))} -> {_i(tri)}')
     lines.append(f'norm_ok bool {_i(int(value))} {_f(_norm(psi, dx) - 1.0)}')
 
-def dump_float_fixture(value: float, L: float, N: int, calib: FloatCalib, lines: list) -> None:
+def dump_float_fixture(value: float, L: float, N: int, calib: FloatCalib, lines: list[str]) -> None:
     psi = encode_float(value, calib, L, N)
     dx = L / N
     lines.append(f'enc_float {_f(value)} {_f(L)} {_i(N)} {_f(calib.a)} {_f(calib.b)} psi {_emit_psi(psi)}')

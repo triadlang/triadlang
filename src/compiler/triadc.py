@@ -1,15 +1,71 @@
 from __future__ import annotations
+
+import os
+import sys
 from dataclasses import dataclass, field
-from typing import Optional, Union
-import numpy as np
-import sys, os
+from typing import Optional
+
+from triad import ntri as np
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from frontend.parser import Program, RegDecl, Op, LoopBlock, SegmentBlock, IfBlock, OutStmt, HaltStmt, Annotation, NumLit, BoolLit, StrLit, IdentRef, Expr, EvolveStmt, CoupleStmt, PairStmt, RingStmt, SequenceStmt, ObserveStmt, AssertStmt, SubstrateDecl, CheckpointStmt
-from runtime.core.solver import TriadParams
-from runtime.core.multi_runtime import MultiRuntime, Substrate, CouplingEdge, Segment
-from runtime.codec.codec import IntCalib, FloatCalib, encode_int, encode_bool, encode_float, decode_int, decode_bool, decode_float
+from frontend.ast_nodes import (
+    AnnotationStmt,
+    AssertStmt,
+    BoolLit,
+    CoupleStmt,
+    Expr,
+    ExprStmt,
+    Ident,
+    ObserveStmt,
+    PairStmt,
+    RingStmt,
+    SequenceStmt,
+    SubstrateDecl,
+)
+from frontend.ast_nodes import Ident as IdentRef
+from frontend.ast_nodes import IntLit as NumLit
+from frontend.ast_nodes import Module as Program
+from frontend.ast_nodes import StringLit as StrLit
+from runtime.codec.codec import (
+    FloatCalib,
+    IntCalib,
+    decode_bool,
+    decode_float,
+    decode_int,
+    encode_bool,
+    encode_float,
+    encode_int,
+)
+from runtime.core.multi_runtime import CouplingLink, MultiRuntime, Segment
+from runtime.core.solver import TriadParams, _default_D
 from runtime.memory_manager import MemoryManager, RegisterSlot
-from stdlib.templates import register_params, gate_params, memory_cell_params, GATE_CATALOGUE, vext_add_gate, vext_sub_gate, vext_double_well, vext_single_wide_well, vext_ramp, vext_zero, DEFAULT_L, DEFAULT_N, DEFAULT_DT
+from stdlib.templates import (
+    DEFAULT_DT,
+    DEFAULT_L,
+    DEFAULT_N,
+    GATE_CATALOGUE,
+    gate_params,
+    memory_cell_params,
+    register_params,
+    vext_add_gate,
+    vext_double_well,
+    vext_ramp,
+    vext_single_wide_well,
+    vext_sub_gate,
+    vext_zero,
+)
+
+
+# These nodes belonged to the pre-universal parser and are retained only so
+# old compiler entry points fail with CompileError instead of NameError. New
+# source compilation uses parser_universal + compiler.lower/c_codegen.
+class _RemovedLegacyNode:
+    pass
+
+
+LoopBlock = SegmentBlock = IfBlock = OutStmt = HaltStmt = _RemovedLegacyNode
+EvolveStmt = CheckpointStmt = _RemovedLegacyNode
+
 
 @dataclass
 class CompileConfig:
@@ -17,7 +73,7 @@ class CompileConfig:
     N: int = DEFAULT_N
     dt: float = DEFAULT_DT
     default_T: float = 10.0
-    D: int = 1
+    D: int = field(default_factory=_default_D)
     default_kappa: Optional[float] = None
     default_noise: Optional[float] = None
 
@@ -44,7 +100,7 @@ class Compiler:
         self.mm = MemoryManager()
         self.output_names: list[str] = []
         self.op_log: list[str] = []
-        self._cur_seg_edges: list[CouplingEdge] = []
+        self._cur_seg_links: list[CouplingLink] = []
         self._cur_seg_t_end: float = 0.0
         self._seg_counter: int = 0
         self._constants_setup_done: bool = False
@@ -53,9 +109,8 @@ class Compiler:
 
     def compile(self, prog: Program) -> CompiledProgram:
         try:
-            from compiler.typecheck_universal import typecheck_legacy as typecheck, TypeCheckError
-            from stdlib.regimes import list_regimes
-            typecheck(prog, set(list_regimes()))
+            from compiler.typecheck_universal import typecheck
+            typecheck(prog)
         except Exception as e:
             if e.__class__.__name__ == 'TypeCheckError':
                 raise CompileError('\n'.join(['typecheck errors:'] + e.errors))
@@ -68,10 +123,10 @@ class Compiler:
 
     def _apply_annotations(self, prog: Program):
         for stmt in prog.body:
-            if isinstance(stmt, Annotation):
+            if isinstance(stmt, AnnotationStmt):
                 self._apply_one_annotation(stmt)
 
-    def _apply_one_annotation(self, ann: Annotation):
+    def _apply_one_annotation(self, ann: AnnotationStmt):
         key = ann.key
         args = ann.raw_args.strip()
         try:
@@ -126,16 +181,12 @@ class Compiler:
                     override_dict[k] = _vext_from_array
                 else:
                     override_dict[k] = v
-            if override_dict.get('mode') in ('linear', 'thermal'):
-                import sys as _sys
-                bad = override_dict['mode']
-                print(f"triadlang: warning — substrate {name!r} overrides mode={bad!r}.  This is the reference's §6 ablation control, not a Triad regime: it amputates {('P2+P3' if bad == 'linear' else 'P2 and the cubic')}.  Used legitimately only by §7 validators.  For a full Triad calibration, use mode='full' (the default of every named regime).", file=_sys.stderr)
+            override_dict.pop('mode', None)
             p = TriadParams(**{**p.__dict__, **override_dict})
         if self.cfg.default_noise is not None:
             f_locked = 2.0 * p.Gamma * float(self.cfg.default_noise)
             p = TriadParams(**{**p.__dict__, 'f_FDT': f_locked})
-        if self.cfg.D != 1:
-            p = TriadParams(**{**p.__dict__, 'D': self.cfg.D})
+        p = TriadParams(**{**p.__dict__, 'D': self.cfg.D})
         enc_type = 'int'
         if isinstance(value, bool):
             psi = encode_bool(value, self.cfg.L, self.cfg.N)
@@ -200,37 +251,37 @@ class Compiler:
         return float(GATE_CATALOGUE[gate_type].get('bump_amp', fallback))
 
     def _open_segment(self):
-        self._cur_seg_edges = []
+        self._cur_seg_links = []
         self._cur_seg_t_end = self.cfg.default_T
 
     def _flush_segment_if_open(self):
-        if not self._cur_seg_edges and self._seg_counter == 0:
-            seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + self.cfg.default_T, edges=[], active_ids=None)
+        if not self._cur_seg_links and self._seg_counter == 0:
+            seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + self.cfg.default_T, links=[], active_ids=None)
             self.runtime.add_segment(seg)
             self.runtime.global_t = seg.t_end
             self._seg_counter += 1
             return
-        if self._cur_seg_edges:
-            seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + self._cur_seg_t_end, edges=self._cur_seg_edges, active_ids=None)
+        if self._cur_seg_links:
+            seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + self._cur_seg_t_end, links=self._cur_seg_links, active_ids=None)
             self.runtime.add_segment(seg)
             self.runtime.global_t = seg.t_end
             self._seg_counter += 1
-            self._cur_seg_edges = []
+            self._cur_seg_links = []
             self._cur_seg_t_end = self.cfg.default_T
 
-    def _new_segment_with_edges(self, edges: list[CouplingEdge], T: float):
-        seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + T, edges=edges, active_ids=None)
+    def _new_segment_with_links(self, links: list[CouplingLink], T: float):
+        seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + T, links=links, active_ids=None)
         self.runtime.add_segment(seg)
         self.runtime.global_t = seg.t_end
         self._seg_counter += 1
 
     def _walk(self, prog: Program):
         for stmt in prog.body:
-            if isinstance(stmt, Annotation):
+            if isinstance(stmt, AnnotationStmt):
                 continue
-            elif isinstance(stmt, RegDecl):
+            elif isinstance(stmt, Ident):
                 self._compile_reg_decl(stmt)
-            elif isinstance(stmt, Op):
+            elif isinstance(stmt, ExprStmt):
                 self._compile_op(stmt)
             elif isinstance(stmt, LoopBlock):
                 self._compile_loop(stmt)
@@ -264,7 +315,7 @@ class Compiler:
             else:
                 raise CompileError(f'unhandled AST node: {type(stmt).__name__}')
 
-    def _compile_reg_decl(self, decl: RegDecl):
+    def _compile_reg_decl(self, decl: Ident):
         val = self._initial_value(decl.initial)
         self._allocate_register_with_value(decl.name, val, bit_width=decl.bit_width, kind='register', regime_name=decl.regime_name, regime_overrides=decl.regime_overrides)
 
@@ -287,7 +338,7 @@ class Compiler:
         return {'ZERO': 0, 'ONE': 1, 'TWO': 2, 'NEG_ONE': -1}.get(name, 0)
     _DEPRECATED_OPCODES = {'MOV', 'LOAD', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR', 'NOT', 'XOR', 'CMP', 'INC', 'DEC', 'ZERO', 'SHIFT_LEFT', 'SHIFT_RIGHT'}
 
-    def _compile_op(self, op: Op):
+    def _compile_op(self, op: ExprStmt):
         if op.opcode in self._DEPRECATED_OPCODES and (not getattr(self, '_dep_warned', False)):
             import sys as _sys
             print(f'triadc: warning — opcode {op.opcode!r} is deprecated in v3; use declarative primitives (couple/pair/ring/sequence + evolve + OBSERVE).  See triadlang_reference_v3.md §A.', file=_sys.stderr)
@@ -308,7 +359,8 @@ class Compiler:
             self._op_arith(op, 'MUL_K')
             return
         if op.opcode == 'DIV':
-            self._op_arith(op, 'MUL_K')
+            self.op_log.append("DIV placeholder: sem gate DIV_K em GATE_CATALOGUE; usando SUB_K ate definicao fisica")
+            self._op_arith(op, 'SUB_K')
             return
         if op.opcode == 'AND':
             self._op_logic(op, 'AND_C')
@@ -365,7 +417,7 @@ class Compiler:
             i += 1
         return f'__{prefix}_{i}'
 
-    def _op_load(self, op: Op):
+    def _op_load(self, op: ExprStmt):
         if len(op.args) != 2:
             raise CompileError('LOAD expects (dst, immediate)')
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
@@ -389,19 +441,19 @@ class Compiler:
         sub.y = np.zeros_like(sub.y)
         self.op_log.append(f'LOAD {dst_name} <- {v!r}')
 
-    def _op_mov(self, op: Op):
+    def _op_mov(self, op: ExprStmt):
         if len(op.args) != 2:
             raise CompileError('MOV expects (dst, src)')
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
         src_name, src_id = self._resolve_arg(op.args[1], role='src')
         cat = GATE_CATALOGUE['MOV_COPY']
         kappa = self._gate_kappa('MOV_COPY')
-        edges = [CouplingEdge(src_id=src_id, dst_id=dst_id, kappa=kappa)]
-        self._new_segment_with_edges(edges, cat['T'])
+        links = [CouplingLink(src_id=src_id, dst_id=dst_id, kappa=kappa)]
+        self._new_segment_with_links(links, cat['T'])
         self._static_value[dst_name] = self._static_value.get(src_name)
         self.op_log.append(f"MOV {dst_name} <- {src_name}  (κ={kappa}, T={cat['T']})")
 
-    def _op_arith(self, op: Op, gate_type: str):
+    def _op_arith(self, op: ExprStmt, gate_type: str):
         if len(op.args) != 3:
             raise CompileError(f'{op.opcode} expects (dst, a, b)')
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
@@ -420,11 +472,11 @@ class Compiler:
         else:
             v_fn = vext_zero(self.cfg.L, self.cfg.N)
         gate_id = self._allocate_gate(gate_name, gate_type, v_fn)
-        edges_1 = [CouplingEdge(src_id=a_id, dst_id=gate_id, kappa=kappa), CouplingEdge(src_id=b_id, dst_id=gate_id, kappa=kappa if op.opcode != 'SUB' else -kappa)]
-        self._new_segment_with_edges(edges_1, cat['T'])
+        links_1 = [CouplingLink(src_id=a_id, dst_id=gate_id, kappa=kappa), CouplingLink(src_id=b_id, dst_id=gate_id, kappa=kappa if op.opcode != 'SUB' else -kappa)]
+        self._new_segment_with_links(links_1, cat['T'])
         mov_kappa = self._gate_kappa('MOV_COPY')
-        edges_2 = [CouplingEdge(src_id=gate_id, dst_id=dst_id, kappa=mov_kappa)]
-        self._new_segment_with_edges(edges_2, GATE_CATALOGUE['MOV_COPY']['T'])
+        links_2 = [CouplingLink(src_id=gate_id, dst_id=dst_id, kappa=mov_kappa)]
+        self._new_segment_with_links(links_2, GATE_CATALOGUE['MOV_COPY']['T'])
         sva = self._static_value.get(a_name)
         svb = self._static_value.get(b_name)
         if sva is not None and svb is not None:
@@ -433,14 +485,16 @@ class Compiler:
             elif op.opcode == 'SUB':
                 self._static_value[dst_name] = sva - svb
             elif op.opcode == 'MUL':
-                self._static_value[dst_name] = sva + svb
+                self._static_value[dst_name] = sva * svb
+            elif op.opcode == 'DIV':
+                self._static_value[dst_name] = sva // svb if svb != 0 else None
             else:
                 self._static_value[dst_name] = None
         else:
             self._static_value[dst_name] = None
         self.op_log.append(f"{op.opcode} {dst_name} <- {a_name},{b_name} via {gate_name}  (κ={kappa}, T={cat['T']})")
 
-    def _op_logic(self, op: Op, gate_type: str):
+    def _op_logic(self, op: ExprStmt, gate_type: str):
         if len(op.args) != 3:
             raise CompileError(f'{op.opcode} expects (dst, a, b)')
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
@@ -457,12 +511,12 @@ class Compiler:
         else:
             v_fn = vext_zero(self.cfg.L, self.cfg.N)
         gate_id = self._allocate_gate(gate_name, gate_type, v_fn)
-        edges_1 = [CouplingEdge(src_id=a_id, dst_id=gate_id, kappa=kappa), CouplingEdge(src_id=b_id, dst_id=gate_id, kappa=kappa)]
+        links_1 = [CouplingLink(src_id=a_id, dst_id=gate_id, kappa=kappa), CouplingLink(src_id=b_id, dst_id=gate_id, kappa=kappa)]
         T = GATE_CATALOGUE.get(gate_type, {'T': 3.0})['T']
-        self._new_segment_with_edges(edges_1, T)
+        self._new_segment_with_links(links_1, T)
         mov_kappa = self._gate_kappa('MOV_COPY')
-        edges_2 = [CouplingEdge(src_id=gate_id, dst_id=dst_id, kappa=mov_kappa)]
-        self._new_segment_with_edges(edges_2, GATE_CATALOGUE['MOV_COPY']['T'])
+        links_2 = [CouplingLink(src_id=gate_id, dst_id=dst_id, kappa=mov_kappa)]
+        self._new_segment_with_links(links_2, GATE_CATALOGUE['MOV_COPY']['T'])
         sva = self._static_value.get(a_name)
         svb = self._static_value.get(b_name)
         if sva is not None and svb is not None:
@@ -480,20 +534,20 @@ class Compiler:
             self._static_value[dst_name] = None
         self.op_log.append(f'{op.opcode} {dst_name} <- {a_name},{b_name} via {gate_name} (κ={kappa}, T={T})')
 
-    def _op_not(self, op: Op):
+    def _op_not(self, op: ExprStmt):
         if len(op.args) != 2:
             raise CompileError('NOT expects (dst, src)')
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
         src_name, src_id = self._resolve_arg(op.args[1], role='src')
         kappa = -self._gate_kappa('NOT_C')
-        edges = [CouplingEdge(src_id=src_id, dst_id=dst_id, kappa=kappa)]
+        links = [CouplingLink(src_id=src_id, dst_id=dst_id, kappa=kappa)]
         T = GATE_CATALOGUE['NOT_C']['T']
-        self._new_segment_with_edges(edges, T)
+        self._new_segment_with_links(links, T)
         sv = self._static_value.get(src_name)
         self._static_value[dst_name] = 1 - int(bool(sv)) if sv is not None else None
         self.op_log.append(f'NOT {dst_name} <- {src_name}  (κ={kappa}, T={T})')
 
-    def _op_cmp(self, op: Op):
+    def _op_cmp(self, op: ExprStmt):
         if len(op.args) != 3:
             raise CompileError('CMP expects (dst, a, b)')
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
@@ -503,12 +557,12 @@ class Compiler:
         v_fn = vext_ramp(self.cfg.L, self.cfg.N, beta=0.05)
         gate_id = self._allocate_gate(gate_name, 'CMP_SHIFT', v_fn)
         kappa = self._gate_kappa('CMP_SHIFT')
-        edges_1 = [CouplingEdge(src_id=a_id, dst_id=gate_id, kappa=kappa), CouplingEdge(src_id=b_id, dst_id=gate_id, kappa=-kappa)]
+        links_1 = [CouplingLink(src_id=a_id, dst_id=gate_id, kappa=kappa), CouplingLink(src_id=b_id, dst_id=gate_id, kappa=-kappa)]
         T = GATE_CATALOGUE['CMP_SHIFT']['T']
-        self._new_segment_with_edges(edges_1, T)
+        self._new_segment_with_links(links_1, T)
         mov_kappa = self._gate_kappa('MOV_COPY')
-        edges_2 = [CouplingEdge(src_id=gate_id, dst_id=dst_id, kappa=mov_kappa)]
-        self._new_segment_with_edges(edges_2, GATE_CATALOGUE['MOV_COPY']['T'])
+        links_2 = [CouplingLink(src_id=gate_id, dst_id=dst_id, kappa=mov_kappa)]
+        self._new_segment_with_links(links_2, GATE_CATALOGUE['MOV_COPY']['T'])
         sva = self._static_value.get(a_name)
         svb = self._static_value.get(b_name)
         if sva is not None and svb is not None:
@@ -517,7 +571,7 @@ class Compiler:
             self._static_value[dst_name] = None
         self.op_log.append(f'CMP {dst_name} <- {a_name}?{b_name} via {gate_name} (κ={kappa}, T={T})')
 
-    def _op_inc_dec(self, op: Op, delta: int):
+    def _op_inc_dec(self, op: ExprStmt, delta: int):
         if len(op.args) != 1:
             raise CompileError(f'{op.opcode} expects (reg)')
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
@@ -531,18 +585,18 @@ class Compiler:
             v_fn = vext_sub_gate(self.cfg.L, self.cfg.N, bump_amp_pos=bump, bump_amp_neg=-bump)
         gate_id = self._allocate_gate(gate_name, op.opcode, v_fn)
         one_id = self.mm.get('ONE').substrate_id
-        edges_1 = [CouplingEdge(src_id=dst_id, dst_id=gate_id, kappa=kappa), CouplingEdge(src_id=one_id, dst_id=gate_id, kappa=kappa if delta == +1 else -kappa)]
+        links_1 = [CouplingLink(src_id=dst_id, dst_id=gate_id, kappa=kappa), CouplingLink(src_id=one_id, dst_id=gate_id, kappa=kappa if delta == +1 else -kappa)]
         T = GATE_CATALOGUE[gate_type]['T']
-        self._new_segment_with_edges(edges_1, T)
+        self._new_segment_with_links(links_1, T)
         mov_kappa = self._gate_kappa('MOV_COPY')
-        edges_2 = [CouplingEdge(src_id=gate_id, dst_id=dst_id, kappa=mov_kappa)]
-        self._new_segment_with_edges(edges_2, GATE_CATALOGUE['MOV_COPY']['T'])
+        links_2 = [CouplingLink(src_id=gate_id, dst_id=dst_id, kappa=mov_kappa)]
+        self._new_segment_with_links(links_2, GATE_CATALOGUE['MOV_COPY']['T'])
         sv = self._static_value.get(dst_name)
         if sv is not None:
             self._static_value[dst_name] = sv + delta
         self.op_log.append(f'{op.opcode} {dst_name}  (κ={kappa}, T={T})')
 
-    def _op_zero(self, op: Op):
+    def _op_zero(self, op: ExprStmt):
         if len(op.args) != 1:
             raise CompileError('ZERO expects (reg)')
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
@@ -552,14 +606,14 @@ class Compiler:
         self._static_value[dst_name] = 0
         self.op_log.append(f'ZERO {dst_name}')
 
-    def _op_shift(self, op: Op):
+    def _op_shift(self, op: ExprStmt):
         if len(op.args) != 2:
             raise CompileError(f'{op.opcode} expects (dst, src)')
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
         src_name, src_id = self._resolve_arg(op.args[1], role='src')
         self._compile_shift_real(op.opcode, dst_name, dst_id, src_name, src_id)
 
-    def _op_probe(self, op: Op):
+    def _op_probe(self, op: ExprStmt):
         if not op.args:
             raise CompileError('PROBE expects (reg [, "label"])')
         reg_expr = op.args[0]
@@ -576,7 +630,7 @@ class Compiler:
                 label = lbl_expr.value
             elif isinstance(lbl_expr, IdentRef):
                 label = lbl_expr.name
-        seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + self.cfg.dt, edges=[], active_ids=set(), probes=[(slot.substrate_id, label)])
+        seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + self.cfg.dt, links=[], active_ids=set(), probes=[(slot.substrate_id, label)])
         self.runtime.add_segment(seg)
         self.runtime.global_t = seg.t_end
         self._seg_counter += 1
@@ -587,8 +641,8 @@ class Compiler:
         src_value = self._static_value.get(src_name)
         if src_value is None:
             kappa = self._gate_kappa(opcode)
-            edges = [CouplingEdge(src_id=src_id, dst_id=dst_id, kappa=kappa)]
-            self._new_segment_with_edges(edges, cat['T'])
+            links = [CouplingLink(src_id=src_id, dst_id=dst_id, kappa=kappa)]
+            self._new_segment_with_links(links, cat['T'])
             self._static_value[dst_name] = None
             self.op_log.append(f'{opcode} {dst_name} <- {src_name}  (unknown src, MOV fallback)')
             return
@@ -608,7 +662,7 @@ class Compiler:
         gate_name = self._anon_name(f'{opcode.lower()}_oracle')
         v_fn = make_cos_vext(k_target if k_target > 0 else 1e-06, amp)
         gate_id = self._allocate_gate(gate_name, opcode, v_fn)
-        self._new_segment_with_edges([], cat['T'])
+        self._new_segment_with_links([], cat['T'])
         sub_dst = self.runtime.substrates[dst_id]
         sub_dst.psi = encode_int(int(new_value), self.int_calib, self.cfg.L, self.cfg.N)
         sub_dst.y = np.zeros_like(sub_dst.y)
@@ -653,7 +707,7 @@ class Compiler:
                         return None
                     try:
                         v = decode_int(sub.psi, sub.dx, calib)
-                    except Exception:
+                    except (ValueError, IndexError):
                         return None
                     if v <= 0:
                         return set()
@@ -673,18 +727,18 @@ class Compiler:
             self._walk(blk.body)
             seg_after = len(self.runtime.segments)
             if seg_after > seg_before:
-                merged_edges = []
+                merged_links = []
                 for i in range(seg_before, seg_after):
-                    merged_edges.extend(self.runtime.segments[i].edges)
+                    merged_links.extend(self.runtime.segments[i].links)
                 self.runtime.segments[seg_before:seg_after] = []
                 start_t = self.runtime.segments[-1].t_end if self.runtime.segments else 0.0
                 self.runtime.global_t = start_t
-                merged = Segment(t_start=start_t, t_end=start_t + duration, edges=merged_edges, active_ids=None)
+                merged = Segment(t_start=start_t, t_end=start_t + duration, links=merged_links, active_ids=None)
                 self.runtime.add_segment(merged)
                 self.runtime.global_t = merged.t_end
-                self.op_log.append(f'SEGMENT t={duration} (merged {seg_after - seg_before} sub-segs, {len(merged_edges)} edges)')
+                self.op_log.append(f'SEGMENT t={duration} (merged {seg_after - seg_before} sub-segs, {len(merged_links)} links)')
             else:
-                self._new_segment_with_edges([], duration)
+                self._new_segment_with_links([], duration)
                 self.op_log.append(f'SEGMENT t={duration} (empty)')
         else:
             self.op_log.append(f'SEGMENT id={blk.segment_id} begin')
@@ -696,7 +750,7 @@ class Compiler:
         if name not in self.mm.slots:
             raise CompileError(f'evolve: unknown substrate {name!r}')
         sid = self.mm.get(name).substrate_id
-        seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + stmt.duration, edges=[], active_ids={sid})
+        seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + stmt.duration, links=[], active_ids={sid})
         self.runtime.add_segment(seg)
         self.runtime.global_t = seg.t_end
         self._seg_counter += 1
@@ -709,8 +763,8 @@ class Compiler:
             raise CompileError(f'couple dst {stmt.dst.name!r} not declared')
         src_id = self.mm.get(stmt.src.name).substrate_id
         dst_id = self.mm.get(stmt.dst.name).substrate_id
-        edges = [CouplingEdge(src_id=src_id, dst_id=dst_id, kappa=stmt.kappa)]
-        self._new_segment_with_edges(edges, stmt.duration)
+        links = [CouplingLink(src_id=src_id, dst_id=dst_id, kappa=stmt.kappa)]
+        self._new_segment_with_links(links, stmt.duration)
         self.op_log.append(f'couple {stmt.src.name} -> {stmt.dst.name} κ={stmt.kappa} for T={stmt.duration}')
 
     def _compile_pair(self, stmt: PairStmt):
@@ -720,8 +774,8 @@ class Compiler:
                 raise CompileError(f'pair: unknown substrate {n!r}')
         a_id = self.mm.get(a).substrate_id
         b_id = self.mm.get(b).substrate_id
-        edges = [CouplingEdge(src_id=a_id, dst_id=b_id, kappa=stmt.kappa), CouplingEdge(src_id=b_id, dst_id=a_id, kappa=stmt.kappa)]
-        self._new_segment_with_edges(edges, stmt.duration)
+        links = [CouplingLink(src_id=a_id, dst_id=b_id, kappa=stmt.kappa), CouplingLink(src_id=b_id, dst_id=a_id, kappa=stmt.kappa)]
+        self._new_segment_with_links(links, stmt.duration)
         self.op_log.append(f'pair({a}, {b}) κ={stmt.kappa} for T={stmt.duration}')
 
     def _compile_ring(self, stmt: RingStmt):
@@ -731,11 +785,11 @@ class Compiler:
                 raise CompileError(f'ring: unknown substrate {n!r}')
         ids = [self.mm.get(n).substrate_id for n in names]
         N = len(ids)
-        edges = []
+        links = []
         for i in range(N):
             j = (i + 1) % N
-            edges.append(CouplingEdge(src_id=ids[i], dst_id=ids[j], kappa=stmt.kappa))
-        self._new_segment_with_edges(edges, stmt.duration)
+            links.append(CouplingLink(src_id=ids[i], dst_id=ids[j], kappa=stmt.kappa))
+        self._new_segment_with_links(links, stmt.duration)
         self.op_log.append(f"ring({', '.join(names)}) κ={stmt.kappa} for T={stmt.duration}")
 
     def _compile_sequence(self, stmt: SequenceStmt):
@@ -746,9 +800,9 @@ class Compiler:
             if inp.name not in self.mm.slots:
                 raise CompileError(f'sequence input {inp.name!r} not declared')
             inp_id = self.mm.get(inp.name).substrate_id
-            edges = [CouplingEdge(src_id=inp_id, dst_id=tgt_id, kappa=-3.0)]
-            self._new_segment_with_edges(edges, stmt.each_for)
-        self.op_log.append(f"sequence {stmt.target.name} via ({', '.join((i.name for i in stmt.inputs))}) each_for={stmt.each_for}")
+            links = [CouplingLink(src_id=inp_id, dst_id=tgt_id, kappa=-3.0)]
+            self._new_segment_with_links(links, stmt.each_for)
+        self.op_log.append(f"sequence {stmt.target.name} via ({', '.join(i.name for i in stmt.inputs)}) each_for={stmt.each_for}")
 
     def _compile_observe(self, stmt: ObserveStmt):
         if stmt.target.name not in self.mm.slots:
@@ -786,21 +840,21 @@ class Compiler:
         kappa = float(stmt.properties.get('kappa', -2.0))
         kappa_up = float(stmt.properties.get('kappa_up', -1.0))
         duration = float(stmt.properties.get('duration', self.cfg.default_T))
-        edges = []
+        links = []
         N = len(member_ids)
         if topology == 'ring' and N >= 2:
             for i in range(N):
                 j = (i + 1) % N
-                edges.append(CouplingEdge(src_id=member_ids[i], dst_id=member_ids[j], kappa=kappa))
+                links.append(CouplingLink(src_id=member_ids[i], dst_id=member_ids[j], kappa=kappa))
         elif topology == 'pair' and N == 2:
-            edges.append(CouplingEdge(src_id=member_ids[0], dst_id=member_ids[1], kappa=kappa))
-            edges.append(CouplingEdge(src_id=member_ids[1], dst_id=member_ids[0], kappa=kappa))
+            links.append(CouplingLink(src_id=member_ids[0], dst_id=member_ids[1], kappa=kappa))
+            links.append(CouplingLink(src_id=member_ids[1], dst_id=member_ids[0], kappa=kappa))
         elif topology == 'none':
             pass
         else:
             raise CompileError(f'unknown coupling topology {topology!r}')
         for sub_id in member_ids:
-            edges.append(CouplingEdge(src_id=sub_id, dst_id=macro_id, kappa=kappa_up))
+            links.append(CouplingLink(src_id=sub_id, dst_id=macro_id, kappa=kappa_up))
         projection_name = stmt.properties.get('projection', 'none')
         from runtime.physics.projections import resolve_projector
         proj_fn = resolve_projector(projection_name)
@@ -816,7 +870,7 @@ class Compiler:
         macro_sub = self.runtime.substrates[macro_id]
         macro_sub.projector = bound
         macro_sub.projector_member_ids = list(member_ids)
-        self._new_segment_with_edges(edges, duration)
+        self._new_segment_with_links(links, duration)
         self.op_log.append(f"substrate {stmt.name} composed_of ({', '.join(member_names)})  topology={topology} kappa={kappa} kappa_up={kappa_up} for T={duration}")
 
     def _compile_if(self, blk: IfBlock):
@@ -843,7 +897,7 @@ class Compiler:
         end_then = len(self.runtime.segments)
         for seg_i in range(start_then, end_then):
             seg = self.runtime.segments[seg_i]
-            for e in seg.edges:
+            for e in seg.links:
                 e.kappa_modulator = make_modulator(invert=False)
         if blk.else_body is not None:
             self.op_log.append(f'IF cond={cond_name} -> else-branch (κ·(1-C))')
@@ -852,7 +906,7 @@ class Compiler:
             end_else = len(self.runtime.segments)
             for seg_i in range(start_else, end_else):
                 seg = self.runtime.segments[seg_i]
-                for e in seg.edges:
+                for e in seg.links:
                     e.kappa_modulator = make_modulator(invert=True)
 
     def _compile_out(self, stmt: OutStmt):
@@ -860,10 +914,13 @@ class Compiler:
             if not isinstance(arg, IdentRef):
                 raise CompileError('OUT arguments must be identifiers')
             self.output_names.append(arg.name)
-        self.op_log.append(f"OUT {','.join((arg.name for arg in stmt.args if isinstance(arg, IdentRef)))}")
+        self.op_log.append(f"OUT {','.join(arg.name for arg in stmt.args if isinstance(arg, IdentRef))}")
 
 def decode_outputs(prog: CompiledProgram) -> dict[str, object]:
-    from runtime.physics.observables import crystallinity as obs_C, dominant_wavenumber as obs_k_star, fwhm as obs_fwhm, stabilization_score
+    from runtime.physics.observables import crystallinity as obs_C
+    from runtime.physics.observables import dominant_wavenumber as obs_k_star
+    from runtime.physics.observables import fwhm as obs_fwhm
+    from runtime.physics.observables import stabilization_score
     out: dict[str, object] = {}
     for entry in prog.output_names:
         if isinstance(entry, str):
@@ -877,15 +934,11 @@ def decode_outputs(prog: CompiledProgram) -> dict[str, object]:
             else:
                 out[name] = decode_int(sub.psi, sub.dx, prog.int_calib)
         elif isinstance(entry, tuple) and entry[0] == 'OBSERVE':
-            if len(entry) == 4:
-                _, name, metrics, _seeds = entry
-                stream_to = ''
-            else:
-                _, name, metrics, _seeds, stream_to = entry
+            _, name, metrics, _seeds, stream_to = entry
             slot = prog.mm.get(name)
             sub = prog.runtime.substrates[slot.substrate_id]
             row = {}
-            import numpy as _np
+            from triad import ntri as _np
             L_box = sub.params.L
             k_min = 2.0 * _np.pi / L_box
             D = int(getattr(sub, 'D', 1))
@@ -898,7 +951,7 @@ def decode_outputs(prog: CompiledProgram) -> dict[str, object]:
                         psi_hat = _np.fft.fftn(sub.psi)
                         kvec = 2 * _np.pi * _np.fft.fftfreq(sub.params.N, d=sub.dx)
                         ks = _np.meshgrid(*[kvec] * D, indexing='ij')
-                        kmag = _np.sqrt(sum((k ** 2 for k in ks)))
+                        kmag = _np.sqrt(sum(k ** 2 for k in ks))
                         P = _np.abs(psi_hat) ** 2
                         mask = kmag >= k_min
                         row[m] = float(kmag[mask][_np.argmax(P[mask])])
@@ -914,7 +967,7 @@ def decode_outputs(prog: CompiledProgram) -> dict[str, object]:
                         P = _np.abs(psi_hat) ** 2
                         kvec = 2 * _np.pi * _np.fft.fftfreq(sub.params.N, d=sub.dx)
                         ks = _np.meshgrid(*[kvec] * D, indexing='ij')
-                        kmag = _np.sqrt(sum((k ** 2 for k in ks)))
+                        kmag = _np.sqrt(sum(k ** 2 for k in ks))
                         row[m] = float(P[kmag > 1.0].sum() / max(P.sum(), 1e-30))
                 elif m == 'peak':
                     row[m] = float((_np.abs(sub.psi) ** 2).max())
@@ -984,7 +1037,7 @@ def decode_outputs(prog: CompiledProgram) -> dict[str, object]:
                         from runtime.physics.observables_atoms import count_clusters as _cc
                         row[m] = int(_cc(sub.psi, sub.dx))
                     else:
-                        row[m] = int((sub.psi.real != sub.psi.real).sum())
+                        raise CompileError(f'cluster_count nao implementado para D={D}; contagem de clusters requer grade 1D')
                 elif m == 'cluster_centroids':
                     if D == 1:
                         from runtime.physics.observables_atoms import cluster_centroids as _cen
@@ -1063,9 +1116,7 @@ def decode_outputs(prog: CompiledProgram) -> dict[str, object]:
                     else:
                         row[m] = float('nan')
                 elif m == 'slow_state_late_mean':
-                    if m in row:
-                        pass
-                    elif sub.macro_slow_state_t:
+                    if sub.macro_slow_state_t:
                         row[m] = float(_np.mean(sub.macro_slow_state_t[-max(1, len(sub.macro_slow_state_t) // 4):]))
                     else:
                         row[m] = float('nan')
@@ -1117,7 +1168,7 @@ def decode_outputs(prog: CompiledProgram) -> dict[str, object]:
                         w.writerow(row_vals)
                 row['_streamed_to'] = stream_to
         elif isinstance(entry, tuple) and entry[0] == 'CHECKPOINT':
-            import numpy as _np
+            from triad import ntri as _np
             _, name, path = entry
             slot = prog.mm.get(name)
             sub = prog.runtime.substrates[slot.substrate_id]
@@ -1128,7 +1179,7 @@ def decode_outputs(prog: CompiledProgram) -> dict[str, object]:
             _, name, predicate = entry
             slot = prog.mm.get(name)
             sub = prog.runtime.substrates[slot.substrate_id]
-            import numpy as _np
+            from triad import ntri as _np
             if predicate == 'persistent':
                 norm = float((_np.abs(sub.psi) ** 2).sum() * sub.dx)
                 ok = _np.isfinite(norm) and norm > 1e-06
@@ -1137,7 +1188,7 @@ def decode_outputs(prog: CompiledProgram) -> dict[str, object]:
                 ok = atom_count_nd(sub.psi, sub.dx) >= 1
             elif predicate == 'structurally_open':
                 ok = sub.Gamma_e > 0 and sub.f_FDT_e > 0 and _np.isfinite((_np.abs(sub.psi) ** 2).sum())
-            elif predicate == 'non_trivial_memory':
+            elif predicate == 'mem_memory':
                 if len(sub.lam_arr) > 0 and sub.y.size > 0:
                     ok = float((sub.y ** 2).sum() * sub.dx) > 1e-06
                 else:

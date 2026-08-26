@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triadlang"
+version = "1.0.0"
+description = "TriadLang — a language where computation is physics. numpy is wrapped as triad.ntri."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "LicenseRef-TriadLang-Proprietary"
+license-files = ["LICENSE"]
+authors = [
+    { name = "qrv0" }
+]
+keywords = [
+    "triadlang",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Software Development :: Interpreters",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+science = ["scipy>=1.10"]
+viz = ["matplotlib>=3.7"]
+gpu = ["cupy-cuda13x"]
+gpu-metal = ["mlx>=0.25"]
+gpu-ane = ["coremltools>=8.0"]
+quantum = ["qiskit>=1.0", "qiskit-aer>=0.14", "cirq>=1.3"]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
+llm = ["huggingface_hub>=0.20", "safetensors>=0.4", "transformers>=4.40", "gguf>=0.10", "torch>=2.0", "sentencepiece>=0.1.99", "tiktoken>=0.5"]
+web = ["flask>=3.0"]
+all = ["scipy>=1.10", "matplotlib>=3.7", "cupy-cuda13x", "mlx>=0.25", "coremltools>=8.0", "qiskit>=1.0", "qiskit-aer>=0.14", "cirq>=1.3", "fastapi>=0.110", "uvicorn[standard]>=0.27", "flask>=3.0"]
+tui = ["textual>=0.47.0", "rich>=13.0.0", "pygments>=2.15.0"]
+dev = ["pytest", "ruff", "black", "pytest-cov", "mypy", "safety"]
+
+[project.scripts]
+triad = "cli.main:main"
+triadc = "cli.main:main"
+triad-entry = "entry:main_entry"
+
+[project.urls]
+Homepage = "https://www.triadlang.com"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cli*", "runtime*", "compiler*", "frontend*", "stdlib*", "api*", "embed*", "adapters*", "triad*"]
+
+[tool.setuptools.package-data]
+api = ["*.html"]
+"stdlib.triad" = ["*.tri"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.16",
+]

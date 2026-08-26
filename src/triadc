@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
-"""
-triadc — TriadLang v2.0 compiler + runner.
-
-Usage:
-    triadc <file.tri>                     # compile and run
-    triadc --ast <file.tri>               # parse only, dump AST
-    triadc --tokens <file.tri>            # tokens only
-    triadc --plan <file.tri>              # compile + dump op log + segment plan
-    triadc --verbose <file.tri>           # run with diagnostics
-    triadc --trace <file.tri>             # print per-segment summary
-    triadc --seeds N <file.tri>           # ensemble: N runs, mean ± std per OUT
-"""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
-from frontend.lexer import tokenize, LexError
-from frontend.parser import parse, ParseError
+from frontend.lexer_universal import tokenize, LexError
+from frontend.parser_universal import parse, ParseError
 from compiler.triadc import Compiler, CompileConfig, CompileError, decode_outputs
-from runtime.observables import dominant_wavenumber
+from runtime.physics.observables import dominant_wavenumber
 
 
 def _trace_callback(compiled):
@@ -87,7 +75,7 @@ def _parse_args(argv):
 
 
 def _auto_plot(compiled, source_path: str):
-    """U1 — save trajectory + density figures from a finished run."""
+
     import os
     try:
         import matplotlib
@@ -102,8 +90,7 @@ def _auto_plot(compiled, source_path: str):
     n_subs = len(compiled.runtime.substrates)
     rows = (n_subs + 1) // 2
     fig, axes = plt.subplots(rows, 2, figsize=(11, 3.2 * rows))
-    # ncols is always 2, so subplots returns a (2,) array when rows==1
-    # (including the single-substrate case) and a (rows,2) array otherwise.
+
     if rows == 1:
         axes = [axes]
     for i, (sid, sub) in enumerate(compiled.runtime.substrates.items()):
@@ -119,7 +106,7 @@ def _auto_plot(compiled, source_path: str):
             ax.set_xlabel("t"); ax.set_ylabel("x")
             ax.set_title(f"{sub.name} : |ψ(x,t)|²")
         else:
-            # ND: plot norm trajectory
+
             norm_t = sub.density_traj.sum(axis=tuple(range(sub.D))) * sub.dx**sub.D
             ax.plot(sub.t_traj, norm_t)
             ax.set_xlabel("t"); ax.set_ylabel("‖ψ‖²")
@@ -131,7 +118,7 @@ def _auto_plot(compiled, source_path: str):
     fig.savefig(out_path, dpi=110)
     plt.close(fig)
     print(f"saved plot: {out_path}")
-    # U2 — multi-scale plot for any composed_of macros
+
     try:
         from runtime.viz import multi_scale_plot
         ms = multi_scale_plot(compiled, source_path)
@@ -171,12 +158,12 @@ def main(argv):
                 print(" ", line)
             print(f"\n=== Segments: {len(compiled.runtime.segments)} ===")
             for i, seg in enumerate(compiled.runtime.segments):
-                edges_str = ", ".join(
+                links_str = ", ".join(
                     f"({e.src_id}->{e.dst_id} κ={e.kappa:.2f})"
-                    for e in seg.edges
+                    for e in seg.links
                 )
                 print(f"  seg {i}  t=[{seg.t_start:.2f}, {seg.t_end:.2f}]  "
-                      f"edges=[{edges_str}]")
+                      f"links=[{links_str}]")
             print(f"\n=== Substrates: {len(compiled.runtime.substrates)} ===")
             for sid, sub in compiled.runtime.substrates.items():
                 print(f"  sub {sid}  name={sub.name}")
@@ -187,13 +174,11 @@ def main(argv):
         attach_trace = (mode == "trace")
         do_plot = (mode == "plot")
 
-        # L5 — detect per-output ensemble requests (over_seeds > 1) and
-        # re-run the program for those.  We honour them in addition to a
-        # --seeds CLI flag.
+
         per_output_seeds = []
         for entry in compiled.output_names:
             if isinstance(entry, tuple) and entry[0] == "OBSERVE":
-                # entry: ("OBSERVE", name, metrics, over_seeds[, stream_to])
+
                 ns = entry[3]
                 if ns > 1:
                     per_output_seeds.append(ns)
@@ -219,12 +204,11 @@ def main(argv):
                 _auto_plot(compiled, path)
             return 0
 
-        # If any OBSERVE asked for over_seeds > 1, run that many times
-        # even without a --seeds CLI flag.
+
         if seeds <= 1 and max_per_out_seeds > 1:
             seeds = max_per_out_seeds
 
-        # --seeds N : ensemble (also triggered by OBSERVE over_seeds=N)
+
         outs = {}
         diverge_count = 0
         for s in range(seeds):
@@ -242,9 +226,9 @@ def main(argv):
         if diverge_count:
             print(f"!! {diverge_count}/{seeds} runs diverged", file=sys.stderr)
         for name, vals in outs.items():
-            # value may be: scalar (legacy OUT), dict (OBSERVE), or bool (assert)
+
             if isinstance(vals[0], dict):
-                # Per-metric aggregate
+
                 agg = {}
                 for metric in vals[0]:
                     metric_vals = [v[metric] for v in vals

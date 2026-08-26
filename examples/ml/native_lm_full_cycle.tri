@@ -1,0 +1,61 @@
+import triad.tensor as T;
+import triad.net as net;
+import triad.nn as nn;
+import triad.checkpoint as ckpt;
+import triad.ntri as np;
+
+let text = "the field oscillates, the field remembers, the field couples. ";
+let corpus = "";
+for i in range(40) { corpus = corpus + text; }
+
+let chars = sorted(set(corpus));
+let vocab = len(chars);
+let stoi = {};
+let itos = {};
+for i in range(vocab) {
+    stoi[chars[i]] = i;
+    itos[i] = chars[i];
+}
+let data = [stoi[c] for c in corpus];
+print(f"corpus: {len(data)} tokens, vocab={vocab}");
+
+let model = net.TransformerLM(vocab, d_model=64, n_layers=2, n_heads=4);
+let opt = nn.Adam(model.parameters(), lr=0.003);
+
+let SEQ = 32;
+let BATCH = 8;
+let rng = np.random.default_rng(0);
+
+let loss_initial = 0.0;
+let loss_final = 0.0;
+for step in range(200) {
+    let starts = rng.integers(0, len(data) - SEQ - 1, BATCH);
+    let xb = np.stack([np.array(data[int(s):int(s)+SEQ]) for s in starts]);
+    let yb = np.stack([np.array(data[int(s)+1:int(s)+SEQ+1]) for s in starts]);
+    let logits = model(T.tensor(xb));
+    let loss = T.cross_entropy(logits, T.tensor(yb));
+    if step == 0 { loss_initial = float(loss.data); }
+    loss_final = float(loss.data);
+    opt.zero_grad();
+    loss.backward();
+    opt.step();
+}
+print(f"training: loss {loss_initial:.3f} -> {loss_final:.3f}");
+
+ckpt.save_module(model, "experiments/native_lm.safetensors");
+model.head.weight.data = model.head.weight.data * 0.0;
+ckpt.load_module(model, "experiments/native_lm.safetensors");
+print("checkpoint: saved and reloaded");
+
+let prompt = "the field ";
+let ids = [stoi[c] for c in prompt];
+for i in range(60) {
+    let ctx = np.array([ids[-SEQ:]]);
+    let logits = model(T.tensor(ctx));
+    let last = T.asnumpy(logits.data)[0][-1];
+    let nxt = int(np.argmax(last));
+    ids.push(nxt);
+}
+let output = "";
+for i in ids { output = output + itos[int(i)]; }
+print("generation: " + output);

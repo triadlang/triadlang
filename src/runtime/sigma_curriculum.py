@@ -1,31 +1,15 @@
-"""Phase B1: Fractional-exponent sigma curriculum and pattern observables.
-
-Treats the fractional exponent sigma in alpha*(-Delta)^(sigma/2) (P1)
-as a curriculum variable. Begin chaotic (small sigma, broad dispersion)
-and let sigma self-adjust via the A1 curvature-aware calibrator.
-
-Adds Turing/Gierer-Meinhardt pattern observables:
-- Turing wavelength: dominant spatial period of pattern
-- Pattern entropy: Shannon entropy of normalized power spectrum
-
-All three pillars active throughout. Sigma change is internal to P1.
-"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Callable, Dict, List, Optional
 
-import numpy as np
-
-from runtime.core.solver import integrate, TriadParams
+from runtime.core.solver import TriadParams, integrate
 from runtime.physics.observables import crystallinity, dominant_wavenumber
+from triad import ntri as np
+
 
 def turing_wavelength(psi: np.ndarray, dx: float) -> float:
-    """Compute the Turing wavelength (dominant spatial period) of the field.
 
-    This is 2*pi / k_star where k_star is the dominant wavenumber.
-    """
     rho = np.abs(psi) ** 2
     rho_hat = np.fft.rfft(rho)
     power = np.abs(rho_hat) ** 2
@@ -41,11 +25,7 @@ def turing_wavelength(psi: np.ndarray, dx: float) -> float:
     return 2.0 * np.pi / k_star
 
 def pattern_entropy(psi: np.ndarray, dx: float) -> float:
-    """Shannon entropy of the normalized power spectrum.
 
-    High entropy = flat spectrum (chaotic).
-    Low entropy = concentrated spectrum (crystallized pattern).
-    """
     rho = np.abs(psi) ** 2
     rho_hat = np.fft.rfft(rho)
     power = np.abs(rho_hat) ** 2
@@ -54,12 +34,12 @@ def pattern_entropy(psi: np.ndarray, dx: float) -> float:
     if total < 1e-20:
         return 0.0
     prob = power / total
-    
+
     prob = prob[prob > 1e-20]
     return float(-np.sum(prob * np.log(prob)))
 
-def pattern_metrics(psi: np.ndarray, dx: float) -> Dict[str, float]:
-    """Compute all pattern observables."""
+def pattern_metrics(psi: np.ndarray, dx: float) -> dict[str, float]:
+
     return {
         "turing_wavelength": turing_wavelength(psi, dx),
         "pattern_entropy": pattern_entropy(psi, dx),
@@ -67,57 +47,36 @@ def pattern_metrics(psi: np.ndarray, dx: float) -> Dict[str, float]:
 
 @dataclass
 class SigmaSchedule:
-    """Curriculum schedule for the fractional exponent sigma.
 
-    Parameters
-    ----------
-    sigma_start : float
-        Initial sigma (small = broad dispersion, chaotic).
-    sigma_end : float
-        Target sigma (larger = sharper, more structured).
-    mode : str
-        'linear': linearly interpolate sigma each step.
-        'emergent': adjust sigma based on crystallinity feedback.
-    n_steps : int
-        Number of curriculum steps.
-    crystallinity_target : float
-        For 'emergent' mode: target crystallinity before increasing sigma.
-    """
     sigma_start: float = 0.5
     sigma_end: float = 2.0
-    mode: str = "linear"
+    mode: str = "triad"
     n_steps: int = 10
     crystallinity_target: float = 0.5
 
     def sigma_at_step(self, step: int) -> float:
-        """Get sigma for a given curriculum step."""
-        if self.mode == "linear":
+
+        if self.mode == "triad":
             frac = step / max(self.n_steps - 1, 1)
             return self.sigma_start + frac * (self.sigma_end - self.sigma_start)
         else:
-            
+
             return self.sigma_start
 
 @dataclass
 class CurriculumResult:
-    """Result of a curriculum run."""
+
     converged: bool
     n_steps: int
-    history: List[Dict]
+    history: list[dict]
     final_params: TriadParams
-    final_observables: Dict[str, float]
+    final_observables: dict[str, float]
 
 def run_curriculum(params: TriadParams,
                    schedule: SigmaSchedule = None,
                    T_per_step: float = 3.0,
                    verbose: bool = False) -> CurriculumResult:
-    """Run sigma-curriculum integration.
 
-    Starts with sigma_start (chaotic), gradually increases to sigma_end
-    (structured). Each step integrates the PDE and measures observables.
-
-    All three pillars active at every step.
-    """
     if schedule is None:
         schedule = SigmaSchedule()
 
@@ -152,7 +111,7 @@ def run_curriculum(params: TriadParams,
 
         if schedule.mode == "emergent":
             if obs["crystallinity"] >= schedule.crystallinity_target:
-                
+
                 schedule.sigma_start = sigma
                 if sigma >= schedule.sigma_end:
                     converged = True

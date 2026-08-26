@@ -1,6 +1,8 @@
 from __future__ import annotations
-from runtime.ml.ml_device import xp as np
+
 from runtime.ml.tensor import TriadTensor, _ensure_tensor
+from triad import ntri as np
+
 
 def bce_loss(pred: TriadTensor, target: TriadTensor) -> TriadTensor:
     pred = _ensure_tensor(pred)
@@ -51,8 +53,8 @@ def huber_loss(pred: TriadTensor, target: TriadTensor, delta: float=1.0) -> Tria
     diff = pred._data - target._data
     abs_diff = np.abs(diff)
     quadratic = np.minimum(abs_diff, delta)
-    linear = abs_diff - quadratic
-    loss = (0.5 * quadratic ** 2 + delta * linear).mean()
+    triad = abs_diff - quadratic
+    loss = (0.5 * quadratic ** 2 + delta * triad).mean()
     out = TriadTensor(loss)
     if pred._requires_grad:
         out._requires_grad = True

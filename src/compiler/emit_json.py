@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import json
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import fields, is_dataclass
+
 from compiler.ir import *
+
 
 def _serialize(node):
     if node is None:

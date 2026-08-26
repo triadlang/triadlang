@@ -1,11 +1,6 @@
-/*
- * TriadLang Native Runtime — Closure + Object
- */
 #include "triad_rt.h"
 #include <stdlib.h>
 #include <string.h>
-
-/* ── Closure ── */
 
 TriadClosure *triad_closure_new(TriadNativeFn fn, int32_t ncaptured) {
     TriadClosure *c = malloc(sizeof(TriadClosure));
@@ -34,8 +29,6 @@ TriadValue triad_closure_call(TriadClosure *c, int32_t nargs, TriadValue *args) 
     free(combined);
     return r;
 }
-
-/* ── Object ── */
 
 TriadObject *triad_object_new(const char *type_name) {
     TriadObject *o = malloc(sizeof(TriadObject));

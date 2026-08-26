@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Optional
-import numpy as np
+
+from triad import ntri as np
+
 OPCODES = {'FWD': 1, 'INV': 2, 'NLF': 3, 'POT': 4, 'MEM': 5, 'CPL': 6, 'DSP': 7, 'NOI': 8, 'HALT': 255}
 
 @dataclass
@@ -23,8 +25,9 @@ class VMState:
     nu: np.ndarray = field(default_factory=lambda: np.array([2.0, 0.5, 0.1]))
     lam: np.ndarray = field(default_factory=lambda: np.array([-0.3, -0.2, -0.1]))
     kappa: float = -3.0
-    coupled_rho: Optional[np.ndarray] = None
-    rng: Optional[np.random.Generator] = None
+    coupled_rho: np.ndarray | None = None
+    rng: np.random.Generator | None = None
+    id: int = 0
 
 class TriadVM:
 
@@ -40,10 +43,10 @@ class TriadVM:
         self._ip = 0
 
     def load_strang_step(self) -> list[Instruction]:
-        
-        return [Instruction('FWD'), Instruction('NLF', (0.5,)), Instruction('INV'), Instruction('DSP', (0.5,)), Instruction('POT'), Instruction('MEM'), Instruction('CPL'), Instruction('NOI'), Instruction('FWD'), Instruction('NLF', (0.5,)), Instruction('INV'), Instruction('DSP', (0.5,))]
 
-    def load_full_run(self, n_steps: int) -> list[Instruction]:
+        return [Instruction('FWD'), Instruction('NLF', (0.5,)), Instruction('INV'), Instruction('DSP', (0.5,)), Instruction('MEM', (0.5,)), Instruction('POT'), Instruction('MEM', (0.5,)), Instruction('CPL'), Instruction('NOI'), Instruction('FWD'), Instruction('NLF', (0.5,)), Instruction('INV'), Instruction('DSP', (0.5,))]
+
+    def load_triad_run(self, n_steps: int) -> list[Instruction]:
         prog = []
         for _ in range(n_steps):
             prog.extend(self.load_strang_step())
@@ -51,7 +54,7 @@ class TriadVM:
         return prog
 
     def execute(self, n_steps: int=1) -> VMState:
-        prog = self.load_full_run(n_steps)
+        prog = self.load_triad_run(n_steps)
         self.load(prog)
         return self.run()
 
@@ -77,18 +80,23 @@ class TriadVM:
         elif op == 'POT':
             rho = np.abs(s.psi) ** 2
             M = len(s.nu)
-            V_mem = (s.lam[:, None] * s.y).sum(axis=0) if M > 0 else 0.0
-            V_couple = s.kappa * s.coupled_rho if s.coupled_rho is not None else 0.0
-            V_tot = s.V_ext + s.Lambda * rho + V_mem + V_couple
+            if M < 3:
+                raise ValueError(f'triad rule: VM substrate needs at least 3 memory scales, got {M}')
+            V_mem = (s.lam[:, None] * s.y).sum(axis=0)
+            V_tot = s.V_ext + s.Lambda * rho + V_mem
             s.psi = s.psi * np.exp(-1j * V_tot * s.dt / s.hbar)
         elif op == 'MEM':
             rho = np.abs(s.psi) ** 2
+            frac = instr.args[0] if instr.args else 1.0
             M = len(s.nu)
-            if M > 0:
-                decay = np.exp(-s.nu * s.dt)
-                s.y = decay[:, None] * s.y + (1 - decay[:, None]) * rho
+            if M < 3:
+                raise ValueError(f'triad rule: VM substrate needs at least 3 memory scales, got {M}')
+            decay = np.exp(-s.nu * s.dt * frac)
+            s.y = decay[:, None] * s.y + (1 - decay[:, None]) * rho
         elif op == 'CPL':
-            pass
+            if s.coupled_rho is not None:
+                rho = np.abs(s.psi) ** 2
+                s.psi = s.psi * np.exp(-1j * s.kappa * s.coupled_rho * s.dt / s.hbar)
         elif op == 'DSP':
             frac = instr.args[0] if instr.args else 1.0
             s.psi = s.psi * np.exp(-s.Gamma * s.dt * frac / s.hbar)
@@ -97,26 +105,36 @@ class TriadVM:
                 xi = s.rng.standard_normal(len(s.psi))
                 xip = s.rng.standard_normal(len(s.psi))
                 s.psi = s.psi + s.noise_amp * (xi + 1j * xip) / np.sqrt(2.0)
+        else:
+            raise ValueError(f'unknown VM opcode: {op}')
         if verbose:
             norm = float(np.sum(np.abs(s.psi) ** 2))
             print(f'  [{self._ip:>4}] {op:4s} |ψ|²={norm:.4f}')
 
 def create_vm_state(N: int=128, L: float=32.0, Lambda: float=-0.5, Gamma: float=0.05, f_FDT: float=0.002, dt: float=0.005, seed: int=0, **kwargs) -> TriadVM:
+    nu = np.array(kwargs.get('nu', (2.0, 0.5, 0.1)))
+    lam = np.array(kwargs.get('lam', (-0.3, -0.2, -0.1)))
+    if len(nu) < 3 or len(lam) < 3:
+        raise ValueError(f'triad rule: VM nu/lam must have at least 3 scales, got {len(nu)}/{len(lam)}')
+    if Gamma <= 0:
+        raise ValueError(f'triad rule: P3 bath requires Gamma > 0, got {Gamma}')
+    if f_FDT <= 0:
+        raise ValueError(f'triad rule: P3 bath requires f_FDT > 0, got {f_FDT}')
     rng = np.random.default_rng(seed)
     x = np.linspace(-L / 2, L / 2, N, endpoint=False)
     dx = x[1] - x[0]
     k = 2 * np.pi * np.fft.fftfreq(N, d=dx)
     psi = np.exp(-x ** 2 / 8.0).astype(np.complex128)
     psi /= np.sqrt(np.sum(np.abs(psi) ** 2) * dx)
-    nu = np.array(kwargs.get('nu', (2.0, 0.5, 0.1)))
-    lam = np.array(kwargs.get('lam', (-0.3, -0.2, -0.1)))
+    if len(nu) != len(lam):
+        raise ValueError(f'triad rule: VM nu/lam must match, got {len(nu)}/{len(lam)}')
     M = len(nu)
     alpha = kwargs.get('alpha', 0.15)
     sigma = kwargs.get('sigma', 1.5)
     hbar = 1.0
     H_lin = hbar ** 2 * k ** 2 / 2.0 + alpha * np.abs(k) ** sigma
-    
-    half_lin = np.exp(-1j * H_lin * dt / (2 * hbar))
+
+    half_lin = np.exp(-1j * H_lin * dt / hbar)
     V_ext = 0.5 * 1.0 * 0.05 ** 2 * x ** 2
     noise_amp = np.sqrt(f_FDT * dt / dx) if f_FDT > 0 else 0.0
     state = VMState(psi=psi, y=np.zeros((M, N)), V_ext=V_ext, half_lin=half_lin, noise_amp=noise_amp, Gamma=Gamma, Lambda=Lambda, dt=dt, hbar=hbar, nu=nu, lam=lam, rng=rng)

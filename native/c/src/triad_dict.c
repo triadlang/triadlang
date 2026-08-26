@@ -1,6 +1,3 @@
-/*
- * TriadLang Native Runtime — Dict (open-addressing hash map)
- */
 #include "triad_rt.h"
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +15,7 @@ TriadDict *triad_dict_new(void) {
     d->len = 0;
     d->cap = 16;
     d->tombstones = 0;
+    d->next_seq = 0;
     d->entries = calloc(d->cap, sizeof(TriadDictEntry));
     return d;
 }
@@ -61,7 +59,10 @@ static void dict_grow(TriadDict *d) {
     d->tombstones = 0;
     for (int32_t i = 0; i < oldcap; i++) {
         if (old[i].key && !is_tombstone(old[i].key)) {
-            triad_dict_set(d, old[i].key, old[i].value);
+            bool found;
+            int32_t pos = dict_probe(d, old[i].key, old[i].hash, &found);
+            d->entries[pos] = old[i];
+            d->len++;
         }
     }
     free(old);
@@ -98,6 +99,7 @@ void triad_dict_set(TriadDict *d, TriadString *key, TriadValue val) {
         d->entries[pos].key = key;
         d->entries[pos].hash = hash;
         d->entries[pos].value = val;
+        d->entries[pos].seq = d->next_seq++;
         triad_retain(&d->entries[pos].value);
         d->len++;
     }
@@ -128,36 +130,57 @@ int32_t triad_dict_len(TriadDict *d) {
     return d ? d->len : 0;
 }
 
+static int dict_seq_cmp(const void *a, const void *b) {
+    const TriadDictEntry *ea = *(const TriadDictEntry *const *)a;
+    const TriadDictEntry *eb = *(const TriadDictEntry *const *)b;
+    return (ea->seq > eb->seq) - (ea->seq < eb->seq);
+}
+
+static TriadDictEntry **dict_ordered(TriadDict *d, int32_t *n_out) {
+    int32_t n = 0;
+    TriadDictEntry **ord = malloc(sizeof(TriadDictEntry *) * (size_t)(d->len > 0 ? d->len : 1));
+    for (int32_t i = 0; i < d->cap; i++) {
+        if (d->entries[i].key && !is_tombstone(d->entries[i].key))
+            ord[n++] = &d->entries[i];
+    }
+    qsort(ord, (size_t)n, sizeof(TriadDictEntry *), dict_seq_cmp);
+    *n_out = n;
+    return ord;
+}
+
 TriadList *triad_dict_keys(TriadDict *d) {
     TriadList *l = triad_list_new();
     if (!d) return l;
-    for (int32_t i = 0; i < d->cap; i++) {
-        if (d->entries[i].key && !is_tombstone(d->entries[i].key))
-            triad_list_push(l, (TriadValue){.tag = TRIAD_STRING, .as = {.sval = d->entries[i].key}});
-    }
+    int32_t n;
+    TriadDictEntry **ord = dict_ordered(d, &n);
+    for (int32_t i = 0; i < n; i++)
+        triad_list_push(l, (TriadValue){.tag = TRIAD_STRING, .as = {.sval = ord[i]->key}});
+    free(ord);
     return l;
 }
 
 TriadList *triad_dict_values(TriadDict *d) {
     TriadList *l = triad_list_new();
     if (!d) return l;
-    for (int32_t i = 0; i < d->cap; i++) {
-        if (d->entries[i].key && !is_tombstone(d->entries[i].key))
-            triad_list_push(l, d->entries[i].value);
-    }
+    int32_t n;
+    TriadDictEntry **ord = dict_ordered(d, &n);
+    for (int32_t i = 0; i < n; i++)
+        triad_list_push(l, ord[i]->value);
+    free(ord);
     return l;
 }
 
 TriadList *triad_dict_items(TriadDict *d) {
     TriadList *l = triad_list_new();
     if (!d) return l;
-    for (int32_t i = 0; i < d->cap; i++) {
-        if (d->entries[i].key && !is_tombstone(d->entries[i].key)) {
-            TriadList *pair = triad_list_new();
-            triad_list_push(pair, (TriadValue){.tag = TRIAD_STRING, .as = {.sval = d->entries[i].key}});
-            triad_list_push(pair, d->entries[i].value);
-            triad_list_push(l, (TriadValue){.tag = TRIAD_LIST, .as = {.lval = pair}});
-        }
+    int32_t n;
+    TriadDictEntry **ord = dict_ordered(d, &n);
+    for (int32_t i = 0; i < n; i++) {
+        TriadList *pair = triad_list_new();
+        triad_list_push(pair, (TriadValue){.tag = TRIAD_STRING, .as = {.sval = ord[i]->key}});
+        triad_list_push(pair, ord[i]->value);
+        triad_list_push(l, (TriadValue){.tag = TRIAD_LIST, .as = {.lval = pair}});
     }
+    free(ord);
     return l;
 }

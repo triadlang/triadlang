@@ -1,20 +1,24 @@
 from __future__ import annotations
-import numpy as np
+
+from collections.abc import Callable
+
 from runtime.core.solver import TriadParams
+from triad import ntri as np
+
 DEFAULT_L = 32.0
 DEFAULT_N = 128
 DEFAULT_DT = 0.005
 
 def register_params(seed: int=0, L: float=DEFAULT_L, N: int=DEFAULT_N, dt: float=DEFAULT_DT, bit_width: int=1) -> TriadParams:
-    return TriadParams(L=L, N=N, dt=dt, T=1.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.05, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=(2.0, 0.5, 0.1), lam=(-0.3, -0.2, -0.1), mode='full', seed=seed, record_every=4)
+    return TriadParams(L=L, N=N, dt=dt, T=1.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.05, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=(2.0, 0.5, 0.1), lam=(-0.3, -0.2, -0.1), mode='triad', seed=seed, record_every=4)
 
 def gate_params(seed: int=0, L: float=DEFAULT_L, N: int=DEFAULT_N, dt: float=DEFAULT_DT) -> TriadParams:
-    return TriadParams(L=L, N=N, dt=dt, T=1.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-2.0, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=(5.0, 0.5, 0.1), lam=(-0.4, -0.2, -0.1), mode='full', seed=seed, record_every=4)
+    return TriadParams(L=L, N=N, dt=dt, T=1.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-2.0, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=(5.0, 0.5, 0.1), lam=(-0.4, -0.2, -0.1), mode='triad', seed=seed, record_every=4)
 
 def memory_cell_params(seed: int=0, L: float=DEFAULT_L, N: int=DEFAULT_N, dt: float=DEFAULT_DT) -> TriadParams:
-    return TriadParams(L=L, N=N, dt=dt, T=1.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.03, Lambda=-0.3, alpha=0.15, sigma=1.5, Gamma=0.01, f_FDT=0.0004, nu=(0.5, 0.05, 0.005), lam=(-0.3, -0.5, -0.8), mode='full', seed=seed, record_every=4)
+    return TriadParams(L=L, N=N, dt=dt, T=1.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.03, Lambda=-0.3, alpha=0.15, sigma=1.5, Gamma=0.01, f_FDT=0.0004, nu=(0.5, 0.05, 0.005), lam=(-0.3, -0.5, -0.8), mode='triad', seed=seed, record_every=4)
 
-def vext_add_gate(L: float, N: int, *, delta_a: float=-3.0, delta_b: float=+3.0, bump_w: float=1.5, bump_amp: float=-1.0, omega: float=0.05) -> callable:
+def vext_add_gate(L: float, N: int, *, delta_a: float=-3.0, delta_b: float=+3.0, bump_w: float=1.5, bump_amp: float=-1.0, omega: float=0.05) -> Callable:
 
     def f(x):
         V_harm = 0.5 * omega ** 2 * x ** 2
@@ -23,7 +27,7 @@ def vext_add_gate(L: float, N: int, *, delta_a: float=-3.0, delta_b: float=+3.0,
         return V_harm + bump_a + bump_b
     return f
 
-def vext_sub_gate(L: float, N: int, *, delta_a: float=-3.0, delta_b: float=+3.0, bump_w: float=1.5, bump_amp_pos: float=-1.0, bump_amp_neg: float=+1.0, omega: float=0.05) -> callable:
+def vext_sub_gate(L: float, N: int, *, delta_a: float=-3.0, delta_b: float=+3.0, bump_w: float=1.5, bump_amp_pos: float=-1.0, bump_amp_neg: float=+1.0, omega: float=0.05) -> Callable:
 
     def f(x):
         V_harm = 0.5 * omega ** 2 * x ** 2
@@ -32,7 +36,7 @@ def vext_sub_gate(L: float, N: int, *, delta_a: float=-3.0, delta_b: float=+3.0,
         return V_harm + bump_a + bump_b
     return f
 
-def vext_double_well(L: float, N: int, *, well_sep: float=6.0, barrier_h: float=2.0, well_w: float=1.5) -> callable:
+def vext_double_well(L: float, N: int, *, well_sep: float=6.0, barrier_h: float=2.0, well_w: float=1.5) -> Callable:
 
     def f(x):
         well_a = -np.exp(-(x + well_sep / 2) ** 2 / (2 * well_w ** 2))
@@ -41,19 +45,19 @@ def vext_double_well(L: float, N: int, *, well_sep: float=6.0, barrier_h: float=
         return well_a + well_b + barrier
     return f
 
-def vext_single_wide_well(L: float, N: int, *, well_w: float=4.0) -> callable:
+def vext_single_wide_well(L: float, N: int, *, well_w: float=4.0) -> Callable:
 
     def f(x):
         return -np.exp(-x ** 2 / (2 * well_w ** 2))
     return f
 
-def vext_ramp(L: float, N: int, *, beta: float=0.05, omega: float=0.05) -> callable:
+def vext_ramp(L: float, N: int, *, beta: float=0.05, omega: float=0.05) -> Callable:
 
     def f(x):
         return 0.5 * omega ** 2 * x ** 2 + beta * x
     return f
 
-def vext_zero(L: float, N: int) -> callable:
+def vext_zero(L: float, N: int) -> Callable:
 
     def f(x):
         return np.zeros_like(x)

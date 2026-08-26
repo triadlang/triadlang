@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from adapters.base import BaseAdapter
+
 
 class HeadlessAdapter(BaseAdapter):
 

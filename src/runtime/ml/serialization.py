@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import json
-import numpy as np
 from pathlib import Path
-from runtime.ml.nn import Module, Parameter
+
+from runtime.ml.nn import Module
+from triad import ntri as np
+
 
 def _serialize_param(data: np.ndarray) -> dict:
     return {'shape': list(data.shape), 'dtype': str(data.dtype), 'data': data.tolist()}
@@ -11,6 +14,7 @@ def _deserialize_param(d: dict) -> np.ndarray:
     return np.array(d['data'], dtype=np.float64).reshape(d['shape'])
 
 def save_weights(model: Module, path: str):
+    Path(path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
     params = model.parameters()
     state = {}
     for i, p in enumerate(params):

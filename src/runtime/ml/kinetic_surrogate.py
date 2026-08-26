@@ -1,31 +1,15 @@
-"""Phase A3: Surrogate-accelerated P1 (kinetic spectral propagator) with UQ.
 
-The surrogate replaces ONLY the P1 spectral propagator (FFT * half_lin),
-which is the most expensive part of the split-step.  P2 (memory/V_mem) and
-P3 (dissipation -iGamma, FDT noise) are applied exactly by the native solver.
-
-UQ follows arXiv:2603.11052: T stochastic forward passes with zero-mean
-feature perturbations on lifted features, producing predictive mean + band.
-Fallback to exact solver when uncertainty exceeds threshold.
-
-Architecture: FNO-style spectral convolution on truncated low-frequency
-modes, structurally identical to the FFT-based split-step it replaces.
-"""
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Optional
-import numpy as np
 
-from runtime.core.solver import TriadParams, _effective_params, _build_V_ext
-from runtime.physics.observables import crystallinity, energy
+from runtime.core.solver import TriadParams, _build_V_ext, _effective_params
+from runtime.ml.nn import Adam, Module, triad
 from runtime.ml import tensor as T
-from runtime.ml.nn import Module, Linear, Adam
+from runtime.physics.observables import energy
+from triad import ntri as np
+
 
 def spectral_features(psi: np.ndarray, k: np.ndarray, n_modes: int = 32) -> np.ndarray:
-    """Extract truncated spectral features from psi for the surrogate.
 
-    Returns (2*n_modes,) array: [re(psi_hat[:n_modes]), im(psi_hat[:n_modes])].
-    """
     psi_hat = np.fft.fft(psi)
     re = np.real(psi_hat[:n_modes])
     im = np.imag(psi_hat[:n_modes])
@@ -33,56 +17,38 @@ def spectral_features(psi: np.ndarray, k: np.ndarray, n_modes: int = 32) -> np.n
 
 def spectral_to_field(delta_hat_re: np.ndarray, delta_hat_im: np.ndarray,
                       N: int) -> np.ndarray:
-    """Convert truncated spectral delta back to spatial field."""
-    full_re = np.zeros(N)
-    full_im = np.zeros(N)
+
+    triad_re = np.zeros(N)
+    triad_im = np.zeros(N)
     n = len(delta_hat_re)
-    full_re[:n] = delta_hat_re
-    full_im[:n] = delta_hat_im
-    
-    full_re[-1:-n:-1] = delta_hat_re[1:][::-1]
-    full_im[-1:-n:-1] = -delta_hat_im[1:][::-1]
-    return np.fft.ifft(full_re + 1j * full_im)
+    triad_re[:n] = delta_hat_re
+    triad_im[:n] = delta_hat_im
+
+    triad_re[-1:-n:-1] = delta_hat_re[1:][::-1]
+    triad_im[-1:-n:-1] = -delta_hat_im[1:][::-1]
+    return np.fft.ifft(triad_re + 1j * triad_im)
 
 class KineticSurrogate(Module):
-    """Learns the spectral propagator: psi_hat * half_lin.
 
-    Operates in truncated spectral space (n_modes). Input: spectral features
-    of psi.  Output: delta in spectral space (learned correction to the
-    linear propagation).  The base propagation is still applied exactly;
-    the surrogate learns a residual correction for accuracy.
-
-    Parameters
-    ----------
-    n_modes : int
-        Number of retained low-frequency modes.
-    d_hidden : int
-        Hidden dimension of the spectral MLP.
-    n_layers : int
-        Number of spectral processing layers.
-    """
     def __init__(self, n_modes: int = 32, d_hidden: int = 64, n_layers: int = 2):
         self.n_modes = n_modes
-        in_dim = 2 * n_modes  
+        in_dim = 2 * n_modes
         self.layers = []
         for i in range(n_layers):
             d_in = in_dim if i == 0 else d_hidden
-            self.layers.append(Linear(d_in, d_hidden))
-        self.head = Linear(d_hidden, 2 * n_modes)  
+            self.layers.append(triad(d_in, d_hidden))
+        self.head = triad(d_hidden, 2 * n_modes)
 
     def forward(self, feats: T.TriadTensor) -> T.TriadTensor:
         x = feats
         for layer in self.layers:
             x = layer(x)
-            
+
             x = (T.tensor(np.tanh(x._data)))
         return self.head(x)
 
     def predict_delta(self, psi: np.ndarray, n_modes: int = None) -> np.ndarray:
-        """Predict spectral delta for one step.
 
-        Returns delta_psi in real space (N,).
-        """
         nm = n_modes or self.n_modes
         k = 2.0 * np.pi * np.fft.fftfreq(len(psi), d=1.0 / len(psi))
         feats = spectral_features(psi, k, nm)
@@ -95,24 +61,7 @@ class KineticSurrogate(Module):
 
     def predict_with_uq(self, psi: np.ndarray, n_passes: int = 5,
                         perturbation_std: float = 0.1) -> dict:
-        """Predict with inference-time UQ (arXiv:2603.11052).
 
-        Runs n_passes stochastic forward passes with zero-mean perturbations
-        on lifted features. Returns mean prediction + std as uncertainty band.
-
-        Parameters
-        ----------
-        psi : np.ndarray
-            Input field.
-        n_passes : int
-            Number of stochastic passes.
-        perturbation_std : float
-            Std of multiplicative perturbation on features.
-
-        Returns
-        -------
-        dict with 'mean', 'std', 'delta_fields' (list of predictions).
-        """
         nm = self.n_modes
         k = 2.0 * np.pi * np.fft.fftfreq(len(psi), d=1.0 / len(psi))
         feats = spectral_features(psi, k, nm)
@@ -137,16 +86,8 @@ class KineticSurrogate(Module):
 
 def generate_kinetic_pairs(p: TriadParams, n_snapshots: int = 200,
                             n_modes: int = 32) -> tuple:
-    """Generate training pairs for the kinetic surrogate.
 
-    For each snapshot: compute exact half_lin propagation, extract spectral
-    features of input and output.
-
-    Returns X (n, 2*n_modes), Y (n, 2*n_modes) where Y is the spectral
-    delta (output_hat - input_hat)[:n_modes].
-    """
     from runtime.core.solver import integrate
-    from stdlib.regimes import resolve_regime
 
     eff = _effective_params(p)
     x = np.linspace(-p.L / 2, p.L / 2, p.N, endpoint=False)
@@ -156,22 +97,22 @@ def generate_kinetic_pairs(p: TriadParams, n_snapshots: int = 200,
     H_lin_k = p.hbar**2 * k**2 / (2.0 * p.m) + eff['alpha'] * abs_k**p.sigma
 
     X_list, Y_list = [], []
-    
+
     out = integrate(p)
     psi_snapshots = []
     if out.get('record_y') and out.get('psi_history') is not None:
         psi_snapshots = out['psi_history']
     else:
-        
+
         density = out['density']
         for t_idx in range(density.shape[1]):
             rho = density[:, t_idx]
-            
+
             phase = np.exp(1j * np.random.uniform(0, 2*np.pi, len(rho)))
             psi_snapshots.append(np.sqrt(np.maximum(rho, 0)) * phase)
 
     for psi in psi_snapshots[:n_snapshots]:
-        
+
         psi_hat = np.fft.fft(psi)
         half_lin = np.exp(-1j * H_lin_k * p.dt / (2.0 * p.hbar)
                           - eff['Gamma'] * p.dt / (2.0 * p.hbar))
@@ -192,10 +133,7 @@ def train_kinetic_surrogate(p: TriadParams, n_modes: int = 32,
                              epochs: int = 20, batch: int = 32,
                              lr: float = 1e-3, seed: int = 0,
                              verbose: bool = True) -> KineticSurrogate:
-    """Train a KineticSurrogate on exact P1 propagation data.
 
-    Loss is MSE on spectral delta in truncated mode space.
-    """
     rng = np.random.default_rng(seed)
     X, Y = generate_kinetic_pairs(p, n_snapshots=200, n_modes=n_modes)
     n = len(X)
@@ -229,17 +167,7 @@ def train_kinetic_surrogate(p: TriadParams, n_modes: int = 32,
 def hybrid_step(psi: np.ndarray, p: TriadParams, surrogate: KineticSurrogate,
                 uq_threshold: float = 0.1, n_uq_passes: int = 5,
                 perturbation_std: float = 0.1) -> dict:
-    """One Strang split-step using surrogate for P1 and exact for P2/P3.
 
-    Structure (Strang splitting, same as solver.py):
-      1. half P1 via surrogate (spectral propagation)
-      2. full nonlinear step (P2 memory + P3 dissipation + V_ext + Lambda|psi|^2)
-      3. half P1 via surrogate (spectral propagation)
-
-    If surrogate UQ exceeds threshold, falls back to exact FFT propagation.
-
-    Returns dict with psi_next, used_surrogate (bool), uq_max (float).
-    """
     eff = _effective_params(p)
     xp = np
     N = len(psi)
@@ -256,12 +184,12 @@ def hybrid_step(psi: np.ndarray, p: TriadParams, surrogate: KineticSurrogate,
     uq_max = uq_result["max_std"]
 
     if uq_max < uq_threshold:
-        
+
         delta_p1 = uq_result["mean"]
         psi_after_p1_half = psi + delta_p1
         used_surrogate_half1 = True
     else:
-        
+
         psi_after_p1_half = xp.fft.ifft(xp.fft.fft(psi) * half_lin_exact)
         used_surrogate_half1 = False
 
@@ -269,13 +197,13 @@ def hybrid_step(psi: np.ndarray, p: TriadParams, surrogate: KineticSurrogate,
     V_ext = _build_V_ext(p, x)
     lam_arr = xp.asarray(eff['lam'], dtype=xp.float64)
     nu_arr = xp.asarray(p.nu, dtype=xp.float64)
-    
+
     V_mem = (lam_arr[:, None] * rho[None, :]).sum(axis=0) if len(lam_arr) > 0 else 0.0
     V_total = V_ext + eff['Lambda'] * rho + V_mem
-    
+
     psi_after_nl = psi_after_p1_half * xp.exp(
         -1j * V_total * p.dt / p.hbar
-        - eff['Gamma'] * p.dt / p.hbar  
+        - eff['Gamma'] * p.dt / p.hbar
     )
 
     uq_result2 = surrogate.predict_with_uq(psi_after_nl, n_passes=n_uq_passes,
@@ -299,14 +227,7 @@ def hybrid_step(psi: np.ndarray, p: TriadParams, surrogate: KineticSurrogate,
 
 def fdt_balance_check(psi_before: np.ndarray, psi_after: np.ndarray,
                       p: TriadParams, dt: float) -> dict:
-    """Check FDT energy-balance violation between two field states.
 
-    In a correctly operating system, the energy change should be bounded
-    by the FDT fluctuation-dissipation balance. If a surrogate absorbs P2/P3
-    (ablation), the balance is violated.
-
-    Returns dict with delta_E, norm_ratio, violated (bool).
-    """
     x = np.linspace(-p.L / 2, p.L / 2, len(psi_before), endpoint=False)
     dx = float(x[1] - x[0])
     E_before = energy(psi_before, dx)
@@ -316,7 +237,7 @@ def fdt_balance_check(psi_before: np.ndarray, psi_after: np.ndarray,
     norm_after = float((np.abs(psi_after)**2).sum() * dx)
     norm_ratio = norm_after / max(norm_before, 1e-30)
 
-    violated = abs(norm_ratio - 1.0) > 0.5  
+    violated = abs(norm_ratio - 1.0) > 0.5
 
     return {
         "delta_E": delta_E,

@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from fastapi import APIRouter, HTTPException
+
 from api.models import RegimeInfo, TriadParamsModel
 
 router = APIRouter()
@@ -11,7 +13,8 @@ async def list_regimes():
 
 @router.get('/{name}', response_model=RegimeInfo, summary='Get TriadParams for a named regime')
 async def get_regime(name: str):
-    from stdlib.regimes import resolve_regime, list_regimes as _list
+    from stdlib.regimes import list_regimes as _list
+    from stdlib.regimes import resolve_regime
     if name not in _list():
         raise HTTPException(status_code=404, detail=f'regime {name!r} not found; available: {_list()}')
     try:

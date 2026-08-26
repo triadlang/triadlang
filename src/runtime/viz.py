@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 import os
-import numpy as np
+
+from triad import ntri as np
+
 
 def multi_scale_plot(compiled, source_path: str):
     try:
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
-    except Exception as e:
+    except ImportError:
         return None
     macros = []
     for sid, sub in compiled.runtime.substrates.items():
@@ -46,17 +49,18 @@ def multi_scale_plot(compiled, source_path: str):
         saved.append(out_path)
     return saved
 
-def bravais_3d_render(sub, threshold_frac: float=0.3, out_path: str='bravais.png'):
+def bravais_3d_render(sub, threshold_frac: float | None = None, out_path: str='bravais.png'):
     if not hasattr(sub, 'D') or sub.D != 3:
         return None
     try:
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
-    except Exception:
+    except ImportError:
         return None
     rho = np.abs(sub.psi) ** 2
-    thresh = threshold_frac * float(rho.max())
+    from runtime.physics.observables_atoms import _resolve_threshold
+    thresh = _resolve_threshold(rho, threshold_frac)
     pts = np.argwhere(rho > thresh)
     if pts.size == 0:
         return None
@@ -70,8 +74,10 @@ def bravais_3d_render(sub, threshold_frac: float=0.3, out_path: str='bravais.png
     try:
         from runtime.codec.codec_3d import bravais_family
         family = bravais_family(sub.psi, sub.dx)
-        ax.set_title(f'{sub.name} — Bravais family: {family}  (threshold {threshold_frac} of peak)')
-    except Exception:
+        ax.set_title(f'{sub.name} — Bravais family: {family}  (threshold {thresh:.4g})')
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).debug('bravais_3d_render: Bravais detection failed: %s', exc)
         ax.set_title(f'{sub.name} — Bravais detection unavailable')
     ax.set_xlabel('x')
     ax.set_ylabel('y')

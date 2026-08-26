@@ -1,41 +1,41 @@
-"""GPU-fused kernels for the Triad split-step solver.
 
-When the backend is cupy, these kernels replace the per-element Python
-arithmetic in the main integration loop with fused CUDA kernels via
-``cp.fuse()``, reducing kernel launches from ~15 per step to ~3:
-  1. half-step FFT pair (cupy native)
-  2. mega-fused nonlinear + OU + noise (single kernel)
-  3. half-step FFT pair again
 
-Works for 1D, 2D, and 3D.  The fused kernels are elementwise and
-automatically handle any array shape.
 
-All three pillars remain active:
-  P1: spectral propagation via cupy FFT (unmodified)
-  P2: memory fields updated inside fused kernel
-  P3: FDT noise injected inside fused kernel
 
-Fused kernels are compiled lazily on first call and cached by cupy.
-"""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 from __future__ import annotations
 
-import numpy as np
+from triad import ntri as np
 
 try:
     import cupy as _cp
     _CUDA = True
-except Exception:
+except (ImportError, ModuleNotFoundError, AttributeError):
     _cp = None
     _CUDA = False
 
 def _build_fused_kernels():
-    """Build and cache fused CUDA kernels via cp.fuse().
 
-    The mega3 kernel fuses OU half-update + V_mem + nonlinear phase
-    + noise injection + OU half-update into a single kernel launch.
-    It works on arrays of any dimensionality (1D, 2D, 3D) because
-    cp.fuse() generates elementwise kernels.
-    """
+
+
+
+
+
+
     if not _CUDA:
         return None
 
@@ -47,7 +47,7 @@ def _build_fused_kernels():
               Lambda, dt_hbar,
               na, xi_r, xi_i, sqrt2):
         rho = _cp.abs(psi) ** 2
-        
+
         y0 = d0 * y0 + (1.0 - d0) * rho
         y1 = d1 * y1 + (1.0 - d1) * rho
         y2 = d2 * y2 + (1.0 - d2) * rho
@@ -55,7 +55,7 @@ def _build_fused_kernels():
         V_total = V_ext + Lambda * rho + V_mem
         psi = psi * _cp.exp(-1j * V_total * dt_hbar)
         psi = psi + na * (xi_r + 1j * xi_i) / sqrt2
-        
+
         rho_new = _cp.abs(psi) ** 2
         y0 = d0 * y0 + (1.0 - d0) * rho_new
         y1 = d1 * y1 + (1.0 - d1) * rho_new
@@ -78,7 +78,7 @@ def _build_fused_kernels():
 
     @_cp.fuse()
     def fused_extrap_predictor(psi, V_ext, Lambda, V_mem, dt_hbar):
-        """Predictor: psi_pred = psi * exp(-1j * V_start * dt_hbar)"""
+
         rho = _cp.abs(psi) ** 2
         V_start = V_ext + Lambda * rho + V_mem
         return psi * _cp.exp(-1j * V_start * dt_hbar)
@@ -87,8 +87,8 @@ def _build_fused_kernels():
     def fused_extrap_corrector(psi, V_ext, Lambda, V_mem, V_start,
                                dt_hbar, trap_lam,
                                noise_amp, xi_r, xi_i, sqrt2):
-        """Corrector: interpolate V_start/V_end, apply, add noise.
-        Note: Gamma_dt is NOT applied here; it is already in half_lin."""
+
+
         rho_pred = _cp.abs(psi) ** 2
         V_end = V_ext + Lambda * rho_pred + V_mem
         V_tot = (1.0 - trap_lam) * V_start + trap_lam * V_end
@@ -113,7 +113,7 @@ def get_kernels():
     return _kernels
 
 def _apply_fft(psi, half_lin, D):
-    """Apply the half-step spectral propagator for dimension D."""
+
     if D == 1:
         return _cp.fft.ifft(_cp.fft.fft(psi) * half_lin)
     elif D == 2:
@@ -122,15 +122,15 @@ def _apply_fft(psi, half_lin, D):
         return _cp.fft.ifftn(_cp.fft.fftn(psi) * half_lin)
 
 def _rng_normal(rng, shape):
-    """Generate two independent normal arrays of given shape."""
+
     return rng.standard_normal(shape), rng.standard_normal(shape)
 
 def _build_V_ext_gpu(p, xp):
-    """Build V_ext directly on the GPU without CPU round-trip.
 
-    Unlike solver._build_V_ext which takes numpy grids and returns
-    numpy arrays, this version constructs everything on the xp backend.
-    """
+
+
+
+
     N = p.N
     L = p.L
     spec = p.V_ext
@@ -179,9 +179,9 @@ def _build_V_ext_gpu(p, xp):
     if spec == 'lattice':
         k0 = 2.0 * xp.pi / (L / 4.0)
         if p.D == 2:
-            return float(0.5) * (xp.cos(k0 * X) + xp.cos(k0 * Y))
+            return 0.5 * (xp.cos(k0 * X) + xp.cos(k0 * Y))
         else:
-            return float(0.5) * (xp.cos(k0 * X) + xp.cos(k0 * Y) + xp.cos(k0 * Z))
+            return 0.5 * (xp.cos(k0 * X) + xp.cos(k0 * Y) + xp.cos(k0 * Z))
     if callable(spec):
         from runtime.backend import asnumpy
         if p.D == 2:
@@ -194,39 +194,41 @@ def _build_V_ext_gpu(p, xp):
 def integrate_gpu_fused(p, psi0=None, y0=None, auto_halve_dt=True,
                         noise_provider=None, record_y=False,
                         record_density=False):
-    """Full Strang split-step integration using fused GPU kernels.
 
-    Identical physics to ``solver.integrate()``, but with all elementwise
-    operations fused into ~3 kernel launches per step instead of ~15.
 
-    Supports 1D, 2D, and 3D.  For the default 3-channel OU memory (M=3),
-    uses a single mega-kernel that does OU update + V_mem + nonlinear +
-    noise + OU update in one launch.  For M != 3, falls back to
-    per-channel fused_ou + fused_nl.
 
-    Parameters
-    ----------
-    p : TriadParams
-    psi0 : ndarray, optional
-    y0 : ndarray, optional
-    auto_halve_dt : bool
-    noise_provider : callable, optional
-    record_y : bool
-    record_density : bool
 
-    Returns
-    -------
-    dict, same keys as ``solver.integrate()`` or ``solver.integrate_2d()``
-    etc. depending on p.D.
-    """
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    from runtime.backend import asnumpy, get_xp
     from runtime.core.solver import (
-        _effective_params, _build_absorbing_mask, _maybe_halve_dt,
+        _build_absorbing_mask,
+        _effective_params,
+        _maybe_halve_dt,
         _resolve_trap_lambda,
     )
-    from runtime.backend import get_xp, asnumpy
 
     p = _maybe_halve_dt(p, auto_halve_dt)
-    D = getattr(p, 'D', 1)
+    D = p.D
 
     k = get_kernels()
     if k is None:
@@ -236,9 +238,9 @@ def integrate_gpu_fused(p, psi0=None, y0=None, auto_halve_dt=True,
     if xp is not _cp:
         raise RuntimeError("backend is not cupy")
 
-    eff = _effective_params(p)
     N = p.N
     dx = p.L / N
+    eff = _effective_params(p, dx=dx, D=D)
     n_steps = int(round(p.T / p.dt))
     M = len(p.nu)
     use_mega = (M == 3)
@@ -282,8 +284,24 @@ def integrate_gpu_fused(p, psi0=None, y0=None, auto_halve_dt=True,
         grid_r2 = X * X + Y * Y + Z * Z
         vol = dx ** 3
 
+    rng = xp.random.default_rng(p.seed)
+
     if psi0 is None:
-        psi = xp.exp(-grid_r2 / 8.0).astype(xp.complex128)
+        if getattr(p, 'init', 'gaussian') == 'chaos':
+            shape = (N,) * D
+            psi = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(xp.complex128)
+        else:
+            s = getattr(p, 'init_sigma', 2.0) or 2.0
+            psi = xp.exp(-grid_r2 / (2.0 * s * s)).astype(xp.complex128)
+            k0 = getattr(p, 'init_k0', (0.0, 0.0, 0.0))
+            if k0 and any(k0[:D]):
+                if D == 1:
+                    phase = k0[0] * xs
+                elif D == 2:
+                    phase = k0[0] * X + k0[1] * Y
+                else:
+                    phase = k0[0] * X + k0[1] * Y + k0[2] * Z
+                psi = psi * xp.exp(1j * phase)
         psi = psi / xp.sqrt((xp.abs(psi)**2).sum() * vol)
     else:
         psi = _cp.asarray(psi0, dtype=_cp.complex128).copy()
@@ -291,18 +309,15 @@ def integrate_gpu_fused(p, psi0=None, y0=None, auto_halve_dt=True,
     lam_e = _cp.asarray(eff['lam'], dtype=_cp.float64)
     nu_e = _cp.asarray(p.nu, dtype=_cp.float64)
     ou_decay_half = _cp.exp(-nu_e * p.dt / 2.0)
-    if M > 0:
-        mem_shape = (M,) + (N,) * D
-        if y0 is None:
-            y = _cp.zeros(mem_shape, dtype=_cp.float64)
-        else:
-            y = _cp.asarray(y0, dtype=_cp.float64).copy()
-
-    rng = xp.random.default_rng(p.seed)
+    if M < 3:
+        raise ValueError(f'triad rule: GPU substrate needs at least 3 memory scales, got {M}')
+    mem_shape = (M,) + (N,) * D
+    if y0 is None:
+        y = _cp.zeros(mem_shape, dtype=_cp.float64)
+    else:
+        y = _cp.asarray(y0, dtype=_cp.float64).copy()
     Gamma_e = eff['Gamma']
-    f_FDT_e = eff['f_FDT']
-    if getattr(p, 'fdt_couple', False) and Gamma_e > 0:
-        f_FDT_e = 2.0 * Gamma_e * dx * p.kT / p.hbar
+    f_FDT_e = eff['f_FDT_e']
     if f_FDT_e > 0:
         noise_amp = float(xp.sqrt(xp.asarray(f_FDT_e * p.dt / vol)))
     else:
@@ -329,7 +344,7 @@ def integrate_gpu_fused(p, psi0=None, y0=None, auto_halve_dt=True,
 
     exptrap = getattr(p, 'step_mode', 'strang') == 'exptrap'
     trap_lambda_val = getattr(p, 'trap_lambda', 0.5)
-    
+
     use_mega_actual = use_mega and not exptrap
 
     rec_every = max(1, getattr(p, 'record_every', 4))
@@ -339,16 +354,13 @@ def integrate_gpu_fused(p, psi0=None, y0=None, auto_halve_dt=True,
     field_shape = (N,) * D
 
     for step in range(n_steps + 1):
-        
+
         do_record = (step % rec_every == 0 or step == n_steps)
-        if D == 3 and do_record:
-            
-            pass
         if do_record:
             if record_density or D == 1:
                 rec_density.append(asnumpy(xp.abs(psi)**2))
             rec_t.append(step * p.dt)
-            if record_y and M > 0:
+            if record_y:
                 rec_y.append(asnumpy(y).copy())
         if step == n_steps:
             break
@@ -391,12 +403,12 @@ def integrate_gpu_fused(p, psi0=None, y0=None, auto_halve_dt=True,
                 _na = na
 
             if exptrap:
-                
+
                 rho_s = _cp.abs(psi) ** 2
                 V_start = V_ext + Lambda_e * rho_s + V_mem
                 lam_t = _resolve_trap_lambda(trap_lambda_val, rho_s, _cp)
                 trap_lam = _cp.float64(float(lam_t))
-                
+
                 psi = k["fused_extrap_corrector"](
                     psi, V_ext, Lambda_e, V_mem, V_start,
                     dt_hbar, trap_lam,
@@ -425,14 +437,14 @@ def integrate_gpu_fused(p, psi0=None, y0=None, auto_halve_dt=True,
         result['t'] = np.asarray(rec_t)
         result['x'] = asnumpy(xs)
         result['density'] = np.asarray(rec_density).T if rec_density else np.zeros((N, 0))
-        result['y_final'] = asnumpy(y) if M > 0 else np.zeros((M, N))
+        result['y_final'] = asnumpy(y)
         if record_y and rec_y:
             ya = np.asarray(rec_y)
             result['y_traj'] = np.transpose(ya, (1, 2, 0))
     elif D == 2:
         result['t'] = np.asarray(rec_t)
         result['x'] = asnumpy(xs)
-        result['y_final'] = asnumpy(y) if M > 0 else np.zeros((M, N, N))
+        result['y_final'] = asnumpy(y)
         if record_density and rec_density:
             result['density'] = np.transpose(np.asarray(rec_density), (1, 2, 0))
         if record_y and rec_y:
@@ -441,8 +453,8 @@ def integrate_gpu_fused(p, psi0=None, y0=None, auto_halve_dt=True,
     else:
         result['t'] = np.asarray(rec_t)
         result['x'] = asnumpy(xs)
-        result['y_final'] = asnumpy(y) if M > 0 else np.zeros((M, N, N, N))
-        
+        result['y_final'] = asnumpy(y)
+
         rho_final = xp.abs(psi)**2
         peak_val = float(asnumpy(rho_final.max()))
         norm2 = float(asnumpy(rho_final.sum() * vol))

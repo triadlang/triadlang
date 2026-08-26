@@ -1,6 +1,3 @@
-/*
- * TriadLang Native Runtime — String
- */
 #include "triad_rt.h"
 #include <stdlib.h>
 #include <string.h>

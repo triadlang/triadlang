@@ -1,14 +1,3 @@
-/* triad_format.c — Port of compiler/formatter.py:format_universal.
- *
- * Emits canonically-indented universal-AST source. Output is
- * byte-identical to the Python formatter, validated against every .tri
- * fixture under examples/ via native/c/parity_format.
- *
- * Strategy: a single Buf-based emitter walks the AST, building each
- * statement string then "\n"-joining them. Float and string literals
- * go through repr-mimicking helpers (triad_py_repr_float /
- * triad_py_repr_string) to match CPython byte-for-byte.
- */
 #include "triad_format.h"
 
 #include <ctype.h>
@@ -17,11 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ──────────────────────────────────────────────────────────────────
- * Buf: growable byte buffer, freed by caller. Final result is copied
- * into the arena.
- * ────────────────────────────────────────────────────────────────── */
 
 typedef struct {
     char  *data;
@@ -98,10 +82,6 @@ static const char *pad_str(int indent) {
     return pads[indent];
 }
 
-/* ──────────────────────────────────────────────────────────────────
- * Python repr() mimics.
- * ────────────────────────────────────────────────────────────────── */
-
 void triad_py_repr_float(double v, char *out, size_t outlen) {
     if (isnan(v)) { snprintf(out, outlen, "nan"); return; }
     if (isinf(v)) { snprintf(out, outlen, v < 0 ? "-inf" : "inf"); return; }
@@ -121,7 +101,7 @@ void triad_py_repr_float(double v, char *out, size_t outlen) {
     int prefer_fixed = (absv >= 1e-4 && absv < 1e16);
 
     if (e && prefer_fixed) {
-        /* Reflow scientific -> fixed using the parsed digits. */
+
         char sign = (tmp[0] == '-') ? '-' : '+';
         char *p = tmp + (sign == '-' ? 1 : 0);
         char digits[64];
@@ -179,10 +159,6 @@ void triad_py_repr_float(double v, char *out, size_t outlen) {
     snprintf(out, outlen, "%s", tmp);
 }
 
-/* CPython PyUnicode_Repr rules for strings (ASCII subset; non-ASCII
- * bytes are passed through verbatim, matching repr() of an str that
- * contains the same UTF-8 bytes since Python 3 treats them as printable
- * unicode chars in repr by default). */
 const char *triad_py_repr_string(TriadArena *arena,
                                  const char *s,
                                  size_t      len) {
@@ -193,7 +169,6 @@ const char *triad_py_repr_string(TriadArena *arena,
     }
     char quote = '\'';
     if (has_single && !has_double) quote = '"';
-    /* Python's choice when both are present: use single, escape '. */
 
     Buf b; buf_init(&b);
     buf_putc(&b, quote);
@@ -208,7 +183,7 @@ const char *triad_py_repr_string(TriadArena *arena,
             buf_putc(&b, (char)c);
         }
         else if (c < 0x20 || c == 0x7f) {
-            /* control char: \xNN */
+
             buf_printf(&b, "\\x%02x", c);
         }
         else {
@@ -219,16 +194,8 @@ const char *triad_py_repr_string(TriadArena *arena,
     return buf_to_arena(arena, &b);
 }
 
-/* ──────────────────────────────────────────────────────────────────
- * Forward decls.
- * ────────────────────────────────────────────────────────────────── */
-
 static void emit_expr(Buf *b, TriadArena *a, const TriadAstNode *e);
 static void emit_stmt(Buf *b, TriadArena *a, const TriadAstNode *s, int indent);
-
-/* ──────────────────────────────────────────────────────────────────
- * Param.
- * ────────────────────────────────────────────────────────────────── */
 
 static void emit_param(Buf *b, TriadArena *a, const TriadParam *p) {
     if (p->is_kwargs) buf_puts(b, "**");
@@ -243,10 +210,6 @@ static void emit_param(Buf *b, TriadArena *a, const TriadParam *p) {
         emit_expr(b, a, p->default_value);
     }
 }
-
-/* ──────────────────────────────────────────────────────────────────
- * Expressions.
- * ────────────────────────────────────────────────────────────────── */
 
 static void emit_kwargs(Buf *b, TriadArena *a,
                         TriadAstNode *const *args, size_t args_len,
@@ -403,14 +366,17 @@ static void emit_expr(Buf *b, TriadArena *a, const TriadAstNode *e) {
         return;
     }
     case TRIAD_AST_FSTRING: {
-        /* f"..." with {{ and }} doubling on literal '{'/'}', and
-         * {expr} for embedded expressions. */
+
         buf_puts(b, "f\"");
         for (size_t i = 0; i < e->u.fstring.parts_len; ++i) {
             const TriadFStringAstPart *p = &e->u.fstring.parts[i];
             if (p->is_expr) {
                 buf_putc(b, '{');
                 emit_expr(b, a, p->expr);
+                if (p->fmt_spec) {
+                    buf_putc(b, ':');
+                    buf_puts(b, p->fmt_spec);
+                }
                 buf_putc(b, '}');
             } else {
                 for (const char *q = p->text; *q; ++q) {
@@ -434,12 +400,10 @@ static void emit_expr(Buf *b, TriadArena *a, const TriadAstNode *e) {
             buf_putc(b, ' ');
             for (size_t i = 0; i < e->u.lambda.body_len; ++i) {
                 if (i) buf_puts(b, "; ");
-                /* Lambda body is rendered inline (no indent / no newline);
-                 * emit_stmt would add a trailing pad. Use a temporary
-                 * sub-buffer to drop the leading pad. */
+
                 Buf sub; buf_init(&sub);
                 emit_stmt(&sub, a, e->u.lambda.body[i], 0);
-                /* Drop the trailing ';' to match Python's "; "-join */
+
                 if (sub.len > 0 && sub.data[sub.len - 1] == ';') sub.len--;
                 if (sub.len) buf_append(b, sub.data, sub.len);
                 buf_free(&sub);
@@ -475,15 +439,74 @@ static void emit_expr(Buf *b, TriadArena *a, const TriadAstNode *e) {
         buf_putc(b, ')');
         return;
     }
+    case TRIAD_AST_COMPLEX_LIT: {
+        buf_printf(b, "(complex %g+%gj)", e->u.complex_lit.real_val, e->u.complex_lit.imag_val);
+        return;
+    }
+    case TRIAD_AST_BYTES_LIT: {
+        buf_puts(b, "b'");
+        if (e->u.bytes_lit.bytes_val) buf_puts(b, e->u.bytes_lit.bytes_val);
+        buf_puts(b, "'");
+        return;
+    }
+    case TRIAD_AST_SET_LIT: {
+        buf_puts(b, "{");
+        for (size_t i = 0; i < e->u.set_lit.elements_len; i++) {
+            if (i > 0) buf_puts(b, ", ");
+            emit_expr(b, a, e->u.set_lit.elements[i]);
+        }
+        buf_puts(b, "}");
+        return;
+    }
+    case TRIAD_AST_TERNARY: {
+        emit_expr(b, a, e->u.ternary.then_val);
+        buf_puts(b, " if ");
+        emit_expr(b, a, e->u.ternary.condition);
+        buf_puts(b, " else ");
+        emit_expr(b, a, e->u.ternary.else_val);
+        return;
+    }
+    case TRIAD_AST_CHAIN_CMP: {
+        for (size_t i = 0; i < e->u.chain_cmp.operands_len; i++) {
+            if (i > 0) { buf_putc(b, ' '); buf_puts(b, e->u.chain_cmp.ops[i-1]); buf_putc(b, ' '); }
+            emit_expr(b, a, e->u.chain_cmp.operands[i]);
+        }
+        return;
+    }
+    case TRIAD_AST_SUPER: {
+        buf_puts(b, "super(");
+        for (size_t i = 0; i < e->u.super_expr.args_len; i++) {
+            if (i > 0) buf_puts(b, ", ");
+            emit_expr(b, a, e->u.super_expr.args[i]);
+        }
+        buf_puts(b, ")");
+        return;
+    }
+    case TRIAD_AST_DICT_COMP: {
+        buf_puts(b, "{");
+        emit_expr(b, a, e->u.dict_comp.key_expr);
+        buf_puts(b, ": ");
+        emit_expr(b, a, e->u.dict_comp.value_expr);
+        buf_puts(b, " for ...}");
+        return;
+    }
+    case TRIAD_AST_SET_COMP: {
+        buf_puts(b, "{");
+        emit_expr(b, a, e->u.set_comp.expr);
+        buf_puts(b, " for ...}");
+        return;
+    }
+    case TRIAD_AST_GEN_COMP: {
+        buf_puts(b, "(");
+        emit_expr(b, a, e->u.gen_comp.expr);
+        buf_puts(b, " for ...)");
+        return;
+    }
     default:
         buf_printf(b, "<expr:%s>", triad_ast_kind_name(e->kind));
         return;
     }
 }
-
-/* ──────────────────────────────────────────────────────────────────
- * Statements.
- * ────────────────────────────────────────────────────────────────── */
 
 static void emit_body(Buf *b, TriadArena *a,
                       TriadAstNode *const *body, size_t n, int indent) {
@@ -570,6 +593,29 @@ static void emit_stmt(Buf *b, TriadArena *a,
         buf_putc(b, ';');
         return;
     }
+    case TRIAD_AST_PASS: {
+        buf_puts(b, pad);
+        buf_puts(b, "pass;");
+        return;
+    }
+    case TRIAD_AST_ASSERT: {
+        buf_puts(b, pad);
+        buf_puts(b, "assert ");
+        emit_expr(b, a, s->u.assert_stmt.condition);
+        if (s->u.assert_stmt.message) {
+            buf_puts(b, ", ");
+            emit_expr(b, a, s->u.assert_stmt.message);
+        }
+        buf_putc(b, ';');
+        return;
+    }
+    case TRIAD_AST_DEL: {
+        buf_puts(b, pad);
+        buf_puts(b, "del ");
+        emit_expr(b, a, s->u.del_stmt.target);
+        buf_putc(b, ';');
+        return;
+    }
     case TRIAD_AST_BREAK:    buf_puts(b, pad); buf_puts(b, "break;"); return;
     case TRIAD_AST_CONTINUE: buf_puts(b, pad); buf_puts(b, "continue;"); return;
     case TRIAD_AST_IF: {
@@ -600,14 +646,34 @@ static void emit_stmt(Buf *b, TriadArena *a,
         buf_putc(b, '}');
         return;
     }
+    case TRIAD_AST_ASYNC_FOR:
     case TRIAD_AST_FOR: {
         buf_puts(b, pad);
+        if (s->kind == TRIAD_AST_ASYNC_FOR) buf_puts(b, "async ");
         buf_puts(b, "for ");
         buf_puts(b, s->u.for_stmt.var);
         buf_puts(b, " in ");
         emit_expr(b, a, s->u.for_stmt.iter);
         buf_puts(b, " {");
         emit_body(b, a, s->u.for_stmt.body, s->u.for_stmt.body_len, indent + 1);
+        buf_putc(b, '\n');
+        buf_puts(b, pad);
+        buf_putc(b, '}');
+        return;
+    }
+    case TRIAD_AST_ASYNC_WITH:
+    case TRIAD_AST_WITH: {
+        buf_puts(b, pad);
+        if (s->kind == TRIAD_AST_ASYNC_WITH) buf_puts(b, "async ");
+        buf_puts(b, "with ");
+        emit_expr(b, a, s->u.with_stmt.expr);
+        if (s->u.with_stmt.var) {
+            buf_puts(b, " as ");
+            buf_puts(b, s->u.with_stmt.var);
+        }
+        buf_puts(b, " {");
+        emit_body(b, a, s->u.with_stmt.body, s->u.with_stmt.body_len,
+                  indent + 1);
         buf_putc(b, '\n');
         buf_puts(b, pad);
         buf_putc(b, '}');
@@ -755,6 +821,21 @@ static void emit_stmt(Buf *b, TriadArena *a,
         buf_putc(b, ';');
         return;
     }
+    case TRIAD_AST_SEQUENCE: {
+        buf_puts(b, pad);
+        buf_puts(b, "sequence ");
+        emit_expr(b, a, s->u.sequence_stmt.inputs);
+        if (s->u.sequence_stmt.target) {
+            buf_puts(b, " via ");
+            buf_puts(b, s->u.sequence_stmt.target);
+        }
+        if (s->u.sequence_stmt.each_for) {
+            buf_puts(b, " each_for T=");
+            emit_expr(b, a, s->u.sequence_stmt.each_for);
+        }
+        buf_putc(b, ';');
+        return;
+    }
     case TRIAD_AST_TRY_CATCH: {
         buf_puts(b, pad);
         buf_puts(b, "try {");
@@ -852,6 +933,56 @@ static void emit_stmt(Buf *b, TriadArena *a,
             emit_expr(b, a, s->u.world_decl.fields[i].value);
         }
         buf_puts(b, " }");
+        return;
+    }
+    case TRIAD_AST_SUBSTRATE: {
+        buf_puts(b, pad);
+        buf_puts(b, "substrate ");
+        buf_puts(b, s->u.substrate_decl.name);
+        if (s->u.substrate_decl.is_composed) {
+            buf_puts(b, " composed_of (");
+            for (size_t i = 0; i < s->u.substrate_decl.members_len; ++i) {
+                if (i) buf_puts(b, ", ");
+                buf_puts(b, s->u.substrate_decl.members[i]);
+            }
+            buf_putc(b, ')');
+            if (s->u.substrate_decl.properties_len) {
+                buf_puts(b, " {");
+                for (size_t i = 0; i < s->u.substrate_decl.properties_len; ++i) {
+                    buf_putc(b, '\n');
+                    buf_puts(b, pad);
+                    buf_puts(b, "    ");
+                    buf_puts(b, s->u.substrate_decl.properties[i].key);
+                    buf_puts(b, ": ");
+                    emit_expr(b, a, s->u.substrate_decl.properties[i].value);
+                    buf_putc(b, ';');
+                }
+                buf_putc(b, '\n');
+                buf_puts(b, pad);
+                buf_putc(b, '}');
+            }
+        } else {
+            if (s->u.substrate_decl.regime) {
+                buf_puts(b, " : ");
+                buf_puts(b, s->u.substrate_decl.regime);
+            }
+            if (s->u.substrate_decl.overrides_len) {
+                buf_puts(b, " {");
+                for (size_t i = 0; i < s->u.substrate_decl.overrides_len; ++i) {
+                    buf_putc(b, '\n');
+                    buf_puts(b, pad);
+                    buf_puts(b, "    ");
+                    buf_puts(b, s->u.substrate_decl.overrides[i].key);
+                    buf_puts(b, ": ");
+                    emit_expr(b, a, s->u.substrate_decl.overrides[i].value);
+                    buf_putc(b, ';');
+                }
+                buf_putc(b, '\n');
+                buf_puts(b, pad);
+                buf_putc(b, '}');
+            }
+        }
+        buf_putc(b, ';');
         return;
     }
     case TRIAD_AST_COUPLE: {
@@ -979,10 +1110,6 @@ static void emit_stmt(Buf *b, TriadArena *a,
         return;
     }
 }
-
-/* ──────────────────────────────────────────────────────────────────
- * Public entry point.
- * ────────────────────────────────────────────────────────────────── */
 
 const char *triad_format_module(TriadArena         *arena,
                                 const TriadAstNode *module) {

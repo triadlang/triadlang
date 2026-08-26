@@ -1,12 +1,17 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
 import io
-import sys
+
 from fastapi import APIRouter, HTTPException
+
 from api.models import (
-    LangRunRequest, LangRunResult, LangCheckResult,
-    LangCompileResult, LangFormatResult,
+    LangCheckResult,
+    LangCompileResult,
+    LangFormatResult,
+    LangRunRequest,
+    LangRunResult,
 )
 
 router = APIRouter()
@@ -17,8 +22,11 @@ def _run_source_sync(source: str) -> LangRunResult:
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
     try:
+        import os
+
         from embed.engine import TriadEngine
-        engine = TriadEngine()
+        from runtime.security import default_policy
+        engine = TriadEngine(safe=True, policy=default_policy(os.getcwd()))
         with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
             engine.run_source(source)
         return LangRunResult(stdout=stdout_buf.getvalue(), stderr=stderr_buf.getvalue(), ok=True)
@@ -32,22 +40,21 @@ def _run_source_sync(source: str) -> LangRunResult:
 
 def _check_sync(source: str) -> LangCheckResult:
     try:
+        from compiler.typecheck_universal import TypeCheckError, typecheck
         from frontend.parser_universal import parse
-        from compiler.typecheck_universal import TypeChecker
         mod = parse(source, '<api>')
-        tc = TypeChecker()
-        errs = tc.check(mod)
-        if errs:
-            return LangCheckResult(ok=False, errors=[str(e) for e in errs])
+        typecheck(mod)
         return LangCheckResult(ok=True, errors=[])
+    except TypeCheckError as exc:
+        return LangCheckResult(ok=False, errors=exc.errors)
     except Exception as exc:
         return LangCheckResult(ok=False, errors=[str(exc)])
 
 def _compile_sync(source: str) -> LangCompileResult:
     try:
-        from frontend.parser_universal import parse
-        from compiler.lower import lower_module
         from compiler.emit_json import emit_json
+        from compiler.lower import lower_module
+        from frontend.parser_universal import parse
         mod = parse(source, '<api>')
         ir = lower_module(mod)
         ir_json = emit_json(ir)
@@ -57,8 +64,10 @@ def _compile_sync(source: str) -> LangCompileResult:
 
 def _format_sync(source: str) -> LangFormatResult:
     try:
-        from compiler.formatter import format_source
-        formatted = format_source(source)
+        from compiler.formatter import format_universal
+        from frontend.parser_universal import parse as _parse
+        mod = _parse(source, '<api>')
+        formatted = format_universal(mod)
         return LangFormatResult(source=formatted, ok=True)
     except Exception as exc:
         return LangFormatResult(source=source, ok=False, error=str(exc))
@@ -71,7 +80,7 @@ async def lang_run(req: LangRunRequest):
             loop.run_in_executor(None, _run_source_sync, req.source),
             timeout=_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(status_code=504, detail=f'execution timed out after {_TIMEOUT}s')
     return result
 

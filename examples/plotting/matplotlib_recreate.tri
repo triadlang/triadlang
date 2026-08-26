@@ -1,0 +1,129 @@
+
+import triad.plot as plt;
+import math;
+
+print("matplotlib recreated in triadlang");
+print("==================================");
+print("");
+
+let (fig, axes) = plt.subplots(2, 2, figsize=(8, 6));
+fig.suptitle("matplotlib recreated in triadlang");
+
+let xs = [];
+for i in range(100) {
+    xs.push(i / 100.0 * 4.0 * math.pi);
+}
+let sin_ys = [];
+let cos_ys = [];
+for i in range(100) {
+    sin_ys.push(math.sin(xs[i]));
+    cos_ys.push(math.cos(xs[i]));
+}
+axes[0, 0].plot(xs, sin_ys, label="sin");
+axes[0, 0].plot(xs, cos_ys, label="cos");
+axes[0, 0].set_title("line");
+axes[0, 0].set_xlabel("x");
+axes[0, 0].set_ylabel("y");
+axes[0, 0].legend();
+axes[0, 0].grid();
+
+import random;
+random.seed(7);
+let sxs = [];
+let sys_ = [];
+for i in range(200) {
+    sxs.push(random.gauss(0.0, 1.0));
+    sys_.push(random.gauss(0.0, 1.0));
+}
+axes[0, 1].scatter(sxs, sys_, alpha=0.6);
+axes[0, 1].set_title("scatter");
+axes[0, 1].set_xlim(-4, 4);
+axes[0, 1].set_ylim(-4, 4);
+axes[0, 1].grid();
+
+axes[1, 0].bar(["A", "B", "C", "D", "E"], [23.0, 45.0, 56.0, 78.0, 33.0]);
+axes[1, 0].set_title("bar");
+axes[1, 0].set_ylabel("count");
+
+import triad.ntri as np;
+let rng = np.random.default_rng(0);
+let Z = rng.standard_normal([20, 20]);
+let im = axes[1, 1].imshow(Z, cmap="viridis", aspect="auto");
+fig.colorbar(im, ax=axes[1, 1]);
+axes[1, 1].set_title("imshow");
+
+fig.tight_layout();
+fig.savefig("build/matplotlib_recreate.png");
+print("saved build/matplotlib_recreate.png");
+
+let (fig2, ax_main) = plt.subplots(figsize=(7, 4));
+let t = [];
+for i in range(200) {
+    t.push(i / 200.0 * 4.0 * math.pi);
+}
+let y = [];
+for i in range(200) {
+    y.push(math.exp(-t[i] / 4.0) * math.sin(t[i]));
+}
+ax_main.fill_between(t, [-v for v in y], y, color="C0", alpha=0.3, label="± envelope");
+ax_main.plot(t, y, color="C0", label="damped");
+ax_main.set_xlabel("t");
+ax_main.set_ylabel("y(t) = e^(-t/4) sin(t)");
+ax_main.legend();
+ax_main.grid();
+
+let ax_amp = ax_main.twinx();
+let amp = [];
+for i in range(200) {
+    amp.push(math.exp(-t[i] / 4.0));
+}
+ax_amp.plot(t, amp, color="C3", linestyle="--", label="envelope");
+ax_amp.set_ylabel("envelope", color="C3");
+ax_amp.set_ylim(0, 1.1);
+ax_main.set_title("twinx + fill_between");
+fig2.savefig("build/twinx_fillbetween.png");
+print("saved build/twinx_fillbetween.png");
+
+let (fig3, ax3) = plt.subplots(figsize=(7, 4));
+let samples = [];
+for i in range(2000) {
+    samples.push(random.gauss(0.0, 1.0));
+}
+ax3.hist(samples, bins=40, color="C2", color="black", alpha=0.7);
+ax3.set_yscale("log");
+ax3.set_title("histogram (log y)");
+ax3.set_xlabel("value");
+ax3.set_ylabel("count");
+ax3.axvline(0, color="C3", linestyle="--", linewidth=2, label="mean");
+ax3.annotate("peak", xytext=(0.0, 200.0), xy=(0.0, 0.0),
+             arrowprops={"color": "C3", "linewidth": 1.5});
+ax3.legend();
+fig3.savefig("build/hist_log.png");
+print("saved build/hist_log.png");
+
+let (fig4, ax4) = plt.subplots(figsize=(6, 5));
+let xx = [];
+for i in range(64) { xx.push(i / 63.0 * 2.0 - 1.0); }
+let yy = [];
+for j in range(64) { yy.push(j / 63.0 * 2.0 - 1.0); }
+let F = [];
+for j in range(64) {
+    let row = [];
+    for i in range(64) {
+        let r2 = xx[i] * xx[i] + yy[j] * yy[j];
+        let v = math.exp(-3.0 * r2) * math.cos(8.0 * r2);
+        row.push(v);
+    }
+    F.append(row);
+}
+let im4 = ax4.imshow(F, cmap="inferno", aspect="equal", origin="lower",
+                     extent=[-1.0, 1.0, -1.0, 1.0]);
+fig4.colorbar(im4, ax=ax4, label="|ψ|²");
+ax4.set_title("field pattern (imshow + colorbar)");
+ax4.set_xlabel("x");
+ax4.set_ylabel("y");
+fig4.savefig("build/field_pattern.png");
+print("saved build/field_pattern.png");
+
+print("");
+print("matplotlib recreated: 4 figures, 2x2 gallery, twinx, log hist, imshow");

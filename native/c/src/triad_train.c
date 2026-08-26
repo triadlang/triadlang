@@ -1,13 +1,8 @@
-/* ═══════════════════════════════════════════════════════════════════
-   TriadLang Native — Dataset / DataLoader / Trainer / Metrics (item 8)
-   See include/triad_train.h. ML-surface only; metrics are observables.
-   ═══════════════════════════════════════════════════════════════════ */
 #include "triad_train.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
-/* xorshift64* — deterministic, seedable, no global state */
 static uint64_t _xs(uint64_t *s) {
     uint64_t x = *s ? *s : 0x9E3779B97F4A7C15ull;
     x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
@@ -15,7 +10,6 @@ static uint64_t _xs(uint64_t *s) {
     return x * 0x2545F4914F6CDD1Dull;
 }
 
-/* ── Dataset ── */
 TriadDataset *triad_dataset_new(TriadTensor *x, TriadTensor *y) {
     if (!x || x->ndim < 1) return NULL;
     if (y && y->shape[0] != x->shape[0]) return NULL;
@@ -33,7 +27,6 @@ void triad_dataset_free(TriadDataset *d) {
 
 int64_t triad_dataset_len(const TriadDataset *d) { return d ? d->n : 0; }
 
-/* ── DataLoader ── */
 TriadDataLoader *triad_dataloader_new(TriadDataset *ds, int32_t batch_size,
                                       int shuffle, uint64_t seed) {
     if (!ds || batch_size < 1) return NULL;
@@ -41,7 +34,7 @@ TriadDataLoader *triad_dataloader_new(TriadDataset *ds, int32_t batch_size,
     dl->ds = ds;
     dl->batch_size = batch_size;
     dl->shuffle = shuffle;
-    dl->rng = seed ? seed : 0x123456789ABCDEFull;
+    dl->rng = seed ? seed : 0x123456789ABCDEF;
     dl->order = malloc((size_t)ds->n * sizeof(int64_t));
     dl->cursor = 0;
     triad_dataloader_reset(dl);
@@ -72,13 +65,12 @@ void triad_dataloader_reset(TriadDataLoader *dl) {
     dl->cursor = 0;
 }
 
-/* gather rows listed in idx[0..b) from src into a freshly allocated tensor */
 static TriadTensor *_gather_rows(const TriadTensor *src, const int64_t *idx, int32_t b) {
     int32_t shape[32];
     shape[0] = b;
     for (int32_t i = 1; i < src->ndim; i++) shape[i] = src->shape[i];
     int32_t ndim = src->ndim;
-    /* a 1-D target (N,) becomes (b,) */
+
     TriadTensor *out = triad_tensor_new(ndim, shape, 0);
     int64_t row = src->size / src->shape[0];
     for (int32_t i = 0; i < b; i++)
@@ -100,7 +92,6 @@ int32_t triad_dataloader_next(TriadDataLoader *dl, TriadTensor **xb, TriadTensor
     return b;
 }
 
-/* ── Metrics ── */
 double triad_metric_accuracy(const TriadTensor *pred, const TriadTensor *target) {
     if (!pred || !target || pred->ndim < 1) return 0.0;
     int32_t C = pred->shape[pred->ndim - 1];
@@ -150,7 +141,6 @@ double triad_metric_r2(const TriadTensor *pred, const TriadTensor *target) {
 
 double triad_metric_perplexity(double loss_value) { return exp(loss_value); }
 
-/* ── Trainer ── */
 double triad_trainer_train_epoch(TriadTrainer *tr, TriadDataLoader *dl) {
     triad_dataloader_reset(dl);
     double total = 0.0; int32_t nb = 0;

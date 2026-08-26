@@ -1,6 +1,8 @@
 from __future__ import annotations
-import numpy as np
-from runtime.ml.tensor import tensor, TriadTensor
+
+from runtime.ml.tensor import TriadTensor, tensor
+from triad import ntri as np
+
 
 class Dataset:
 

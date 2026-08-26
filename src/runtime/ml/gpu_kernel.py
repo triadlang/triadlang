@@ -1,34 +1,17 @@
-"""GPU kernel support for TriadLang.
-
-Provides the @gpu decorator that compiles TriadLang functions to CUDA kernels
-via CuPy's ElementwiseKernel or RawKernel.
-
-When CUDA is available:
-  @gpu fn add(a, b) -> a + b
-  compiles to a CuPy elementwise kernel and runs on GPU.
-
-When CUDA is not available:
-  Falls back to NumPy vectorized operations.
-
-The three pillars are preserved:
-  P1: spectral operations use CuPy FFT (GPU-accelerated)
-  P2: memory fields updated inside GPU kernels
-  P3: FDT noise injected inside GPU kernels
-"""
 from __future__ import annotations
-import numpy as np
-import sys
-from typing import Optional, Callable
+
+from collections.abc import Callable
+
+from triad import ntri as np
 
 try:
     import cupy as _cp
     _CUDA = True
-except Exception:
+except (ImportError, ModuleNotFoundError, AttributeError):
     _cp = None
     _CUDA = False
 
 class GPUKernel:
-    """A compiled GPU kernel that can be called with array arguments."""
 
     def __init__(self, name: str, fn: Callable, kernel_type: str = 'elementwise'):
         self.name = name
@@ -38,7 +21,7 @@ class GPUKernel:
         self._compiled = False
 
     def _compile(self):
-        """Compile the kernel for GPU execution."""
+
         if self._compiled:
             return
         if not _CUDA:
@@ -51,13 +34,13 @@ class GPUKernel:
                 name=f'triad_{self.name}'
             )
             self._compiled = True
-        except Exception:
+        except (RuntimeError, ValueError, ImportError):
             self._kernel = None
             self._compiled = True
 
     def __call__(self, *args):
         if _CUDA and self._kernel is not None:
-            
+
             gpu_args = []
             for a in args:
                 if isinstance(a, np.ndarray):
@@ -74,22 +57,21 @@ class GPUKernel:
             return self._fn(*args)
 
 class GPUKernelBuilder:
-    """Builds GPU kernels from TriadLang function bodies."""
 
     def __init__(self):
         self._kernels: dict[str, GPUKernel] = {}
 
     def register(self, name: str, fn: Callable) -> GPUKernel:
-        """Register a function as a GPU kernel."""
+
         kernel = GPUKernel(name, fn)
         self._kernels[name] = kernel
         return kernel
 
-    def get(self, name: str) -> Optional[GPUKernel]:
+    def get(self, name: str) -> GPUKernel | None:
         return self._kernels.get(name)
 
     def map_array(self, fn: Callable, arr: np.ndarray) -> np.ndarray:
-        """Apply a function element-wise on an array, using GPU if available."""
+
         if _CUDA:
             gpu_arr = _cp.asarray(arr)
             result = fn(gpu_arr)
@@ -100,7 +82,7 @@ class GPUKernelBuilder:
             return fn(arr)
 
     def fused_map(self, fn: Callable, *arrays: np.ndarray) -> np.ndarray:
-        """Apply a multi-argument function element-wise using GPU fusion."""
+
         if _CUDA:
             gpu_arrays = [_cp.asarray(a) for a in arrays]
             result = fn(*gpu_arrays)
@@ -112,36 +94,84 @@ class GPUKernelBuilder:
 
 _builder = GPUKernelBuilder()
 
+_FUSED_ADAM = None
+_FUSED_ADAMW = None
+
+if _CUDA:
+
+    _FUSED_ADAM = _cp.ElementwiseKernel(
+        'T grad, T lr, T b1, T b2, T eps, T bc1, T bc2',
+        'T p, T m, T v',
+        '''
+        m = b1 * m + ((T)1 - b1) * grad;
+        v = b2 * v + ((T)1 - b2) * grad * grad;
+        T mh = m / bc1;
+        T vh = v / bc2;
+        p = p - lr * mh / (sqrt(vh) + eps);
+        ''',
+        name='triad_fused_adam')
+
+    _FUSED_ADAMW = _cp.ElementwiseKernel(
+        'T grad, T lr, T b1, T b2, T eps, T bc1, T bc2, T wd',
+        'T p, T m, T v',
+        '''
+        T g = grad + wd * p;
+        m = b1 * m + ((T)1 - b1) * g;
+        v = b2 * v + ((T)1 - b2) * g * g;
+        T mh = m / bc1;
+        T vh = v / bc2;
+        p = p - lr * mh / (sqrt(vh) + eps);
+        ''',
+        name='triad_fused_adamw')
+
+def fused_adam_step(p, grad, m, v, lr, b1, b2, eps, t):
+
+    if grad.dtype != p.dtype:
+        grad = grad.astype(p.dtype)
+    bc1 = 1.0 - b1 ** t
+    bc2 = 1.0 - b2 ** t
+    _FUSED_ADAM(grad, lr, b1, b2, eps, bc1, bc2, p, m, v)
+
+def fused_adamw_step(p, grad, m, v, lr, b1, b2, eps, t, weight_decay):
+    if grad.dtype != p.dtype:
+        grad = grad.astype(p.dtype)
+    bc1 = 1.0 - b1 ** t
+    bc2 = 1.0 - b2 ** t
+    _FUSED_ADAMW(grad, lr, b1, b2, eps, bc1, bc2, weight_decay, p, m, v)
+
+def fused_available() -> bool:
+    return _CUDA and _FUSED_ADAM is not None
+
 def gpu_kernel(name: str, fn: Callable) -> GPUKernel:
-    """Register a function as a named GPU kernel."""
+
     return _builder.register(name, fn)
 
 def gpu_map(fn: Callable, arr: np.ndarray) -> np.ndarray:
-    """Element-wise map on array, GPU-accelerated when available."""
+
     return _builder.map_array(fn, arr)
 
 def gpu_fused_map(fn: Callable, *arrays: np.ndarray) -> np.ndarray:
-    """Multi-argument element-wise map, GPU-accelerated when available."""
+
     return _builder.fused_map(fn, *arrays)
 
 def gpu_available() -> bool:
-    """Check if GPU (CUDA) is available."""
+
     return _CUDA
 
 def gpu_array(data) -> object:
-    """Create a GPU array from data, falling back to CPU."""
+
     if _CUDA:
         return _cp.asarray(data)
     return np.asarray(data)
 
 def gpu_to_cpu(arr) -> np.ndarray:
-    """Move array to CPU if it is on GPU."""
+
     if _CUDA and hasattr(arr, 'get'):
         return arr.get()
     return np.asarray(arr)
 
 def gpu_info() -> dict:
-    """Return GPU device information."""
+
     if not _CUDA:
         return {'available': False, 'device': None}
     try:
@@ -155,3 +185,4 @@ def gpu_info() -> dict:
         }
     except Exception as e:
         return {'available': True, 'device': 'unknown', 'error': str(e)}
+

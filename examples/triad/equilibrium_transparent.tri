@@ -1,0 +1,61 @@
+import triad.tensor as T;
+import triad.equilibrium as eqm;
+import triad.ntri as np;
+import time;
+
+if not cuda_available() {
+    print("este exemplo requer GPU + cupy (device cuda); nada a medir nesta maquina.");
+    exit(0);
+}
+
+let rng = np.random.default_rng(0);
+let PEQ = 256;
+let GRD = 2048;
+
+fn cadeia_anotada(dev) {
+    let a = T.tensor(rng.standard_normal([PEQ, PEQ]), device=dev, dtype="float32");
+    for i in range(100) {
+        a = T.bmm(a, a) * 0.001;
+    }
+    return a;
+}
+
+fn grande_anotada(dev) {
+    let a = T.tensor(rng.standard_normal([GRD, GRD]), device=dev, dtype="float32");
+    return T.bmm(a, a);
+}
+
+let t0 = time.perf_counter();
+for i in range(8) { cadeia_anotada("cpu"); }
+for i in range(4) { grande_anotada("cuda"); }
+T.sync();
+let tempo_mao = time.perf_counter() - t0;
+print(f"anotado a mao : {tempo_mao:.2f}s");
+
+fn cadeia() {
+    let a = T.tensor(rng.standard_normal([PEQ, PEQ]), dtype="float32");
+    for i in range(100) {
+        a = T.bmm(a, a) * 0.001;
+    }
+    return a;
+}
+
+fn grande() {
+    let a = T.tensor(rng.standard_normal([GRD, GRD]), dtype="float32");
+    return T.bmm(a, a);
+}
+
+eqm.auto_on();
+let t1 = time.perf_counter();
+for i in range(8) { cadeia(); }
+for i in range(4) { grande(); }
+T.sync();
+let tempo_auto = time.perf_counter() - t1;
+eqm.auto_off();
+print(f"transparente  : {tempo_auto:.2f}s");
+
+if tempo_auto <= tempo_mao * 1.1 {
+    print("ACEITE R4: PASSOU");
+} else {
+    print("ACEITE R4: nao passou");
+}

@@ -1,8 +1,14 @@
 from __future__ import annotations
+
 import json
 import os
-import numpy as np
-from typing import Optional, Union
+from typing import TYPE_CHECKING
+
+from triad import ntri as np
+
+if TYPE_CHECKING:
+    import torch
+
 
 class TriadTokenizer:
     def __init__(self, tokenizer):
@@ -22,9 +28,11 @@ class TriadTokenizer:
 
     def apply_chat_template(self, messages: list[dict], add_generation_prompt: bool = True,
                             think: bool = False) -> list[int]:
+
         result = self._tok.apply_chat_template(messages, tokenize=True,
                                                  add_generation_prompt=add_generation_prompt,
-                                                 return_dict=False, think=think)
+                                                 return_dict=False, think=think,
+                                                 enable_thinking=think)
         if hasattr(result, 'input_ids'):
             return result['input_ids']
         if hasattr(result, '__getitem__') and len(result) > 0 and hasattr(result[0], 'ids'):
@@ -36,7 +44,7 @@ class TriadTokenizer:
 
 class TriadModel:
     def __init__(self, config: dict, weights: dict[str, np.ndarray],
-                 tokenizer: Optional[TriadTokenizer] = None):
+                 tokenizer: TriadTokenizer | None = None):
         self.config = config
         self.weights = weights
         self.tokenizer = tokenizer
@@ -92,11 +100,8 @@ class TriadModel:
                 f"weights={nw}, size={total/1e9:.2f}GB)")
 
 class TriadModelGGUF(TriadModel):
-    def __init__(self, config: dict, gguf_reader, tokenizer: Optional[TriadTokenizer] = None):
-        self.config = config
-        self.tokenizer = tokenizer
-        self._arch = _detect_arch(config)
-        self._gpu_weights = None
+    def __init__(self, config: dict, gguf_reader, tokenizer: TriadTokenizer | None = None):
+        super().__init__(config, {}, tokenizer)
         self._reader = gguf_reader
         self._tensor_map = {}
         self._gguf_config(gguf_reader, config)
@@ -118,20 +123,28 @@ class TriadModelGGUF(TriadModel):
                     pass
         config["num_hidden_layers"] = n_layers
 
-    def _to_gpu(self, name: str) -> "torch.Tensor":
+    def _to_gpu(self, name: str) -> torch.Tensor:
         import torch
+        cache = getattr(self, '_gpu_cache', None)
+        if cache is None:
+            cache = {}
+            self._gpu_cache = cache
+        if name in cache:
+            return cache[name]
         t = self._tensor_map.get(name)
         if t is None:
             raise KeyError(f"tensor not found in GGUF: {name}")
         arr = t.data.astype("float32")
-        return torch.from_numpy(arr).half().to(torch.device("cuda"))
+        out = torch.from_numpy(arr).half().to(torch.device("cuda"))
+        cache[name] = out
+        return out
 
-    def get_layer_weights(self, layer_idx: int) -> dict[str, "torch.Tensor"]:
+    def get_layer_weights(self, layer_idx: int) -> dict[str, torch.Tensor]:
         layer_types = self.config.get("layer_types", [])
-        is_linear = layer_types[layer_idx] == "linear_attention" if layer_idx < len(layer_types) else False
+        is_triad = layer_types[layer_idx] == "triad_attention" if layer_idx < len(layer_types) else False
         w = {}
         prefix = f"blk.{layer_idx}"
-        if is_linear:
+        if is_triad:
             w["input_layernorm.weight"] = self._to_gpu(f"{prefix}.attn_norm.weight")
             w["in_proj_qkv.weight"] = self._to_gpu(f"{prefix}.attn_qkv.weight")
             w["in_proj_z.weight"] = self._to_gpu(f"{prefix}.attn_gate.weight")
@@ -156,20 +169,20 @@ class TriadModelGGUF(TriadModel):
         w["down_proj.weight"] = self._to_gpu(f"{prefix}.ffn_down.weight")
         return w
 
-    def get_embed_weight(self) -> "torch.Tensor":
+    def get_embed_weight(self) -> torch.Tensor:
         return self._to_gpu("token_embd.weight")
 
-    def get_norm_weight(self) -> "torch.Tensor":
+    def get_norm_weight(self) -> torch.Tensor:
         return self._to_gpu("output_norm.weight")
 
-    def get_lm_head_weight(self) -> "torch.Tensor":
+    def get_lm_head_weight(self) -> torch.Tensor:
         if "output.weight" in self._tensor_map:
             return self._to_gpu("output.weight")
         return self.get_embed_weight()
 
     @property
     def weights(self):
-        return {}
+        return {t.name: t.data for t in self._tensor_map.values()}
 
     def has(self, name: str) -> bool:
         return name in self._tensor_map
@@ -206,15 +219,20 @@ def _hf_dir(name_or_path: str) -> str:
         return name_or_path
     try:
         from huggingface_hub import snapshot_download
+
+        from runtime.security import get_policy
+        policy = get_policy()
+        if policy.safe and not policy.capabilities.ml_download_remote:
+            raise PermissionError('remote model download disabled by policy')
         return snapshot_download(name_or_path)
-    except Exception:
+    except (ImportError, OSError, ValueError):
         raise FileNotFoundError(f"cannot find model: {name_or_path}")
 
 def _load_config(model_dir: str) -> dict:
     cfg_path = os.path.join(model_dir, "config.json")
     if not os.path.isfile(cfg_path):
         raise FileNotFoundError(f"no config.json in {model_dir}")
-    with open(cfg_path, "r") as f:
+    with open(cfg_path) as f:
         cfg = json.load(f)
     if "text_config" in cfg:
         tc = cfg.pop("text_config")
@@ -226,7 +244,7 @@ def _load_config(model_dir: str) -> dict:
     return cfg
 
 def _load_safetensors(model_dir: str, dtype=np.float32,
-                      prefix_filter: Optional[str] = None) -> dict[str, np.ndarray]:
+                      prefix_filter: str | None = None) -> dict[str, np.ndarray]:
     from safetensors import safe_open
     weights = {}
     has_torch = False
@@ -267,45 +285,62 @@ def _load_gguf_weights(gguf_path: str) -> tuple[dict, dict[str, np.ndarray]]:
     weights = {}
     for field in reader.fields.values():
         if field.name in ("general.architecture",):
-            config["model_type"] = str(field.parts[field.data[0]])
+            config["model_type"] = _gguf_str(field)
     for field in reader.fields.values():
         if hasattr(field, 'types') and str(field.types) == 'GGUFValueType.STRING':
             try:
-                config[field.name] = str(field.parts[field.data[0]])
-            except Exception:
-                pass
+                config[field.name] = _gguf_str(field)
+            except Exception as e:
+                import warnings
+                warnings.warn(f'GGUF string field {field.name}: {type(e).__name__}')
         elif hasattr(field, 'types'):
             try:
                 val = field.parts[field.data[0]]
                 if hasattr(val, 'item'):
                     val = val.item()
                 config[field.name] = val
-            except Exception:
-                pass
+            except Exception as e:
+                import warnings
+                warnings.warn(f'GGUF field {field.name}: {type(e).__name__}')
+    from runtime.ml.gguf import _HF_BLK, _HF_MAP
+    top_map = dict(_HF_MAP)
+    blk_map = dict(_HF_BLK)
+
+    def _to_hf(name: str) -> str:
+
+        if name in top_map:
+            return top_map[name]
+        if name.startswith('blk.'):
+            _, idx, rest = name.split('.', 2)
+            if rest in blk_map:
+                return f'model.layers.{idx}.{blk_map[rest]}'
+        return name
+
+    from gguf import quants as _gq
+    from gguf.constants import GGMLQuantizationType as _GQT
     for tensor in reader.tensors:
-        name = tensor.name
-        if name.endswith(".weight"):
-            name = name[:-7]
-        elif name.endswith(".bias"):
-            name = name[:-5]
         arr = tensor.data
-        if hasattr(arr, 'copy'):
+        ttype = tensor.tensor_type
+        if ttype not in (_GQT.F32, _GQT.F16, _GQT.F64):
+
+            arr = _gq.dequantize(arr, ttype)
+        elif hasattr(arr, 'copy'):
             arr = arr.copy()
         if arr.dtype != np.float32 and arr.dtype != np.float16:
             arr = arr.astype(np.float32)
-        weights[name] = arr
+        weights[_to_hf(tensor.name)] = arr
     return config, weights
 
-def load_tokenizer(name_or_path: str, gguf_file: Optional[str] = None) -> TriadTokenizer:
+def load_tokenizer(name_or_path: str, gguf_file: str | None = None) -> TriadTokenizer:
     from transformers import AutoTokenizer
     if gguf_file:
         tok = AutoTokenizer.from_pretrained(name_or_path, gguf_file=gguf_file)
     else:
-        tok = AutoTokenizer.from_pretrained(name_or_path, trust_remote_code=True)
+        tok = AutoTokenizer.from_pretrained(name_or_path)
     return TriadTokenizer(tok)
 
 def load_model(name_or_path: str,
-               gguf_file: Optional[str] = None,
+               gguf_file: str | None = None,
                dtype: str = "float32") -> TriadModel:
 
     if gguf_file:
@@ -321,7 +356,7 @@ def load_model(name_or_path: str,
         config = _gguf_extract_config(reader)
         try:
             model_dir = _hf_dir(name_or_path)
-        except Exception:
+        except (FileNotFoundError, OSError):
             model_dir = ""
         cfg_file = os.path.join(model_dir, "config.json") if model_dir else ""
         if cfg_file and os.path.isfile(cfg_file):
@@ -338,7 +373,10 @@ def load_model(name_or_path: str,
                 for k, v in hf_config.items():
                     if k not in config:
                         config[k] = v
-        tok = load_tokenizer(name_or_path)
+        try:
+            tok = load_tokenizer(name_or_path)
+        except (OSError, FileNotFoundError):
+            tok = load_tokenizer(name_or_path, gguf_file=os.path.basename(gguf_path))
         arch = _detect_arch(config)
         if arch == "qwen3_5":
             return TriadModelGGUF(config, reader, tok)
@@ -366,25 +404,34 @@ def load_model(name_or_path: str,
         weights = converted
     return TriadModel(config, weights, tok)
 
+def _gguf_str(field) -> str:
+    raw = field.parts[field.data[0]]
+    try:
+        return bytes(raw).decode('utf-8')
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return str(raw)
+
 def _gguf_extract_config(reader) -> dict:
     config = {}
     for field in reader.fields.values():
         if field.name in ("general.architecture",):
-            config["model_type"] = str(field.parts[field.data[0]])
+            config["model_type"] = _gguf_str(field)
     for field in reader.fields.values():
         if hasattr(field, 'types') and str(field.types) == 'GGUFValueType.STRING':
             try:
-                config[field.name] = str(field.parts[field.data[0]])
-            except Exception:
-                pass
+                config[field.name] = _gguf_str(field)
+            except Exception as e:
+                import warnings
+                warnings.warn(f'GGUF string field {field.name}: {type(e).__name__}')
         elif hasattr(field, 'types'):
             try:
                 val = field.parts[field.data[0]]
                 if hasattr(val, 'item'):
                     val = val.item()
                 config[field.name] = val
-            except Exception:
-                pass
+            except Exception as e:
+                import warnings
+                warnings.warn(f'GGUF field {field.name}: {type(e).__name__}')
     n_layers = 0
     for t in reader.tensors:
         parts = t.name.split(".")
@@ -394,4 +441,28 @@ def _gguf_extract_config(reader) -> dict:
             except ValueError:
                 pass
     config["num_hidden_layers"] = n_layers
+
+    a = config.get("model_type", "")
+    def _kv(suffix, default=None):
+        return config.get(f"{a}.{suffix}", default)
+    n_heads = _kv("attention.head_count")
+    hidden = _kv("embedding_length")
+    derived = {
+        "num_attention_heads": n_heads,
+        "num_key_value_heads": _kv("attention.head_count_kv", n_heads),
+        "hidden_size": hidden,
+        "head_dim": _kv("attention.key_length",
+                        (hidden // n_heads) if (hidden and n_heads) else None),
+        "rms_norm_eps": _kv("attention.layer_norm_rms_epsilon"),
+        "rope_theta": _kv("rope.freq_base"),
+        "intermediate_size": _kv("feed_forward_length"),
+        "vocab_size": _kv("vocab_size"),
+        "max_position_embeddings": _kv("context_length"),
+    }
+    for k, v in derived.items():
+        if v is not None and config.get(k) is None:
+            config[k] = v
+    if config.get("tie_word_embeddings") is None:
+        tensor_names = {t.name for t in reader.tensors}
+        config["tie_word_embeddings"] = "output.weight" not in tensor_names
     return config

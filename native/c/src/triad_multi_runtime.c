@@ -1,25 +1,6 @@
-/*
- * triad_multi_runtime.c — Native C port of runtime/multi_runtime.py.
- *
- * Supports 1D, 2D, 3D substrates lockstep with the SAME split-step
- * Strang scheme used by triad_solve_1d / triad_solve_2d / triad_solve_3d.
- *
- * P1+P2+P3 PRESERVATION (all dimensions):
- *   P1 (Schrödinger non-linear, Λ|ψ|²) — present in V_total = ... + Λ ρ.
- *   P2 (hierarchical memory) — V_mem = Σ_j λ_j y_j with OU half-steps
- *       around the potential phase, broadcast over the full ND grid.
- *   P3 (fluctuation-dissipation lock) — noise_amp = sqrt(f_FDT dt / dx^D),
- *       added between the closing OU half-step and the closing
- *       half-linear step. f_FDT == 0 ⇒ no noise, but the other pillars
- *       still run.
- *
- * Coupling on top of that: V_couple is added to V_total in every step.
- * Cross-dimensional couplings use triad_mr_project_to_shape to bridge
- * src and dst grids (sum-projection for down-cast, Gaussian envelope
- * for up-cast — same rule as runtime/multi_runtime.py).
- */
 #define _POSIX_C_SOURCE 200809L
 #include "triad_multi_runtime.h"
+#include "triad_observables.h"
 #include "triad_rt.h"
 
 #include <math.h>
@@ -27,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* portable strdup */
 static char *_dup_str(const char *s) {
     if (!s) return NULL;
     size_t n = strlen(s) + 1;
@@ -35,8 +15,6 @@ static char *_dup_str(const char *s) {
     if (out) memcpy(out, s, n);
     return out;
 }
-
-/* ── helpers ───────────────────────────────────────────────────── */
 
 static TriadCplx _cmul(TriadCplx a, TriadCplx b) {
     return (TriadCplx){ a.re*b.re - a.im*b.im, a.re*b.im + a.im*b.re };
@@ -56,6 +34,28 @@ static double _randn(uint64_t *state) {
     return sqrt(-2.0 * log(u1)) * cos(2.0 * TRIAD_PI * u2);
 }
 
+static double triad_mr_pairwise_sum(const double *a, int64_t n) {
+    if (n < 8) {
+        double r = 0.0;
+        for (int64_t i = 0; i < n; ++i) r += a[i];
+        return r;
+    }
+    if (n <= 128) {
+        double r[8];
+        for (int k = 0; k < 8; ++k) r[k] = a[k];
+        int64_t i = 8;
+        for (; i < n - (n % 8); i += 8)
+            for (int k = 0; k < 8; ++k) r[k] += a[i + k];
+        double res = ((r[0] + r[1]) + (r[2] + r[3])) +
+                     ((r[4] + r[5]) + (r[6] + r[7]));
+        for (; i < n; ++i) res += a[i];
+        return res;
+    }
+    int64_t n2 = n / 2;
+    n2 -= n2 % 8;
+    return triad_mr_pairwise_sum(a, n2) + triad_mr_pairwise_sum(a + n2, n - n2);
+}
+
 static int64_t _grid_size(int D, int N) {
     if (D == 1) return (int64_t)N;
     if (D == 2) return (int64_t)N * (int64_t)N;
@@ -63,15 +63,12 @@ static int64_t _grid_size(int D, int N) {
     return 0;
 }
 
-/* dx^D helper for noise normalisation */
 static double _dx_pow_D(double dx, int D) {
     if (D == 1) return dx;
     if (D == 2) return dx * dx;
     if (D == 3) return dx * dx * dx;
     return dx;
 }
-
-/* ── V_ext builder ND ──────────────────────────────────────────── */
 
 static void _build_V_ext_static(TriadSubstrate *s) {
     double *V = s->V_ext_static;
@@ -93,7 +90,7 @@ static void _build_V_ext_static(TriadSubstrate *s) {
                     V[(int64_t)i * N + j] = c * (xi * xi + xj * xj);
                 }
             }
-        } else {  /* 3D */
+        } else {
             for (int i = 0; i < N; ++i) {
                 double xi = s->x[i];
                 for (int j = 0; j < N; ++j) {
@@ -108,26 +105,20 @@ static void _build_V_ext_static(TriadSubstrate *s) {
         }
         return;
     }
-    /* unknown shape → zeros (first port; templates extend later) */
     memset(V, 0, sizeof(double) * (size_t)G);
 }
 
 static void _effective(TriadSubstrate *s) {
-    if (s->mode == 0) {
-        s->Lambda_e = 0; s->alpha_e = 0; s->Gamma_e = 0; s->f_FDT_e = 0;
-        for (int j = 0; j < s->M; ++j) s->lam_e[j] = 0.0;
-    } else if (s->mode == 1) {
-        s->Lambda_e = 0; s->alpha_e = 0;
-        s->Gamma_e = s->Gamma; s->f_FDT_e = s->f_FDT;
-        for (int j = 0; j < s->M; ++j) s->lam_e[j] = 0.0;
-    } else {
-        s->Lambda_e = s->Lambda; s->alpha_e = s->alpha;
-        s->Gamma_e = s->Gamma;   s->f_FDT_e = s->f_FDT;
-        memcpy(s->lam_e, s->lam, sizeof(double) * (size_t)s->M);
+
+    s->Lambda_e = s->Lambda; s->alpha_e = s->alpha;
+    s->Gamma_e = s->Gamma;   s->f_FDT_e = s->f_FDT;
+
+    if (s->fdt_couple && s->Gamma > 0.0) {
+        s->f_FDT_e = 2.0 * s->Gamma * _dx_pow_D(s->dx, s->D) * s->kT / s->hbar;
     }
+    memcpy(s->lam_e, s->lam, sizeof(double) * (size_t)s->M);
 }
 
-/* Build half_lin over the ND grid — same fórmula as triad_solve_{1,2,3}d. */
 static void _build_propagators(TriadSubstrate *s) {
     int N = s->N;
     double step = s->L / (double)N;
@@ -164,7 +155,7 @@ static void _build_propagators(TriadSubstrate *s) {
                 s->half_lin[idx].im = mag * sin(angle);
             }
         }
-    } else { /* 3D */
+    } else {
         for (int i = 0; i < N; ++i) {
             for (int j = 0; j < N; ++j) {
                 for (int k = 0; k < N; ++k) {
@@ -186,14 +177,15 @@ static void _build_propagators(TriadSubstrate *s) {
         s->ou_decay_half[j] = exp(-s->nu[j] * s->dt * 0.5);
     }
 
-    s->noise_amp = (s->f_FDT_e > 0.0)
-                 ? sqrt(s->f_FDT_e * s->dt / _dx_pow_D(s->dx, s->D))
-                 : 0.0;
+    {
+        double noise_fdt = s->f_FDT_e;
+        if (noise_fdt < 1e-12)
+            noise_fdt = 1e-12;
+        s->noise_amp = sqrt(noise_fdt * s->dt / _dx_pow_D(s->dx, s->D));
+    }
 
     _build_V_ext_static(s);
 }
-
-/* ── default Gaussian initial psi ──────────────────────────────── */
 
 static void _default_psi(TriadSubstrate *s) {
     int N = s->N;
@@ -217,7 +209,7 @@ static void _default_psi(TriadSubstrate *s) {
                 sum += g * g;
             }
         }
-    } else { /* 3D */
+    } else {
         for (int i = 0; i < N; ++i) {
             double xi = s->x[i];
             for (int j = 0; j < N; ++j) {
@@ -236,18 +228,22 @@ static void _default_psi(TriadSubstrate *s) {
     for (int64_t i = 0; i < G; ++i) s->psi[i].re *= inv;
 }
 
-/* ── substrate lifecycle ───────────────────────────────────────── */
-
 static TriadSubstrate *_substrate_new(int id, const char *name, int D,
                                       int N, double L, double dt,
                                       double hbar, double m, double omega,
                                       double Lambda, double alpha,
                                       double sigma, double Gamma, double f_FDT,
+                                      int fdt_couple, double kT,
                                       int M, const double *nu, const double *lam,
                                       int p_mode, uint64_t seed,
                                       const char *V_ext,
                                       const TriadCplx *psi_init) {
     if (D < 1 || D > 3) return NULL;
+    if (M < 3) return NULL;
+    if (p_mode != 2) return NULL;
+    if (Gamma <= 0.0) return NULL;
+    if (f_FDT <= 0.0) return NULL;
+    if (kT <= 0.0) return NULL;
     TriadSubstrate *s = (TriadSubstrate *)calloc(1, sizeof(TriadSubstrate));
     s->id = id;
     s->name = name ? _dup_str(name) : _dup_str("");
@@ -258,10 +254,11 @@ static TriadSubstrate *_substrate_new(int id, const char *name, int D,
     s->hbar = hbar; s->m = m; s->omega = omega;
     s->Lambda = Lambda; s->alpha = alpha; s->sigma = sigma;
     s->Gamma = Gamma; s->f_FDT = f_FDT;
+    s->fdt_couple = fdt_couple; s->kT = kT;
     s->M = M; s->mode = p_mode; s->seed = seed;
     s->V_ext = V_ext;
 
-    int M_alloc = M > 0 ? M : 1;
+    int M_alloc = M;
     s->nu  = (double *)calloc((size_t)M_alloc, sizeof(double));
     s->lam = (double *)calloc((size_t)M_alloc, sizeof(double));
     s->lam_e = (double *)calloc((size_t)M_alloc, sizeof(double));
@@ -277,7 +274,7 @@ static TriadSubstrate *_substrate_new(int id, const char *name, int D,
     s->half_lin = (TriadCplx *)calloc((size_t)G, sizeof(TriadCplx));
     s->psi = (TriadCplx *)calloc((size_t)G, sizeof(TriadCplx));
     int64_t y_size = (int64_t)M * G;
-    s->y = (double *)calloc((size_t)(y_size > 0 ? y_size : 1), sizeof(double));
+    s->y = (double *)calloc((size_t)y_size, sizeof(double));
     s->psi_scratch = (TriadCplx *)calloc((size_t)G, sizeof(TriadCplx));
     s->psi_freq    = (TriadCplx *)calloc((size_t)G, sizeof(TriadCplx));
     s->V_couple = (double *)calloc((size_t)G, sizeof(double));
@@ -315,8 +312,6 @@ static void _substrate_free(TriadSubstrate *s) {
     free(s);
 }
 
-/* ── runtime lifecycle ─────────────────────────────────────────── */
-
 TriadMultiRuntime *triad_mr_new(double dt, int record_every) {
     TriadMultiRuntime *rt = (TriadMultiRuntime *)calloc(1, sizeof(TriadMultiRuntime));
     rt->dt = dt;
@@ -331,8 +326,17 @@ void triad_mr_free(TriadMultiRuntime *rt) {
     for (int i = 0; i < rt->n_substrates; ++i) _substrate_free(rt->substrates[i]);
     free(rt->substrates);
     for (int s = 0; s < rt->n_segments; ++s) {
-        free(rt->segments[s].edges);
-        free(rt->segments[s].active_ids);
+        TriadSegment *seg = &rt->segments[s];
+
+        free(seg->links);
+        free(seg->active_ids);
+
+        free(seg->router);
+
+        for (int v = 0; v < seg->n_v_ext_overrides; ++v)
+            free(seg->v_ext_overrides[v]);
+        free(seg->v_ext_overrides);
+        free(seg->v_ext_override_ids);
     }
     free(rt->segments);
     free(rt->diverged_name);
@@ -343,6 +347,7 @@ int triad_mr_add_substrate(TriadMultiRuntime *rt, const char *name, int D,
                            int N, double L, double hbar, double m,
                            double omega, double Lambda, double alpha,
                            double sigma, double Gamma, double f_FDT,
+                           int fdt_couple, double kT,
                            int M, const double *nu, const double *lam,
                            int p_mode, uint64_t seed,
                            const char *V_ext,
@@ -357,6 +362,7 @@ int triad_mr_add_substrate(TriadMultiRuntime *rt, const char *name, int D,
     int id = rt->n_substrates++;
     TriadSubstrate *s = _substrate_new(id, name, D,
         N, L, rt->dt, hbar, m, omega, Lambda, alpha, sigma, Gamma, f_FDT,
+        fdt_couple, kT,
         M, nu, lam, p_mode, seed, V_ext, psi_init);
     if (!s) { rt->n_substrates--; return -1; }
     s->record_every = rt->record_every;
@@ -369,32 +375,22 @@ int triad_mr_add_substrate_1d(TriadMultiRuntime *rt,
                               int N, double L, double hbar, double m,
                               double omega, double Lambda, double alpha,
                               double sigma, double Gamma, double f_FDT,
+                              int fdt_couple, double kT,
                               int M, const double *nu, const double *lam,
                               int p_mode, uint64_t seed,
                               const char *V_ext,
                               const TriadCplx *psi_init) {
-    return triad_mr_add_substrate(rt, name, /*D*/1,
+    return triad_mr_add_substrate(rt, name, 1,
         N, L, hbar, m, omega, Lambda, alpha, sigma, Gamma, f_FDT,
+        fdt_couple, kT,
         M, nu, lam, p_mode, seed, V_ext, psi_init);
 }
 
-void triad_mr_add_segment(TriadMultiRuntime *rt,
-                          double t_start, double t_end,
-                          TriadCouplingEdge *edges, int n_edges,
-                          int *active_ids, int n_active) {
-    if (rt->n_segments == rt->cap_segments) {
-        int new_cap = rt->cap_segments ? rt->cap_segments * 2 : 4;
-        rt->segments = (TriadSegment *)realloc(
-            rt->segments, sizeof(TriadSegment) * (size_t)new_cap);
-        rt->cap_segments = new_cap;
-    }
-    TriadSegment *seg = &rt->segments[rt->n_segments++];
-    seg->t_start = t_start;
-    seg->t_end = t_end;
-    seg->edges = edges;
-    seg->n_edges = n_edges;
-    seg->active_ids = active_ids;
-    seg->n_active = n_active;
+int triad_mr_set_v_ext(TriadMultiRuntime *rt, int sid, const double *V) {
+    if (!rt || sid < 0 || sid >= rt->n_substrates || !V) return -1;
+    TriadSubstrate *s = rt->substrates[sid];
+    memcpy(s->V_ext_static, V, sizeof(double) * (size_t)s->grid_size);
+    return 0;
 }
 
 TriadSubstrate *triad_mr_get(TriadMultiRuntime *rt, int sid) {
@@ -409,8 +405,6 @@ TriadSubstrate *triad_mr_find(TriadMultiRuntime *rt, const char *name) {
     return NULL;
 }
 
-/* ── _project_to_shape — byte-equivalent of Python rule ────────── */
-
 double *triad_mr_project_to_shape(const double *src_rho,
                                   int src_D, int src_N,
                                   int dst_D, int dst_N) {
@@ -424,7 +418,6 @@ double *triad_mr_project_to_shape(const double *src_rho,
         return out;
     }
 
-    /* down-projection */
     if (src_D == 3 && dst_D == 1 && src_N == dst_N) {
         int N = src_N;
         for (int i = 0; i < N; ++i) {
@@ -445,19 +438,7 @@ double *triad_mr_project_to_shape(const double *src_rho,
         }
         return out;
     }
-    if (src_D == 3 && dst_D == 2 && src_N == dst_N) {
-        /* Python only specifies 3D↔1D and 2D↔1D explicitly; 3D→2D falls
-         * into the "unsupported" branch returning zeros. Match that. */
-        return out;
-    }
 
-    /* up-projection: 1D → 2D or 3D via outer product with normalised
-     * Gaussian envelope, width = N/8 (Python).
-     *   env[k] = exp(-(k - N/2)² / (2 (N/8)²))
-     *   env /= env.sum()
-     * 1D→3D: proj_2d = src[:, None] * env[None, :]
-     *        proj_3d = proj_2d[:, :, None] * env[None, None, :]
-     */
     if (src_D == 1 && src_N == dst_N) {
         int N = src_N;
         double *env = (double *)malloc(sizeof(double) * (size_t)N);
@@ -489,13 +470,196 @@ double *triad_mr_project_to_shape(const double *src_rho,
         return out;
     }
 
-    /* unsupported combination → zeros (matches Python fallback) */
     return out;
 }
 
-/* ── per-step kernel — ND ──────────────────────────────────────── */
+void triad_mr_add_segment(TriadMultiRuntime *rt,
+                          double t_start, double t_end,
+                          TriadCouplingLink *links, int n_links,
+                          int *active_ids, int n_active) {
+    if (!rt) return;
+    if (rt->n_segments == rt->cap_segments) {
+        int new_cap = rt->cap_segments ? rt->cap_segments * 2 : 4;
+        rt->segments = (TriadSegment *)realloc(
+            rt->segments, sizeof(TriadSegment) * (size_t)new_cap);
+        rt->cap_segments = new_cap;
+    }
+    TriadSegment *seg = &rt->segments[rt->n_segments++];
+    seg->t_start = t_start;
+    seg->t_end = t_end;
+    seg->n_links = n_links;
+    seg->n_active = n_active;
+    seg->router = NULL;
+    seg->v_ext_override_ids = NULL;
+    seg->v_ext_overrides = NULL;
+    seg->n_v_ext_overrides = 0;
 
-/* Apply ND FFT in-place via psi_scratch. */
+
+    if (n_links > 0 && links) {
+        TriadCouplingLink *links_copy = (TriadCouplingLink *)malloc(
+            sizeof(TriadCouplingLink) * (size_t)n_links);
+        memcpy(links_copy, links, sizeof(TriadCouplingLink) * (size_t)n_links);
+        seg->links = links_copy;
+    } else {
+        seg->links = NULL;
+    }
+
+    if (n_active > 0 && active_ids) {
+        int *active_copy = (int *)malloc(sizeof(int) * (size_t)n_active);
+        memcpy(active_copy, active_ids, sizeof(int) * (size_t)n_active);
+        seg->active_ids = active_copy;
+    } else {
+        seg->active_ids = NULL;
+    }
+}
+
+void triad_mr_segment_set_router(TriadMultiRuntime *rt,
+                                 int seg_index,
+                                 TriadFieldRouterMethod method,
+                                 double temperature) {
+    if (!rt || seg_index < 0 || seg_index >= rt->n_segments) return;
+    TriadSegment *seg = &rt->segments[seg_index];
+
+    free(seg->router);
+    seg->router = (TriadFieldRouter *)malloc(sizeof(TriadFieldRouter));
+    seg->router->method = method;
+    seg->router->temperature = temperature;
+}
+
+int triad_mr_segment_add_v_ext_override(TriadMultiRuntime *rt,
+                                        int seg_index,
+                                        int substrate_id,
+                                        const double *V) {
+    if (!rt || seg_index < 0 || seg_index >= rt->n_segments) return -1;
+    if (substrate_id < 0 || substrate_id >= rt->n_substrates) return -1;
+    TriadSegment *seg = &rt->segments[seg_index];
+    TriadSubstrate *s = rt->substrates[substrate_id];
+    int64_t G = s->grid_size;
+
+    int n = seg->n_v_ext_overrides;
+
+    seg->v_ext_override_ids = (int *)realloc(
+        seg->v_ext_override_ids, sizeof(int) * (size_t)(n + 1));
+    seg->v_ext_overrides = (double **)realloc(
+        seg->v_ext_overrides, sizeof(double *) * (size_t)(n + 1));
+
+    seg->v_ext_override_ids[n] = substrate_id;
+    seg->v_ext_overrides[n] = (double *)malloc(sizeof(double) * (size_t)G);
+    memcpy(seg->v_ext_overrides[n], V, sizeof(double) * (size_t)G);
+    seg->n_v_ext_overrides = n + 1;
+    return 0;
+}
+
+TriadSubstrateObservables triad_mr_compute_observables(const TriadSubstrate *s) {
+    TriadSubstrateObservables obs;
+    obs.substrate_id = s->id;
+
+
+    if (s->D == 1) {
+        obs.energy = triad_obs_energy(s->psi, s->N, s->dx,
+                                      s->hbar, s->m, s->Lambda_e,
+                                      s->V_ext_static, s->V_mem);
+    } else {
+
+        obs.energy = 0.0;
+    }
+
+
+    double k_cutoff = 2.0 * TRIAD_PI / s->L;
+    obs.crystallinity = triad_obs_crystallinity(s->psi, s->N, s->dx, k_cutoff);
+
+
+    obs.fdt_precision = triad_obs_fdt_precision(s->f_FDT_e, s->dx, s->D);
+
+
+    obs.k_star = triad_obs_dominant_wavenumber(s->psi, s->N, s->dx,
+                                               2.0 * TRIAD_PI / s->L);
+
+
+    obs.ipr_val = triad_obs_ipr(s->psi, s->grid_size, s->dx);
+
+    return obs;
+}
+
+void triad_mr_compute_gates(int n_subs,
+                            const TriadSubstrateObservables *obs,
+                            const TriadFieldRouter *router,
+                            double *gates) {
+    if (n_subs <= 0) return;
+
+    if (router->method == TRIAD_ROUTER_UNIFORM) {
+        double g = 1.0 / (double)n_subs;
+        for (int i = 0; i < n_subs; ++i) gates[i] = g;
+        return;
+    }
+
+
+    double *prec = (double *)malloc(sizeof(double) * (size_t)n_subs);
+    double sum_prec = 0.0;
+    for (int i = 0; i < n_subs; ++i) {
+        prec[i] = obs[i].fdt_precision;
+        if (prec[i] < 1e-30) prec[i] = 1e-30;
+        sum_prec += prec[i];
+    }
+
+    if (router->temperature > 0.0) {
+
+        double max_log = -1e300;
+        for (int i = 0; i < n_subs; ++i) {
+            double lp = log(prec[i]) / router->temperature;
+            if (lp > max_log) max_log = lp;
+            gates[i] = lp;
+        }
+        double sum_exp = 0.0;
+        for (int i = 0; i < n_subs; ++i) {
+            gates[i] = exp(gates[i] - max_log);
+            sum_exp += gates[i];
+        }
+        if (sum_exp > 0.0) {
+            for (int i = 0; i < n_subs; ++i) gates[i] /= sum_exp;
+        } else {
+            double g = 1.0 / (double)n_subs;
+            for (int i = 0; i < n_subs; ++i) gates[i] = g;
+        }
+    } else {
+
+        if (sum_prec > 0.0) {
+            for (int i = 0; i < n_subs; ++i) gates[i] = prec[i] / sum_prec;
+        } else {
+            double g = 1.0 / (double)n_subs;
+            for (int i = 0; i < n_subs; ++i) gates[i] = g;
+        }
+    }
+
+
+    double sum_g = 0.0;
+    for (int i = 0; i < n_subs; ++i) sum_g += gates[i];
+    if (sum_g > 0.0) {
+        for (int i = 0; i < n_subs; ++i) gates[i] /= sum_g;
+    }
+
+    free(prec);
+}
+
+void triad_mr_field_router_route(int n_links,
+                                 const TriadCouplingLink *links,
+                                 int n_subs,
+                                 const double *gates,
+                                 double *eff_kappa) {
+    for (int e = 0; e < n_links; ++e) {
+        int src = links[e].src_id;
+        int dst = links[e].dst_id;
+        double src_gate = (src >= 0 && src < n_subs) ? gates[src] : 0.0;
+        double dst_gate = (dst >= 0 && dst < n_subs) ? gates[dst] : 0.0;
+
+        if (src_gate > 0.0 && dst_gate > 0.0) {
+            eff_kappa[e] = links[e].kappa * sqrt(src_gate * dst_gate);
+        } else {
+            eff_kappa[e] = 0.0;
+        }
+    }
+}
+
 static void _ndfft(const TriadSubstrate *s, const TriadCplx *in, TriadCplx *out) {
     if (s->D == 1) triad_fft_fn(s->N, in, out);
     else if (s->D == 2) triad_fft2_fn(s->N, in, out);
@@ -509,28 +673,29 @@ static void _ndifft(const TriadSubstrate *s, const TriadCplx *in, TriadCplx *out
 
 static void _step_one(TriadSubstrate *s,
                       double *const *rho_snapshots,
-                      TriadSubstrate **all_subs, /* live ptrs for phase_coherent */
+                      TriadSubstrate **all_subs,
                       int n_all_subs,
-                      const int *rho_D,    /* per-substrate dimensionality */
-                      const int *rho_N,    /* per-substrate axis size */
-                      const TriadCouplingEdge *inbound, int n_inbound,
+                      const int *rho_D,
+                      const int *rho_N,
+                      const TriadCouplingLink *inbound, int n_inbound,
+                      const double *eff_kappa,
                       uint64_t *rng_state) {
     int64_t G = s->grid_size;
     int M = s->M;
     double dt = s->dt;
     double dt_over_hbar = dt / s->hbar;
 
-    /* 1. half-linear: psi <- ifft(fft(psi) * half_lin) */
+
     _ndfft(s, s->psi, s->psi_freq);
     for (int64_t i = 0; i < G; ++i)
         s->psi_freq[i] = _cmul(s->psi_freq[i], s->half_lin[i]);
     _ndifft(s, s->psi_freq, s->psi);
 
-    /* 2. rho = |psi|² */
+
     double *rho = (double *)malloc(sizeof(double) * (size_t)G);
     for (int64_t i = 0; i < G; ++i) rho[i] = _cabs2(s->psi[i]);
 
-    /* 3. OU half-step (broadcast over the full ND grid) */
+
     if (M > 0) {
         for (int j = 0; j < M; ++j) {
             double od = s->ou_decay_half[j];
@@ -540,7 +705,7 @@ static void _step_one(TriadSubstrate *s,
         }
     }
 
-    /* 4. V_mem = Σ λ_j y_j */
+
     for (int64_t i = 0; i < G; ++i) s->V_mem[i] = 0.0;
     if (M > 0) {
         for (int j = 0; j < M; ++j) {
@@ -550,12 +715,24 @@ static void _step_one(TriadSubstrate *s,
         }
     }
 
-    /* 5. V_couple from inbound edges (with cross-dim projection) */
+
     for (int64_t i = 0; i < G; ++i) s->V_couple[i] = 0.0;
     for (int e = 0; e < n_inbound; ++e) {
-        const TriadCouplingEdge *ed = &inbound[e];
+        const TriadCouplingLink *ed = &inbound[e];
         const double *src = rho_snapshots[ed->src_id];
         if (!src) continue;
+
+
+        double k_eff = ed->kappa;
+        if (eff_kappa != NULL) k_eff = eff_kappa[e];
+
+
+        if (ed->kappa_modulator != NULL) {
+            double mod = ed->kappa_modulator(rho_snapshots, n_all_subs,
+                                             ed->kappa_modulator_data);
+            k_eff = ed->kappa * mod;
+        }
+
         int sD = rho_D[ed->src_id];
         int sN = rho_N[ed->src_id];
         const double *src_proj = src;
@@ -564,41 +741,26 @@ static void _step_one(TriadSubstrate *s,
             projected = triad_mr_project_to_shape(src, sD, sN, s->D, s->N);
             src_proj = projected;
         }
+
         if (ed->mode == TRIAD_COUPLING_DC_SUBTRACTED) {
-            double mean = 0.0;
-            for (int64_t i = 0; i < G; ++i) mean += src_proj[i];
-            mean /= (double)G;
-            double k = ed->kappa;
+            double mean = triad_mr_pairwise_sum(src_proj, G) / (double)G;
             for (int64_t i = 0; i < G; ++i)
-                s->V_couple[i] += k * (src_proj[i] - mean);
+                s->V_couple[i] += k_eff * (src_proj[i] - mean);
         } else if (ed->mode == TRIAD_COUPLING_PHASE_COHERENT) {
-            /* V += κ · Re(Ψ_src · e^{-i k_target · r})
-             * Mirrors runtime/multi_runtime.py: reads Ψ_src directly
-             * (not ρ), so src must have same grid shape as dst (no
-             * cross-dim projection — Python doesn't define one for this
-             * mode either). In ND r = x [+ y [+ z]] with isotropic
-             * scalar k_target. */
-            /* Match runtime/multi_runtime.py: phase_coherent reads
-             * src_sub.psi DIRECTLY (the LIVE psi, not the start-of-step
-             * snapshot). Since substrates are processed in id order, B's
-             * edge from A sees A's psi AFTER A's step — same as Python
-             * iterating self.substrates.items() in insertion order. */
             TriadCplx *src_psi = NULL;
             if (ed->src_id >= 0 && ed->src_id < n_all_subs) {
                 src_psi = all_subs[ed->src_id]->psi;
             }
-            int sD = rho_D[ed->src_id];
-            int sN = rho_N[ed->src_id];
-            if (src_psi != NULL && sD == s->D && sN == s->N) {
-                double k = ed->kappa;
+            int sD2 = (ed->src_id >= 0 && ed->src_id < n_all_subs) ? rho_D[ed->src_id] : 0;
+            int sN2 = (ed->src_id >= 0 && ed->src_id < n_all_subs) ? rho_N[ed->src_id] : 0;
+            if (src_psi != NULL && sD2 == s->D && sN2 == s->N) {
                 double kt = ed->k_target;
                 if (s->D == 1) {
                     for (int64_t i = 0; i < G; ++i) {
                         double phase = kt * s->x[i];
                         double cphi = cos(phase), sphi = sin(phase);
-                        /* Re(Ψ · (cosφ - i sinφ)) = Re*cos + Im*sin */
                         double proj = src_psi[i].re * cphi + src_psi[i].im * sphi;
-                        s->V_couple[i] += k * proj;
+                        s->V_couple[i] += k_eff * proj;
                     }
                 } else if (s->D == 2) {
                     int N = s->N;
@@ -611,10 +773,10 @@ static void _step_one(TriadSubstrate *s,
                             double cphi = cos(phase), sphi = sin(phase);
                             double proj = src_psi[idx].re * cphi
                                         + src_psi[idx].im * sphi;
-                            s->V_couple[idx] += k * proj;
+                            s->V_couple[idx] += k_eff * proj;
                         }
                     }
-                } else { /* 3D */
+                } else {
                     int N = s->N;
                     for (int i = 0; i < N; ++i) {
                         double xi = s->x[i];
@@ -627,21 +789,21 @@ static void _step_one(TriadSubstrate *s,
                                 double cphi = cos(phase), sphi = sin(phase);
                                 double proj = src_psi[idx].re * cphi
                                             + src_psi[idx].im * sphi;
-                                s->V_couple[idx] += k * proj;
+                                s->V_couple[idx] += k_eff * proj;
                             }
                         }
                     }
                 }
             }
         } else {
-            double k = ed->kappa;
+
             for (int64_t i = 0; i < G; ++i)
-                s->V_couple[i] += k * src_proj[i];
+                s->V_couple[i] += k_eff * src_proj[i];
         }
         free(projected);
     }
 
-    /* 6. Potential phase */
+
     for (int64_t i = 0; i < G; ++i) {
         double V_tot = s->V_ext_static[i]
                      + s->Lambda_e * rho[i]
@@ -652,7 +814,7 @@ static void _step_one(TriadSubstrate *s,
         s->psi[i] = _cmul(s->psi[i], phase);
     }
 
-    /* 7. closing OU half-step */
+
     if (M > 0) {
         for (int64_t i = 0; i < G; ++i) rho[i] = _cabs2(s->psi[i]);
         for (int j = 0; j < M; ++j) {
@@ -663,8 +825,8 @@ static void _step_one(TriadSubstrate *s,
         }
     }
 
-    /* 8. FDT-locked noise */
-    if (s->noise_amp > 0.0) {
+
+    {
         double na = s->noise_amp / sqrt(2.0);
         for (int64_t i = 0; i < G; ++i) {
             double xi_r = _randn(rng_state);
@@ -674,7 +836,7 @@ static void _step_one(TriadSubstrate *s,
         }
     }
 
-    /* 9. closing half-linear */
+
     _ndfft(s, s->psi, s->psi_freq);
     for (int64_t i = 0; i < G; ++i)
         s->psi_freq[i] = _cmul(s->psi_freq[i], s->half_lin[i]);
@@ -682,8 +844,6 @@ static void _step_one(TriadSubstrate *s,
 
     free(rho);
 }
-
-/* ── runtime.run() ND ──────────────────────────────────────────── */
 
 static int _is_active(const TriadSegment *seg, int sid) {
     if (seg->active_ids == NULL) return 1;
@@ -709,7 +869,6 @@ void triad_mr_run(TriadMultiRuntime *rt) {
 
     int Ns = rt->n_substrates;
     double **rho_snapshots = (double **)calloc((size_t)Ns, sizeof(double *));
-
     int *rho_D = (int *)calloc((size_t)Ns, sizeof(int));
     int *rho_N = (int *)calloc((size_t)Ns, sizeof(int));
     for (int i = 0; i < Ns; ++i) {
@@ -719,20 +878,44 @@ void triad_mr_run(TriadMultiRuntime *rt) {
         rho_N[i] = rt->substrates[i]->N;
     }
 
+
+    TriadSubstrateObservables *router_obs = NULL;
+    double *router_gates = NULL;
+    double *router_eff_kappa = NULL;
+    int max_links = 0;
+    for (int s = 0; s < rt->n_segments; ++s)
+        if (rt->segments[s].n_links > max_links)
+            max_links = rt->segments[s].n_links;
+    if (max_links > 0) {
+        router_obs = (TriadSubstrateObservables *)calloc(
+            (size_t)Ns, sizeof(TriadSubstrateObservables));
+        router_gates = (double *)calloc((size_t)Ns, sizeof(double));
+        router_eff_kappa = (double *)calloc((size_t)max_links, sizeof(double));
+    }
+
     for (int seg_i = 0; seg_i < rt->n_segments; ++seg_i) {
         TriadSegment *seg = &rt->segments[seg_i];
 
+
         for (int i = 0; i < Ns; ++i) {
             rt->substrates[i]->active = _is_active(seg, i);
+        }
+
+
+        for (int v = 0; v < seg->n_v_ext_overrides; ++v) {
+            int sid = seg->v_ext_override_ids[v];
+            if (sid >= 0 && sid < Ns) {
+                TriadSubstrate *s = rt->substrates[sid];
+                memcpy(s->V_ext_static, seg->v_ext_overrides[v],
+                       sizeof(double) * (size_t)s->grid_size);
+            }
         }
 
         int n_steps = (int)lrint((seg->t_end - seg->t_start) / rt->dt);
         double seg_t = seg->t_start;
 
         for (int step = 0; step < n_steps; ++step) {
-            /* snapshot ρ AND Ψ of active substrates. The ψ snapshot is
-             * needed by phase_coherent coupling, which mirrors
-             * runtime/multi_runtime.py reading src_sub.psi directly. */
+
             for (int i = 0; i < Ns; ++i) {
                 if (!rt->substrates[i]->active) continue;
                 TriadSubstrate *s = rt->substrates[i];
@@ -740,29 +923,80 @@ void triad_mr_run(TriadMultiRuntime *rt) {
                     rho_snapshots[i][x] = _cabs2(s->psi[x]);
             }
 
-            /* step each active substrate */
+
+            double *eff_kappa_ptr = NULL;
+            if (seg->router != NULL && seg->n_links > 0) {
+
+                int n_active = 0;
+                int *active_map = (int *)malloc(sizeof(int) * (size_t)Ns);
+                for (int i = 0; i < Ns; ++i) {
+                    if (rt->substrates[i]->active) {
+                        router_obs[n_active] = triad_mr_compute_observables(
+                            rt->substrates[i]);
+                        active_map[n_active] = i;
+                        n_active++;
+                    }
+                }
+
+                if (n_active > 0) {
+
+                    triad_mr_compute_gates(n_active, router_obs,
+                                           seg->router, router_gates);
+
+
+                    double *gates_by_id = (double *)calloc((size_t)Ns, sizeof(double));
+                    for (int a = 0; a < n_active; ++a)
+                        gates_by_id[active_map[a]] = router_gates[a];
+
+
+                    triad_mr_field_router_route(seg->n_links, seg->links,
+                                                Ns, gates_by_id,
+                                                router_eff_kappa);
+                    eff_kappa_ptr = router_eff_kappa;
+                    free(gates_by_id);
+                }
+                free(active_map);
+            }
+
+
             for (int i = 0; i < Ns; ++i) {
                 TriadSubstrate *s = rt->substrates[i];
                 if (!s->active) continue;
 
-                TriadCouplingEdge *inbound = NULL;
+
+                TriadCouplingLink *inbound = NULL;
                 int n_inbound = 0;
-                if (seg->n_edges > 0) {
-                    inbound = (TriadCouplingEdge *)malloc(
-                        sizeof(TriadCouplingEdge) * (size_t)seg->n_edges);
-                    for (int e = 0; e < seg->n_edges; ++e) {
-                        if (seg->edges[e].dst_id == i)
-                            inbound[n_inbound++] = seg->edges[e];
+                if (seg->n_links > 0) {
+                    inbound = (TriadCouplingLink *)malloc(
+                        sizeof(TriadCouplingLink) * (size_t)seg->n_links);
+                    for (int e = 0; e < seg->n_links; ++e) {
+                        if (seg->links[e].dst_id == i)
+                            inbound[n_inbound++] = seg->links[e];
+                    }
+                }
+
+
+                double *sub_eff_kappa = NULL;
+                if (eff_kappa_ptr != NULL && n_inbound > 0) {
+                    sub_eff_kappa = (double *)malloc(
+                        sizeof(double) * (size_t)n_inbound);
+                    int ib = 0;
+                    for (int e = 0; e < seg->n_links; ++e) {
+                        if (seg->links[e].dst_id == i)
+                            sub_eff_kappa[ib++] = eff_kappa_ptr[e];
                     }
                 }
 
                 _step_one(s, rho_snapshots,
                           rt->substrates, rt->n_substrates,
                           rho_D, rho_N,
-                          inbound, n_inbound, &rng_state);
+                          inbound, n_inbound,
+                          sub_eff_kappa,
+                          &rng_state);
                 free(inbound);
+                free(sub_eff_kappa);
 
-                /* divergence guard (norm = ∫|ψ|² dx^D) */
+
                 double norm = 0.0;
                 for (int64_t x = 0; x < s->grid_size; ++x) norm += _cabs2(s->psi[x]);
                 norm *= _dx_pow_D(s->dx, s->D);
@@ -784,7 +1018,7 @@ void triad_mr_run(TriadMultiRuntime *rt) {
                 }
             }
 
-            /* trajectory recording */
+
             if (step % rt->record_every == 0) {
                 for (int i = 0; i < Ns; ++i) {
                     TriadSubstrate *s = rt->substrates[i];
@@ -804,10 +1038,11 @@ void triad_mr_run(TriadMultiRuntime *rt) {
     }
 
 cleanup:
-    for (int i = 0; i < Ns; ++i) {
-        free(rho_snapshots[i]);
-    }
+    for (int i = 0; i < Ns; ++i) free(rho_snapshots[i]);
     free(rho_snapshots);
     free(rho_D);
     free(rho_N);
+    free(router_obs);
+    free(router_gates);
+    free(router_eff_kappa);
 }

@@ -1,0 +1,477 @@
+from crystal_core import CrystalLM;
+import triad.nn as nn;
+import triad.tensor as T;
+import triad.ntri as np;
+import triad.train as train;
+
+class CrystalSampler {
+    fn __init__(self, temperature=0.8, top_k=50, top_p=0.95,
+                repetition_penalty=1.0, repetition_window=64) {
+        self.temperature = float(temperature);
+        self.top_k = top_k;
+        self.top_p = float(top_p);
+        self.repetition_penalty = float(repetition_penalty);
+        self.repetition_window = repetition_window;
+    }
+
+    fn sample(self, logits, generated_tokens) {
+
+        let vocab = len(logits);
+        let logits_copy = np.array(logits).copy().astype(np.float64);
+
+        if self.repetition_penalty != 1.0 and len(generated_tokens) > 0 {
+            let window = self.repetition_window;
+            let start = 0;
+            if len(generated_tokens) > window {
+                start = len(generated_tokens) - window;
+            }
+            for i in range(start, len(generated_tokens)) {
+                let tok = generated_tokens[i];
+                if tok < vocab {
+                    if logits_copy[tok] > 0.0 {
+                        logits_copy[tok] = logits_copy[tok]
+                                           / self.repetition_penalty;
+                    } else {
+                        logits_copy[tok] = logits_copy[tok]
+                                           * self.repetition_penalty;
+                    }
+                }
+            }
+        }
+
+        if self.temperature > 0.0 {
+            logits_copy = logits_copy / self.temperature;
+        }
+
+        if self.top_k > 0 and self.top_k < vocab {
+            let sorted_idx = np.argsort(-logits_copy);
+            let threshold = logits_copy[int(sorted_idx[self.top_k - 1])];
+            for i in range(vocab) {
+                if logits_copy[i] < threshold {
+                    logits_copy[i] = -1e10;
+                }
+            }
+        }
+
+        if self.top_p < 1.0 {
+            let sorted = np.sort(-logits_copy);
+            let cumsum = np.cumsum(np.exp(-sorted - np.max(-sorted)));
+            let probs_sorted = np.exp(-sorted - np.max(-sorted))
+                               / np.sum(np.exp(-sorted - np.max(-sorted)));
+            let cumsum_norm = np.cumsum(probs_sorted);
+
+            let cutoff_idx = vocab - 1;
+            for i in range(vocab) {
+                if cumsum_norm[i] > self.top_p {
+                    cutoff_idx = i;
+                    break;
+                }
+            }
+
+            if cutoff_idx < vocab - 1 {
+                let threshold_val = -sorted[cutoff_idx];
+                for i in range(vocab) {
+                    if logits_copy[i] < threshold_val {
+                        logits_copy[i] = -1e10;
+                    }
+                }
+            }
+        }
+
+        let max_logit = np.max(logits_copy);
+        let exp_logits = np.exp(logits_copy - max_logit);
+        let probs = exp_logits / np.sum(exp_logits);
+
+        let cumsum = np.cumsum(probs);
+        let r = float(np.random.default_rng().random());
+        for i in range(vocab) {
+            if r < cumsum[i] {
+                return i;
+            }
+        }
+        return vocab - 1;
+    }
+}
+
+class CrystalGenerator {
+    fn __init__(self, model, tokenizer, sampler) {
+        self.model = model;
+        self.tokenizer = tokenizer;
+        self.sampler = sampler;
+        self.generated_tokens = [];
+        self.step_count = 0;
+
+        self.obs_log = [];
+    }
+
+    fn generate(self, prompt_text, max_new_tokens, stream_callback=none) {
+
+        let prompt_ids = self.tokenizer.encode(prompt_text);
+        return self.generate_from_ids(prompt_ids, max_new_tokens,
+                                      stream_callback);
+    }
+
+    fn generate_from_ids(self, prompt_ids, max_new_tokens,
+                         stream_callback=none) {
+
+        self.generated_tokens = [];
+        for id in prompt_ids {
+            self.generated_tokens.push(id);
+        }
+
+        let ctx_len = self.model.seq_len;
+
+        for step in range(max_new_tokens) {
+            self.step_count = self.step_count + 1;
+
+            let start = 0;
+            let n_gen = len(self.generated_tokens);
+            if n_gen > ctx_len {
+                start = n_gen - ctx_len;
+            }
+
+            let ctx = [];
+            for i in range(start, n_gen) {
+                ctx.push(self.generated_tokens[i]);
+            }
+
+            let ctx_arr = np.array(ctx).reshape(1, -1);
+            let ctx_t = T.tensor(ctx_arr);
+
+            let result;
+            with T.no_grad() {
+                result = self.model.forward(ctx_t);
+            }
+
+            let logits_arr = result["logits"].data;
+            let last_pos = len(ctx) - 1;
+            let last_logits = logits_arr[0][last_pos];
+
+            if len(result["observables"]) > 0 {
+                let last_obs = result["observables"];
+                let final_obs = last_obs[len(last_obs) - 1];
+                self.obs_log.push(final_obs);
+
+                self._auto_temperature(final_obs);
+            }
+
+            let next_token = self.sampler.sample(last_logits,
+                                                  self.generated_tokens);
+            self.generated_tokens.push(next_token);
+
+            if stream_callback != none {
+                let token_text = self.tokenizer.decode([next_token]);
+                stream_callback(token_text);
+            }
+        }
+
+        return self.tokenizer.decode(self.generated_tokens);
+    }
+
+    fn _auto_temperature(self, observables) {
+
+        let crys = float(observables["crystallinity"]);
+
+        if crys > 0.7 {
+            self.sampler.temperature = self.sampler.temperature * 1.05;
+            if self.sampler.temperature > 2.0 {
+                self.sampler.temperature = 2.0;
+            }
+        } elif crys < 0.1 {
+            self.sampler.temperature = self.sampler.temperature * 0.95;
+            if self.sampler.temperature < 0.1 {
+                self.sampler.temperature = 0.1;
+            }
+        }
+
+        if self.sampler.temperature > 2.0 { self.sampler.temperature = 2.0; }
+        if self.sampler.temperature < 0.05 { self.sampler.temperature = 0.05; }
+    }
+
+    fn reset(self) {
+        self.generated_tokens = [];
+        self.step_count = 0;
+        self.obs_log = [];
+    }
+
+    fn observables_report(self) {
+        if len(self.obs_log) == 0 {
+            print("No observables recorded.");
+            return;
+        }
+
+        let mean_ipr = 0.0;
+        let mean_crys = 0.0;
+        let mean_peak = 0.0;
+        for obs in self.obs_log {
+            mean_ipr = mean_ipr + float(obs["ipr"]);
+            mean_crys = mean_crys + float(obs["crystallinity"]);
+            mean_peak = mean_peak + float(obs["peak"]);
+        }
+        let n = float(len(self.obs_log));
+        mean_ipr = mean_ipr / n;
+        mean_crys = mean_crys / n;
+        mean_peak = mean_peak / n;
+
+        print("Generation Observables Report:");
+        print("  Steps:          " + str(self.step_count));
+        print("  Mean IPR:       " + str(mean_ipr));
+        print("  Mean Crystal:   " + str(mean_crys));
+        print("  Mean Peak:      " + str(mean_peak));
+        print("  Final Temp:     " + str(self.sampler.temperature));
+        print("  Field regime:   "
+              + ("productive" if mean_crys > 0.1 and mean_crys < 0.7
+                 else "boundary"));
+    }
+}
+
+class CrystalBeamSearch {
+    fn __init__(self, model, beam_width=4, length_penalty=0.6,
+                diversity_strength=0.2) {
+        self.model = model;
+        self.beam_width = beam_width;
+        self.length_penalty = float(length_penalty);
+        self.diversity_strength = float(diversity_strength);
+    }
+
+    fn search(self, prompt_ids, max_new_tokens) {
+
+        let beams = [{
+            "tokens": [id for id in prompt_ids],
+            "score": 0.0,
+            "obs": none
+        }];
+
+        let ctx_len = self.model.seq_len;
+
+        for step in range(max_new_tokens) {
+            let candidates = [];
+
+            for beam in beams {
+                let toks = beam["tokens"];
+
+                let start = 0;
+                if len(toks) > ctx_len {
+                    start = len(toks) - ctx_len;
+                }
+                let ctx = [];
+                for i in range(start, len(toks)) {
+                    ctx.push(toks[i]);
+                }
+                let ctx_t = T.tensor(np.array(ctx).reshape(1, -1));
+
+                let result;
+                with T.no_grad() {
+                    result = self.model.forward(ctx_t);
+                }
+
+                let logits_arr = result["logits"].data;
+                let last_logits = logits_arr[0][len(ctx) - 1];
+
+                let obs = none;
+                if len(result["observables"]) > 0 {
+                    let last_obs = result["observables"];
+                    obs = last_obs[len(last_obs) - 1];
+                }
+
+                let max_logit = np.max(last_logits);
+                let log_probs = last_logits - max_logit
+                                - np.log(np.sum(np.exp(last_logits - max_logit)));
+
+                let sorted_idx = np.argsort(-log_probs);
+                let n_candidates = self.beam_width * 2;
+                if n_candidates > len(sorted_idx) {
+                    n_candidates = len(sorted_idx);
+                }
+
+                for i in range(n_candidates) {
+                    let tok = int(sorted_idx[i]);
+                    let new_toks = [t for t in toks];
+                    new_toks.push(tok);
+
+                    let score = beam["score"] + float(log_probs[tok]);
+
+                    let lp = ((5.0 + float(len(new_toks))) / 6.0)
+                             ** self.length_penalty;
+                    score = score / lp;
+
+                    candidates.push({
+                        "tokens": new_toks,
+                        "score": score,
+                        "obs": obs
+                    });
+                }
+            }
+
+            for i in range(len(candidates)) {
+                for j in range(i + 1, len(candidates)) {
+                    if candidates[j]["score"] > candidates[i]["score"] {
+                        let tmp = candidates[i];
+                        candidates[i] = candidates[j];
+                        candidates[j] = tmp;
+                    }
+                }
+            }
+
+            beams = [];
+            for c_idx in range(len(candidates)) {
+                if len(beams) >= self.beam_width { break; }
+
+                let cand = candidates[c_idx];
+
+                let diversity_penalty = 0.0;
+                for selected in beams {
+                    let overlap = self._ngram_overlap(cand["tokens"],
+                                                      selected["tokens"], 3);
+                    diversity_penalty = diversity_penalty + overlap;
+                }
+
+                let adjusted_score = cand["score"]
+                                     - diversity_penalty * self.diversity_strength;
+                cand["score"] = adjusted_score;
+                beams.push(cand);
+            }
+
+            for i in range(len(beams)) {
+                for j in range(i + 1, len(beams)) {
+                    if beams[j]["score"] > beams[i]["score"] {
+                        let tmp = beams[i];
+                        beams[i] = beams[j];
+                        beams[j] = tmp;
+                    }
+                }
+            }
+        }
+
+        return beams[0]["tokens"];
+    }
+
+    fn _ngram_overlap(self, tokens_a, tokens_b, n) {
+        if len(tokens_a) < n or len(tokens_b) < n {
+            return 0.0;
+        }
+
+        let overlap = 0;
+        let total = 0;
+
+        for i in range(len(tokens_a) - n + 1) {
+            total = total + 1;
+            for j in range(len(tokens_b) - n + 1) {
+                let match_found = 1;
+                for k in range(n) {
+                    if tokens_a[i + k] != tokens_b[j + k] {
+                        match_found = 0;
+                        break;
+                    }
+                }
+                if match_found == 1 {
+                    overlap = overlap + 1;
+                    break;
+                }
+            }
+        }
+
+        return float(overlap) / float(total + 1);
+    }
+}
+
+class CrystalChat {
+    fn __init__(self, model, tokenizer, system_prompt="") {
+        self.model = model;
+        self.tokenizer = tokenizer;
+        self.system_prompt = system_prompt;
+        self.generator = CrystalGenerator(model, tokenizer,
+                                          CrystalSampler(0.7, 50, 0.95));
+        self.history = [];
+    }
+
+    fn chat(self, user_message, max_tokens=100) {
+        let context = self.system_prompt;
+
+        for turn in self.history {
+            context = context + "\nUser: " + turn["user"] + "\n";
+            context = context + "Assistant: " + turn["assistant"] + "\n";
+        }
+
+        context = context + "\nUser: " + user_message + "\nAssistant:";
+
+        self.generator.reset();
+        let response = self.generator.generate(context, max_tokens);
+
+        let parts = response.split("Assistant:");
+        let new_response = parts[len(parts) - 1];
+
+        self.history.push({"user": user_message, "assistant": new_response});
+
+        return new_response;
+    }
+}
+
+fn load_crystal_model(weights_path, vocab_size, d_model, d_psi,
+                      n_blocks, n_heads, ffn_mult, seq_len) {
+    let model = CrystalLM(vocab_size, d_model, d_psi, n_blocks,
+                          n_heads, ffn_mult, seq_len);
+
+    train.load_weights(model, weights_path);
+
+    print("CrystalLM loaded from " + weights_path);
+    print("  vocab=" + str(vocab_size) + " d_model=" + str(d_model)
+          + " d_psi=" + str(d_psi) + " blocks=" + str(n_blocks));
+
+    return model;
+}
+
+fn interactive_demo(model, tokenizer) {
+    let sampler = CrystalSampler(0.8, 50, 0.95);
+    let generator = CrystalGenerator(model, tokenizer, sampler);
+
+    print("╔════════════════════════════════════════╗");
+    print("║  CrystalFormer Interactive Demo       ║");
+    print("║  Type 'quit' to exit, 'obs' for stats ║");
+    print("╚════════════════════════════════════════╝");
+    print("");
+
+    let prompts = [
+        "the field",
+        "memory",
+        "crystallization",
+        "triad Triad"
+    ];
+
+    for prompt in prompts {
+        print("Prompt: " + prompt);
+        generator.reset();
+        let result = generator.generate(prompt, 50,
+            fn(token) { }
+        );
+        print("Output: " + result);
+        print("");
+    }
+
+    print("");
+    generator.observables_report();
+}
+
+print("CrystalFormer inference engine loaded.");
+print("  CrystalSampler     — temperature, top-k, top-p, repetition penalty");
+print("  CrystalGenerator   — autoregressive loop with self-calibration");
+print("  CrystalBeamSearch  — beam search with field diversity");
+print("  CrystalChat        — interactive chat with field memory");
+
+print("");
+print("smoke test: building tiny CrystalLM...");
+let tiny_model = CrystalLM(
+    16, 32, 16, 1, 2, 2, 16,
+    Lambda=-0.5, gamma_0=0.01, dt=0.05,
+    T_bath=0.0, seed=99
+);
+
+let test_tok = nn.CharTokenizer("abc ");
+let test_gen = CrystalGenerator(tiny_model, test_tok,
+                                 CrystalSampler(0.8, 10, 0.95));
+
+let result = test_gen.generate("a", 10);
+print("generated: '" + result + "'");
+print("generator works: " + str(len(test_gen.generated_tokens) > 0));
+print("");
+print("CrystalFormer inference ready.");

@@ -1,0 +1,69 @@
+import triad.nn as nn;
+import triad.tensor as T;
+import triad.ntri as np;
+
+print("1. TriadFlow — training as field dynamics");
+print("=============================================");
+
+let rng = np.random.default_rng(0);
+let X = rng.standard_normal([64, 4]);
+let w_alvo = np.array([0.7, -1.2, 0.4, 0.9]);
+let y = np.tanh(X @ w_alvo) * 2.0;
+
+let modelo = nn.Sequential(nn.triad(4, 16), nn.Tanh(), nn.triad(16, 1));
+let opt = nn.TriadFlow(modelo.parameters(), lr=0.01, seed=3);
+
+let primeira = 0.0;
+let ultima = 0.0;
+for passo in range(300) {
+    let perda = T.mse_loss(modelo.forward(T.tensor(X)), T.tensor(y.reshape(-1, 1)));
+    opt.zero_grad();
+    perda.backward();
+    opt.step();
+    let v = perda.item();
+    if passo == 0 { primeira = v; }
+    ultima = v;
+}
+print(f"loss: {primeira:.4f} -> {ultima:.4f}");
+print(f"weights crystallized on their own: {100.0 * opt.crystal_fraction():.1f}%");
+
+print("");
+print("2. Wavetriad — XOR by interference, no ReLU");
+print("================================================");
+
+let Xx = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]);
+let Yx = np.array([[0.0], [1.0], [1.0], [0.0]]);
+let onda = nn.Sequential(nn.Wavetriad(2, 4, seed=2), nn.triad(4, 1));
+let opt2 = nn.Adam(onda.parameters(), lr=0.05);
+for passo in range(400) {
+    let perda = T.mse_loss(onda.forward(T.tensor(Xx)), T.tensor(Yx));
+    opt2.zero_grad();
+    perda.backward();
+    opt2.step();
+}
+let pred = onda.forward(T.tensor(Xx));
+print(f"XOR predicted: {np.round(pred.data.reshape(-1), 2)}");
+
+print("");
+print("3. AttractorMemory — pattern completion by evolution");
+print("===================================================");
+
+import triad.nn as nn2;
+let mem = nn.AttractorMemory(16, seed=2);
+let padrao = np.sign(rng.standard_normal(16));
+mem.store(padrao);
+mem.store(padrao);
+
+let pista = padrao.copy();
+
+for k in [2, 7, 11, 14] {
+    pista[k] = 0.0;
+}
+let resultado = mem.recall(pista);
+let rec = resultado["pattern"];
+let acertos = 0;
+for k in [2, 7, 11, 14] {
+    if rec[k] == padrao[k] { acertos = acertos + 1; }
+}
+print(f"erased positions recovered: {acertos}/4");
+print("memory is the field's physical state, not a table.");

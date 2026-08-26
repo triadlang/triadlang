@@ -1,33 +1,19 @@
-"""Fase 3  Camada 3: leitura de longo prazo (PhyxMamba/PINNMamba-like), estritamente passiva.
 
-Principios (do relatorio, nao-negociaveis):
-  - O observador LE a trajetoria gravada do reservoir Triad e preve invariantes de longo
-    prazo (geometria de atrator, persistencia de memoria, estado lento). NUNCA realimenta a
-    equacao. Garantia estrutural: este modulo so consome arrays numpy gravados e devolve
-    numpy; nao referencia estado vivo do solver, nao chama passo do solver, nao escreve em
-    nenhum Substrate.
-  - Preserva a geometria do atrator em vez de forcar um alvo: alinhado a 'crystallization is
-    emergent not imposed'. PhyxMamba e usado como diagnostico, nao como driver.
-
-O reservoir e um SSM complexo FIXO (echo-state): estado h com decaimento + rotacao espelha a
-fisica (h_j ~ campos y_j), mas serve apenas de mapa de features. O unico ajuste e um readout
-ridge de forma fechada (estavel). A previsao casa os INVARIANTES (estatisticos/geometricos),
-nao a trajetoria ponto-a-ponto, exatamente o que a sensibilidade do regime aberto permite.
-"""
 from __future__ import annotations
-import numpy as np
+
 from runtime.core.solver import TriadParams, integrate
-from runtime.physics.observables import (time_delay_embedding, attractor_geometry_invariants,
-                                 memory_persistence, slow_state_late_mean)
+from runtime.physics.observables import (
+    attractor_geometry_invariants,
+    memory_persistence,
+    slow_state_late_mean,
+)
+from triad import ntri as np
 
 OBSERVER_FEEDS_BACK = False
 
 def density_scalar_series(density_traj: np.ndarray, dx: float,
                           kind: str = 'participation') -> np.ndarray:
-    """Serie escalar por frame a partir da trajetoria de densidade (N, n_t).
 
-    Observavel emergente para reconstrucao do atrator (Takens). Derivado so de |Psi|^2.
-    """
     rho = np.asarray(density_traj, dtype=float)
     n2 = rho.sum(0) * dx
     if kind == 'participation':
@@ -41,19 +27,14 @@ def density_scalar_series(density_traj: np.ndarray, dx: float,
     return n2
 
 def slow_memory_series(y_traj: np.ndarray) -> np.ndarray:
-    """Serie do estado lento: media espacial do campo de memoria mais lento (menor nu).
 
-    y_traj do solver 1D tem forma (M, N, n_t). O campo mais lento e o de menor taxa; aqui
-    tomamos o ultimo indice (regimes ordenam nu em ordem decrescente, p.ex. B0 nu=(2,.5,.1)).
-    """
     y = np.asarray(y_traj, dtype=float)
     if y.ndim != 3 or y.shape[0] == 0:
         return np.zeros(0)
-    slow = y[-1]            
+    slow = y[-1]
     return slow.mean(axis=0)
 
 class AttractorObserver:
-    """Reservoir SSM complexo fixo + readout ridge. Passivo: consome series, devolve series."""
 
     def __init__(self, size: int = 200, radius: float = 0.9, in_scale: float = 0.5,
                  reg: float = 1e-4, seed: int = 0):
@@ -81,7 +62,7 @@ class AttractorObserver:
             feats.append(self._features(h))
         return np.asarray(feats), h
 
-    def fit(self, series: np.ndarray) -> 'AttractorObserver':
+    def fit(self, series: np.ndarray) -> AttractorObserver:
         s = np.asarray(series, dtype=float).ravel()
         self.mu, self.sd = float(s.mean()), float(s.std() + 1e-12)
         u = (s - self.mu) / self.sd
@@ -120,11 +101,7 @@ def longterm_consistency(p: TriadParams, T_total: float, observe_frac: float = 0
                          seed: int = 0,
                          tol_corr: float = 0.8, tol_rad: float = 0.35,
                          tol_pca: float = 0.35) -> dict:
-    """Roda B0 nativo, observa a janela inicial, preve o resto, e compara INVARIANTES.
 
-    Passivo de ponta a ponta: integra uma vez (leitura), o observador nunca toca o solver.
-    Veredito = invariantes consistentes E nenhuma realimentacao.
-    """
     pl = TriadParams(**{**p.__dict__, 'T': T_total, 'record_every': record_every})
     out = integrate(pl, auto_halve_dt=False)
     dx = out['dx']
@@ -152,33 +129,12 @@ def longterm_consistency(p: TriadParams, T_total: float, observe_frac: float = 0
             'passed': passed}
 
 class ConvergenceObserver:
-    """Passive convergence detector consuming checkpoints from _integrate_steps.
 
-    Maintains rolling windows per metric and certifies convergence when the
-    moving-average variation falls below tolerance.  Strictly read-only: never
-    feeds back into the solver.
-
-    Parameters
-    ----------
-    metrics : list[str]
-        Names of observable functions in runtime.physics.observables to track.
-        Supported: "crystallinity", "ipr", "participation", "energy",
-        "dominant_wavenumber".
-    tol : float
-        Maximum relative variation in the window to certify convergence.
-    window : int
-        Number of consecutive checkpoints that must be stable.
-    min_checkpoints : int
-        Minimum checkpoints before certification is allowed.
-    certify : str
-        "anytime" for anytime-valid sequential testing (CITE-style);
-        "simple" for plain window check.
-    """
-
-    METRIC_FNS = None  
+    METRIC_FNS = None
 
     def __init__(self, metrics=None, tol: float = 1e-3, window: int = 5,
-                 min_checkpoints: int = 10, certify: str = "simple"):
+                 min_checkpoints: int = 10, certify: str = "simple",
+                 on_converge=None):
         if metrics is None:
             metrics = ["crystallinity", "energy"]
         self.metric_names = metrics
@@ -190,21 +146,28 @@ class ConvergenceObserver:
         self._n_checked = 0
         self._certified = False
         self._anytime_e_value = 0.0
+        self._on_converge = on_converge
 
     @classmethod
     def _get_fns(cls):
         if cls.METRIC_FNS is None:
-            from runtime.physics import observables as obs_mod
+            from runtime.physics.observables import (
+                crystallinity,
+                dominant_wavenumber,
+                energy,
+                ipr,
+                participation_ratio,
+            )
             cls.METRIC_FNS = {
-                "crystallinity": obs_mod.crystallinity,
-                "ipr": obs_mod.ipr,
-                "participation": obs_mod.participation_ratio,
-                "dominant_wavenumber": obs_mod.dominant_wavenumber,
-                "energy": obs_mod.energy,
+                "crystallinity": crystallinity,
+                "ipr": ipr,
+                "participation": participation_ratio,
+                "dominant_wavenumber": dominant_wavenumber,
+                "energy": energy,
             }
         return cls.METRIC_FNS
 
-    def _compute_metric(self, name: str, chk: dict) -> float:
+    def _compute_metric(self, name: str, chk: dict[str, object]) -> float:
         fns = self._get_fns()
         fn = fns[name]
         psi = chk["psi"]
@@ -217,8 +180,8 @@ class ConvergenceObserver:
             return fn(psi, dx, hbar=hbar, m=m, Lambda=Lambda)
         return fn(psi, dx)
 
-    def check(self, chk: dict) -> bool:
-        """Process one checkpoint. Returns True if convergence is certified."""
+    def check(self, chk: dict[str, object]) -> bool:
+
         if self._certified:
             return True
         self._n_checked += 1
@@ -234,7 +197,7 @@ class ConvergenceObserver:
         return self._check_simple()
 
     def _check_simple(self) -> bool:
-        """Window-based convergence: all metrics stable for `window` checks."""
+
         for m in self.metric_names:
             vals = self._history[m]
             if len(vals) < self.window:
@@ -247,20 +210,17 @@ class ConvergenceObserver:
             if variation > self.tol:
                 return False
         self._certified = True
+        if self._on_converge:
+            last = {m: self._history[m][-1] for m in self.metric_names}
+            self._on_converge(self._history, last)
         return True
 
     def _check_anytime(self) -> bool:
-        """Anytime-valid sequential test (CITE-inspired).
 
-        Uses an exponential martingale: e_n = product of likelihood ratios
-        under the running mean vs the null (no convergence).  When e_n
-        exceeds 1/alpha (alpha = tolerance), reject the null and certify.
-        This controls the false-certification rate under data-driven stopping.
-        """
         alpha = self.tol
         if alpha <= 0:
             return False
-        
+
         all_stable = True
         for m in self.metric_names:
             vals = self._history[m]
@@ -300,54 +260,23 @@ class ConvergenceObserver:
         return list(self._history.get(name, []))
 
     def as_stop_fn(self):
-        """Return a stop_fn compatible with integrate_adaptive.
 
-        Usage:
-            obs = ConvergenceObserver(metrics=["crystallinity"], tol=1e-3)
-            result = integrate_adaptive(p, stop_fn=obs.as_stop_fn(), ...)
-        """
         def stop_fn(history):
             return self.check(history[-1])
         return stop_fn
 
 class SelfVerifier:
-    """Passive self-verification via intrinsic observables + ensemble disagreement.
-
-    Reads energy, crystallinity from converged field as confidence score.
-    Optionally runs a small ensemble of FULL integrations with different seeds
-    and measures observable disagreement as epistemic uncertainty.
-
-    Never feeds back into the solver.
-    """
 
     def __init__(self, ensemble: int = 5, confidence_metrics: list = None):
-        """
-        Parameters
-        ----------
-        ensemble : int
-            Number of ensemble members (different noise realizations).
-        confidence_metrics : list[str] or None
-            Metrics to compute per member.  Default: crystallinity, energy.
-        """
+
         self.ensemble = ensemble
         self.confidence_metrics = confidence_metrics or ["crystallinity", "energy"]
         self._results = []
 
     def verify(self, params_list: list, results_list: list) -> dict:
-        """Compute confidence and disagreement from multiple run results.
 
-        Parameters
-        ----------
-        params_list : list[TriadParams]
-            The params used for each ensemble member.
-        results_list : list[dict]
-            The integrate() or integrate_adaptive() result per member.
-
-        Returns
-        -------
-        dict with confidence, disagreement, per_member observables.
-        """
-        from runtime.physics.observables import crystallinity as _cryst, energy as _energy
+        from runtime.physics.observables import crystallinity as _cryst
+        from runtime.physics.observables import energy as _energy
         from runtime.physics.observables import participation_ratio as _pr
 
         member_obs = []
@@ -374,7 +303,7 @@ class SelfVerifier:
         else:
             disagreement = 0.0
 
-        confidence = mean_C  
+        confidence = mean_C
 
         return {
             "confidence": confidence,
@@ -385,11 +314,8 @@ class SelfVerifier:
         }
 
     def run_ensemble(self, base_params, T: float = 10.0) -> dict:
-        """Run an ensemble and verify in one call.
 
-        Each member uses the same params except seed (offset by member index).
-        """
-        from runtime.core.solver import integrate, TriadParams
+        from runtime.core.solver import TriadParams, integrate
         params_list = []
         results_list = []
         for i in range(self.ensemble):

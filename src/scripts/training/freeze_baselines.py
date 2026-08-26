@@ -1,14 +1,12 @@
-"""Freeze observable baselines for compliance testing.
 
-Runs integrate() in FULL mode for a fixed set of regimes with fixed seeds.
-Outputs tests/fixtures/inference_baselines.json.
-"""
-import sys, os, json
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import json
+import os
+import sys
 
-import numpy as np
-from runtime.core.solver import TriadParams, integrate
-from runtime.physics import observables as obs
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from runtime.core.solver import integrate
+from runtime.physics.observables import crystallinity, dominant_wavenumber, ipr, participation_ratio
 from stdlib.regimes import resolve_regime
 
 REGIMES = ["B0", "anti_collapse", "HodgkinHuxley", "ENSO_recharge"]
@@ -26,10 +24,10 @@ def freeze():
         psi = result["psi_final"]
         dx = result["dx"]
         baselines[name] = {
-            "crystallinity": float(obs.crystallinity(psi, dx)),
-            "k_star": float(obs.dominant_wavenumber(psi, dx)),
-            "ipr": float(obs.ipr(psi, dx)),
-            "participation": float(obs.participation_ratio(psi, dx)),
+            "crystallinity": float(crystallinity(psi, dx)),
+            "k_star": float(dominant_wavenumber(psi, dx)),
+            "ipr": float(ipr(psi, dx)),
+            "participation": float(participation_ratio(psi, dx)),
         }
         print("  %s: C=%.4f k*=%.4f ipr=%.6f PR=%.2f" % (
             name,

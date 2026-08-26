@@ -1,18 +1,9 @@
-/*
- * TriadLang Native Observables — C port of runtime/observables.py
- *
- * All observables read from the field produced by the full P1+P2+P3 solver.
- */
 #include "triad_observables.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 static double _cabs2(TriadCplx z) { return z.re*z.re + z.im*z.im; }
-
-/* ═══════════════════════════════════════════════════════════════════
-   Field-level scalars (§8.1)
-   ═══════════════════════════════════════════════════════════════════ */
 
 double triad_obs_norm(const TriadCplx *psi, int64_t n, double dx) {
     double s = 0;
@@ -73,30 +64,22 @@ double triad_obs_participation_ratio(const TriadCplx *psi, int64_t n, double dx)
     return (n4 > 1e-30) ? (n2 * n2) / n4 : 0.0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   Spectral diagnostics (§8.3)
-   ═══════════════════════════════════════════════════════════════════ */
-
 void triad_obs_power_spectrum(const TriadCplx *psi, int32_t N, double dx,
                               double *k_out, double *P_out) {
-    /* FFT(psi) */
+
     TriadCplx *psi_hat = malloc(sizeof(TriadCplx) * N);
     triad_fft_fn(N, psi, psi_hat);
 
-    /* k-grid */
     double *k_raw = malloc(sizeof(double) * N);
     triad_fftfreq(N, dx, k_raw);
 
-    /* P = |psi_hat|^2 */
     double *P_raw = malloc(sizeof(double) * N);
     for (int32_t i = 0; i < N; i++)
         P_raw[i] = _cabs2(psi_hat[i]);
 
-    /* Sort by k ascending (argsort) */
     int32_t *order = malloc(sizeof(int32_t) * N);
     for (int32_t i = 0; i < N; i++) order[i] = i;
 
-    /* Simple insertion sort (N is typically <= 1024) */
     for (int32_t i = 1; i < N; i++) {
         int32_t key = order[i];
         double kv = k_raw[key];
@@ -156,10 +139,6 @@ double triad_obs_crystallinity(const TriadCplx *psi, int32_t N, double dx,
     return (total > 0) ? structured / total : 0.0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   Time-aggregated metrics (§8.5)
-   ═══════════════════════════════════════════════════════════════════ */
-
 static double _cv(const double *arr, int64_t n) {
     if (n < 2) return 0.0;
     double mean = 0;
@@ -203,7 +182,7 @@ double triad_obs_time_to_stabilize(const double *arr, const double *t_arr,
 
     for (int64_t i = 0; i < n; i++) {
         if (fabs(arr[i] - mean) <= band) {
-            /* Check all remaining */
+
             int settled = 1;
             for (int64_t j = i; j < n; j++) {
                 if (fabs(arr[j] - mean) > band) { settled = 0; break; }
@@ -212,4 +191,59 @@ double triad_obs_time_to_stabilize(const double *arr, const double *t_arr,
         }
     }
     return t_arr[n - 1];
+}
+
+double triad_obs_energy(const TriadCplx *psi, int32_t N, double dx,
+                        double hbar, double m, double Lambda,
+                        const double *V_ext, const double *V_mem) {
+
+    TriadCplx *psi_k = malloc(sizeof(TriadCplx) * N);
+    triad_fft_fn(N, psi, psi_k);
+
+    double *kvec = malloc(sizeof(double) * N);
+    triad_fftfreq(N, dx, kvec);
+
+
+    double kinetic = 0.0;
+    double hbar2_over_2m = hbar * hbar / (2.0 * m);
+    for (int32_t i = 0; i < N; i++) {
+        double k2 = kvec[i] * kvec[i];
+        kinetic += hbar2_over_2m * k2 * _cabs2(psi_k[i]);
+    }
+    kinetic *= dx / (double)N;
+
+
+    double nonlin = 0.0;
+    for (int32_t i = 0; i < N; i++) {
+        double rho = _cabs2(psi[i]);
+        nonlin += rho * rho;
+    }
+    nonlin *= 0.5 * Lambda * dx;
+
+
+    double pot = 0.0;
+    if (V_ext != NULL) {
+        for (int32_t i = 0; i < N; i++)
+            pot += V_ext[i] * _cabs2(psi[i]);
+        pot *= dx;
+    }
+    if (V_mem != NULL) {
+        for (int32_t i = 0; i < N; i++)
+            pot += V_mem[i] * _cabs2(psi[i]);
+        pot *= dx;
+    }
+
+    free(psi_k);
+    free(kvec);
+    return kinetic + nonlin + pot;
+}
+
+double triad_obs_fdt_precision(double f_FDT, double dx, int D) {
+    if (f_FDT <= 0.0) return 1e12;
+    double dxD = dx;
+    if (D == 2) dxD = dx * dx;
+    else if (D == 3) dxD = dx * dx * dx;
+    double variance = f_FDT / dxD;
+    if (variance <= 0.0) return 1e12;
+    return 1.0 / variance;
 }

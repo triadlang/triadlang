@@ -1,0 +1,40 @@
+import triad.nn as nn;
+import triad.ntri as np;
+
+print("Physical RAG — corrupted key recovers the value");
+print("===============================================");
+
+let KEY = 12;
+let VAL = 8;
+let bank = nn.FieldMemoryBank(KEY + VAL, slots=4, seed=2);
+let rng = np.random.default_rng(1);
+
+let pairs = [];
+for k in range(4) {
+    let key = np.sign(rng.standard_normal(KEY));
+    let value = np.sign(rng.standard_normal(VAL));
+    pairs.append([key, value]);
+    bank.store(np.concatenate([key, value]));
+}
+
+let ok = 0;
+for k in range(4) {
+    let key = pairs[k][0].copy();
+    let value = pairs[k][1];
+
+    let flip = np.random.default_rng(50 + k).random(KEY) < 0.25;
+    for j in range(KEY) {
+        if flip[j] { key[j] = -key[j]; }
+    }
+    let cue = np.concatenate([key, np.zeros(VAL)]);
+    let output = bank.recall(cue);
+    let read = output["pattern"][KEY:];
+    let correct = 1;
+    for j in range(VAL) {
+        if read[j] != value[j] { correct = 0; }
+    }
+    ok = ok + correct;
+    print(f"  fact {k}: slot {output["slot"]}, value intact: {correct == 1}");
+}
+print(f"recovered: {ok}/4 with 25% of the key corrupted");
+print("the search is physical: the cue picks the attractor, the field hands back the value.");

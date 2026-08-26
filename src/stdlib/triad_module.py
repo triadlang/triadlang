@@ -1,9 +1,35 @@
-import numpy as np
-from runtime.core.solver import TriadParams
-from runtime.core.multi_runtime import MultiRuntime, CouplingEdge, Segment
+from dataclasses import dataclass
+
 from runtime.core.fast_solver import fast_integrate
+from runtime.core.multi_runtime import CouplingLink, MultiRuntime, Segment
+from runtime.core.solver import TriadParams
+from runtime.physics.observables import (
+    crystallinity,
+    dominant_wavenumber,
+    fwhm,
+    ipr,
+    participation_ratio,
+    peak_density,
+    power_spectrum,
+)
+from runtime.physics.observables import norm as obs_norm
 from stdlib.regimes import resolve_regime
-from runtime.physics.observables import dominant_wavenumber, crystallinity, peak_density, ipr, fwhm, norm as obs_norm, participation_ratio, power_spectrum, stabilization_score
+from triad import ntri as np
+
+
+@dataclass
+class _FastResult:
+    psi: object = None
+    x: object = None
+    dx: float = 0.0
+    params: object = None
+    density: object = None
+    k_star: float = 0.0
+    crystallinity: float = 0.0
+    peak: float = 0.0
+    ipr: float = 0.0
+    norm: float = 0.0
+    fwhm: float = float('nan')
 
 class _SolveResult:
 
@@ -23,12 +49,15 @@ class _SolveResult:
         self.norm = float((np.abs(sub.psi) ** 2).sum() * sub.dx)
         try:
             self.fwhm = float(fwhm(sub.psi, sub.dx))
-        except Exception:
+        except (ValueError, ArithmeticError, TypeError):
             self.fwhm = float('nan')
         self.density = np.abs(sub.psi) ** 2
 
     def __repr__(self):
         return f'SolveResult(k_star={self.k_star:.4f}, crystallinity={self.crystallinity:.4f}, peak={self.peak:.4f}, norm={self.norm:.4f})'
+
+def _has_result_attrs(obj):
+    return hasattr(obj, 'psi') and hasattr(obj, 'dx') and hasattr(obj, 'k_star')
 
 def regime(name, **overrides):
     p = resolve_regime(name, seed=0, L=32.0, N=128, dt=0.005)
@@ -46,7 +75,7 @@ def solve(params, T=None):
     rt = MultiRuntime(dt=params.dt, record_every=getattr(params, 'record_every', 4))
     sub = rt.add_substrate('main', params)
     duration = params.T
-    rt.add_segment(Segment(t_start=0.0, t_end=duration, edges=[]))
+    rt.add_segment(Segment(t_start=0.0, t_end=duration, links=[]))
     rt.global_t = duration
     rt.run(verbose=False)
     return _SolveResult(sub, rt)
@@ -63,8 +92,6 @@ def fast_solve(params, T=None):
     k_min = 2.0 * np.pi / L
     density = np.abs(psi) ** 2
 
-    class _FastResult:
-        pass
     r = _FastResult()
     r.psi = psi
     r.x = out['x']
@@ -78,11 +105,11 @@ def fast_solve(params, T=None):
     r.norm = float(density.sum() * dx)
     try:
         r.fwhm = float(fwhm(psi, dx))
-    except Exception:
+    except (ValueError, ArithmeticError, TypeError):
         r.fwhm = float('nan')
     return r
 
-def solve_coupled(substrates, edges, T=None):
+def solve_coupled(substrates, links, T=None):
     if not substrates:
         raise ValueError('need at least one substrate')
     dt = substrates[0][1].dt
@@ -92,15 +119,15 @@ def solve_coupled(substrates, edges, T=None):
         subs[name] = rt.add_substrate(name, params)
     duration = T or substrates[0][1].T
     ce = []
-    for src, dst, kappa in edges:
-        ce.append(CouplingEdge(src_id=subs[src].id, dst_id=subs[dst].id, kappa=kappa))
-    rt.add_segment(Segment(t_start=0.0, t_end=duration, edges=ce))
+    for src, dst, kappa in links:
+        ce.append(CouplingLink(src_id=subs[src].id, dst_id=subs[dst].id, kappa=kappa))
+    rt.add_segment(Segment(t_start=0.0, t_end=duration, links=ce))
     rt.global_t = duration
     rt.run(verbose=False)
     return {name: _SolveResult(sub, rt) for name, sub in subs.items()}
 
 def k_star(psi_or_result, dx=None):
-    if isinstance(psi_or_result, _SolveResult):
+    if _has_result_attrs(psi_or_result):
         return psi_or_result.k_star
     if dx is None:
         raise ValueError('dx required when passing raw psi array')
@@ -108,40 +135,40 @@ def k_star(psi_or_result, dx=None):
     return float(dominant_wavenumber(psi_or_result, dx, k_min=2 * np.pi / L))
 
 def crystal(psi_or_result, dx=None):
-    if isinstance(psi_or_result, _SolveResult):
+    if _has_result_attrs(psi_or_result):
         return psi_or_result.crystallinity
     if dx is None:
         raise ValueError('dx required when passing raw psi array')
     return float(crystallinity(psi_or_result, dx))
 
 def peak(psi_or_result):
-    if isinstance(psi_or_result, _SolveResult):
+    if _has_result_attrs(psi_or_result):
         return psi_or_result.peak
     return float(peak_density(psi_or_result))
 
 def norm(psi_or_result, dx=None):
-    if isinstance(psi_or_result, _SolveResult):
+    if _has_result_attrs(psi_or_result):
         return psi_or_result.norm
     if dx is None:
         raise ValueError('dx required when passing raw psi array')
     return float(obs_norm(psi_or_result, dx))
 
 def get_ipr(psi_or_result, dx=None):
-    if isinstance(psi_or_result, _SolveResult):
+    if _has_result_attrs(psi_or_result):
         return psi_or_result.ipr
     if dx is None:
         raise ValueError('dx required when passing raw psi array')
     return float(ipr(psi_or_result, dx))
 
 def get_fwhm(psi_or_result, dx=None):
-    if isinstance(psi_or_result, _SolveResult):
+    if _has_result_attrs(psi_or_result):
         return psi_or_result.fwhm
     if dx is None:
         raise ValueError('dx required when passing raw psi array')
     return float(fwhm(psi_or_result, dx))
 
 def spectrum(psi_or_result, dx=None):
-    if isinstance(psi_or_result, _SolveResult):
+    if _has_result_attrs(psi_or_result):
         psi = psi_or_result.psi
         dx = psi_or_result.dx
     else:
@@ -152,7 +179,7 @@ def spectrum(psi_or_result, dx=None):
     return {'k': k, 'S': S}
 
 def pr(psi_or_result, dx=None):
-    if isinstance(psi_or_result, _SolveResult):
+    if _has_result_attrs(psi_or_result):
         return float(participation_ratio(psi_or_result.psi, psi_or_result.dx))
     if dx is None:
         raise ValueError('dx required when passing raw psi array')

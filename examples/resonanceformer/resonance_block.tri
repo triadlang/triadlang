@@ -1,0 +1,81 @@
+import triad.nn as nn;
+import triad.tensor as T;
+import resonance_substrates as rs;
+import triad.ntri as np;
+
+class ResonanceBlock {
+    fn __init__(self, d_model, d_psi, d_res, n_heads, ffn_mult,
+                Lambda, gamma_0, sigma, alpha, hbar, mass, dt, T_bath,
+                nu_min, nu_max, seed) {
+        self.d_model = d_model;
+        self.d_psi   = d_psi;
+        self.d_res   = d_res;
+
+        self.substrate = rs.CoupledSubstrate(
+            d_model, d_psi, d_res, n_heads,
+            Lambda, gamma_0, sigma, alpha, hbar, mass, dt, T_bath,
+            nu_min, nu_max, seed
+        );
+
+        self.norm2 = nn.LayerNorm(d_model);
+        self.ff1   = nn.triad(d_model, d_model * ffn_mult);
+        self.ff2   = nn.triad(d_model * ffn_mult, d_model);
+
+        self.step_count = 0;
+    }
+
+    fn parameters(self) {
+        let ps = self.substrate.parameters();
+        for p in self.norm2.parameters() { ps.append(p); }
+        for p in self.ff1.parameters() { ps.append(p); }
+        for p in self.ff2.parameters() { ps.append(p); }
+        return ps;
+    }
+
+    fn set_temperature(self, T_new) {
+        self.substrate.wave.set_temperature(T_new);
+    }
+
+    fn set_Lambda(self, L_new) {
+        self.substrate.wave.set_Lambda(L_new);
+    }
+
+    fn forward(self, x, y_state_in) {
+
+        let step = self.step_count;
+        self.step_count = self.step_count + 1;
+
+        let sub = self.substrate.step(x, y_state_in, step);
+
+        let x2 = sub["output"];
+        let x2n = self.norm2(x2);
+        let ffn_out = self.ff2(T.relu(self.ff1(x2n)));
+        let out = x2 + ffn_out;
+
+        return {
+            "output": out,
+            "y_state": sub["y_state"],
+            "observables": sub["observables"]
+        };
+    }
+}
+
+print("ResonanceFormer block loaded.");
+print("  ResonanceBlock = CoupledSubstrate + pre-norm + residual FFN");
+print("  Substrates (P1+P2+P3) are coupled inside the block, never isolated");
+print("");
+
+let tiny = ResonanceBlock(
+    16, 8, 8, 2, 2,
+    Lambda=-0.5, gamma_0=0.05, sigma=1.5, alpha=0.15,
+    hbar=1.0, mass=1.0, dt=0.05, T_bath=0.0,
+    nu_min=0.01, nu_max=4.0, seed=42
+);
+let x_test = T.tensor(np.random.default_rng(0).standard_normal((1, 4, 16))
+                       .astype(np.float32));
+let res = tiny.forward(x_test, none);
+print("smoke: output shape = " + str(res["output"].shape)
+      + " y_state = " + str(res["y_state"].shape));
+print("observables: crys=" + str(res["observables"]["crystallinity"])
+      + " ipr=" + str(res["observables"]["ipr"])
+      + " k_star=" + str(res["observables"]["k_star"]));

@@ -1,0 +1,23 @@
+import triad.engine3d as e3;
+import triad.ntri as np;
+
+print("Memory3D — 16 bits as matter trapped in wells");
+print("===============================================");
+
+let mem = e3.Memory3D(side=4, seed=3);
+let padrao = np.sign(np.random.default_rng(7).standard_normal(16));
+mem.store(padrao);
+
+for t in range(4) {
+    mem.eng.step(0.3);
+}
+
+let lido = mem.read();
+let acertos = 0;
+for j in range(16) {
+    if lido[j] == padrao[j] { acertos = acertos + 1; }
+}
+print(f"readout after T~2.1: {acertos}/16 faithful bits");
+print("");
+print("top view (each blob = a +1 bit trapped in its well):");
+print(mem.render());

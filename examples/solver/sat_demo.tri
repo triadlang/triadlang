@@ -1,8 +1,5 @@
 import triad.sat as sat;
 
-# encode a small 3-SAT instance as field interference and let the triad solver
-# relax toward a satisfying assignment. the field carries all three pillars; the
-# answer emerges from where the density concentrates, nothing is imposed.
 let inst = sat.SATInstance(3, [[1, -2, 3], [-1, 2, 3], [1, 2, -3]]);
 let result = sat.solve_sat(inst, "interference", 10.0);
 

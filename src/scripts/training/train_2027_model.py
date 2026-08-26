@@ -1,31 +1,33 @@
-"""triad 2027 model: full 4-layer stack trained against B0 ground truth.
 
-    camada 0  solver nativo B0 (strang + exp-trapezoidal + FDT locked + y_j memory)
-    camada 1  TriadSSMBlock learns solver dynamics (complex state = P1+P3, memory = P2)
-    camada 2  MNOSurrogate multi-regime + fidelity gate + accelerated rollout
-    camada 3  AttractorObserver passive long-term invariant forecast
-    camada 4  PhysicalReservoirEmulator edge-of-chaos + FDT noise verification
-
-    loss = L2(B0 data) + w_phys * triad residual ONLY. zero crystallinity terms.
-    """
 from __future__ import annotations
-import time
+
 import json
 import os
-import numpy as np
+import time
 from pathlib import Path
+
 from runtime.core.solver import TriadParams, integrate
-from runtime.ml.surrogate import (TriadContext, generate_pairs, train_surrogate,
-                                 accelerated_rollout, FidelityGate, triad_residual_full)
-from runtime.physics.physical_reservoir import (PhysicalReservoirEmulator, FDTNoiseSource,
-                                          verify_fdt, edge_of_chaos_sweep)
-from runtime.observers import longterm_consistency, AttractorObserver
-from runtime.physics.observables import (crystallinity, dominant_wavenumber, ipr,
-                                   triad_phase_synchronization, spectral_flux,
-                                   attractor_geometry_invariants, lyapunov_proxy,
-                                   memory_persistence, slow_state_late_mean)
+from runtime.ml.serialization import load_weights, save_weights
+from runtime.ml.surrogate import (
+    FidelityGate,
+    TriadContext,
+    accelerated_rollout,
+    generate_pairs,
+    train_surrogate,
+)
+from runtime.observers import longterm_consistency
+from runtime.physics.observables import (
+    attractor_geometry_invariants,
+    crystallinity,
+    dominant_wavenumber,
+    lyapunov_proxy,
+    memory_persistence,
+    spectral_flux,
+    triad_phase_synchronization,
+)
+from runtime.physics.physical_reservoir import FDTNoiseSource, chaos_threshold_sweep, verify_fdt
 from stdlib.regimes import resolve_regime
-from runtime.ml.serialization import save_checkpoint, load_checkpoint, save_weights, load_weights
+from triad import ntri as np
 
 SEED = 42
 N_TRAIN = 64
@@ -40,7 +42,7 @@ D_STATE = 32
 N_BLOCKS = 2
 LR = 2e-3
 W_PHYS = 0.05
-REGIMES_TRAIN = ['B0', 'anti_collapse', 'thermal_pure']
+REGIMES_TRAIN = ['B0', 'anti_collapse', '_pure']
 MODELS_DIR = os.path.join(os.path.dirname(__file__), '..', 'models')
 
 def header(msg):
@@ -49,7 +51,7 @@ def header(msg):
     print(f'{"=" * 60}\n')
 
 def camada0_solver():
-    header('camada 0  solver nativo (ground truth)')
+    header('camada 0  solver nativo (ground )')
     results = {}
     for regime in ['B0', 'anti_collapse']:
         for mode in ['strang', 'exptrap']:
@@ -115,11 +117,11 @@ def camada1_ssm():
     Y_np = density[:, 1:].T
     d_in = X_np.shape[1]
 
-    from runtime.ml.language import TriadFullBlock
+    from runtime.ml.language import TriadtriadBlock
     from runtime.ml.nn import Adam
     from runtime.ml.tensor import tensor
     np.random.seed(SEED)
-    model = TriadFullBlock(d_model=d_in, N=64, n_memory=3)
+    model = TriadtriadBlock(d_model=d_in, N=64, n_memory=3)
     opt = Adam(model.parameters(), lr=LR)
     x_t = tensor(X_np[None, :, :])
     y_t = tensor(Y_np[None, :, :])
@@ -191,7 +193,7 @@ def camada2_surrogate():
     model_loaded = MNOSurrogate(d_model=D_MODEL, d_state=D_STATE,
                                  n_blocks=N_BLOCKS, n_memory=len(ctx_b0.nu))
     psi_test = X[0][None, :, :]
-    from runtime.ml.tensor import tensor, no_grad
+    from runtime.ml.tensor import no_grad
     with no_grad():
         pred_before = model.predict(Yc[0])
     load_weights(model_loaded, model_path)
@@ -200,7 +202,7 @@ def camada2_surrogate():
     diff = float(np.mean(np.abs(pred_before - pred_after)))
     print(f'  load+predict check: max_diff={diff:.2e} (should be ~0)')
     assert diff < 1e-10, f'model load mismatch: {diff}'
-    print(f'  model verified: save -> load -> predict matches')
+    print('  model verified: save -> load -> predict matches')
     model = model_loaded
 
     meta_path = os.path.join(MODELS_DIR, 'mno_surrogate.meta.json')
@@ -315,11 +317,11 @@ def camada3_observer():
     }
 
 def camada4_reservoir():
-    header('camada 4  Physical reservoir edge-of-chaos + FDT')
+    header('camada 4  Physical reservoir threshold-of-chaos + FDT')
     gains = np.concatenate([np.linspace(0.3, 0.9, 4), [0.95, 1.0, 1.05],
                              np.linspace(1.1, 2.0, 4)])
     t0 = time.perf_counter()
-    rows = edge_of_chaos_sweep(gains.tolist(), size=150, leak=0.9,
+    rows = chaos_threshold_sweep(gains.tolist(), size=150, leak=0.9,
                                 lyap_len=1500, mc_len=1500, seed=SEED)
     dt_sweep = time.perf_counter() - t0
     print(f'  sweep {len(gains)} gains in {dt_sweep:.2f}s')
@@ -363,7 +365,7 @@ def camada4_reservoir():
     }
 
 def main():
-    header('triad 2027 model  full stack')
+    header('triad 2027 model  triad stack')
     print(f'  regimes: {REGIMES_TRAIN}')
     print(f'  N_train={N_TRAIN}  N_eval={N_EVAL}  epochs={EPOCHS}')
     print(f'  d_model={D_MODEL}  d_state={D_STATE}  n_blocks={N_BLOCKS}')

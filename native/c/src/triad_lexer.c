@@ -1,4 +1,3 @@
-/* triad_lexer.c — Port of frontend/lexer_universal.py. */
 #include "triad_frontend.h"
 
 #include <ctype.h>
@@ -6,8 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ── Keyword table (matches KEYWORDS in lexer_universal.py) ─────── */
 
 static const char *const KEYWORDS[] = {
     "let", "const", "fn", "return", "if", "else", "elif",
@@ -18,14 +15,14 @@ static const char *const KEYWORDS[] = {
     "try", "catch", "finally", "throw",
     "self",
     "match", "case",
-    "yield", "async", "await",
+    "yield", "async", "await", "with",
     "reg", "entity", "world", "couple", "pair", "ring",
     "observe", "OBSERVE", "run",
     "evolve", "sequence", "via", "each_for",
     "substrate", "composed_of", "assert",
-    "persistent", "extended", "structurally_open", "non_trivial_memory",
+    "persistent", "extended", "structurally_open", "mem_memory",
     "atomic", "anti_collapsed",
-    "over_seeds",
+    "over_seeds", "is", "pass", "del", "inherits",
     NULL
 };
 
@@ -38,8 +35,6 @@ static int is_keyword(const char *s, size_t n) {
     return 0;
 }
 
-/* ── Lexer state ────────────────────────────────────────────────── */
-
 typedef struct {
     TriadArena   *arena;
     const char   *src;
@@ -50,7 +45,6 @@ typedef struct {
     const char   *file;
     TriadDiag    *diag;
 
-    /* growable token buffer */
     TriadToken   *toks;
     size_t        toks_len;
     size_t        toks_cap;
@@ -96,7 +90,6 @@ static char adv(Lex *L) {
 static int is_ident_start(char c) { return isalpha((unsigned char)c) || c == '_'; }
 static int is_ident_cont(char c)  { return isalnum((unsigned char)c) || c == '_'; }
 
-/* growable byte buffer using arena snapshots */
 typedef struct {
     char  *data;
     size_t len;
@@ -123,12 +116,9 @@ static const char *buf_dup(TriadArena *a, Buf *b) {
 
 static void buf_free(Buf *b) { free(b->data); b->data = NULL; b->len = b->cap = 0; }
 
-/* ── Lex sub-routines ───────────────────────────────────────────── */
-
-/* Returns 0 on success, -1 on error (diag set). */
 static int lex_block_comment(Lex *L) {
     int sl = L->line, sc = L->col;
-    adv(L); adv(L); /* consume "/" "*" */
+    adv(L); adv(L);
     while (L->i < L->n) {
         if (L->src[L->i] == '*' && peek(L, 1) == '/') {
             adv(L); adv(L);
@@ -148,7 +138,7 @@ static int lex_block_comment(Lex *L) {
 
 static int lex_string(Lex *L) {
     int sl = L->line, sc = L->col;
-    adv(L); /* opening " */
+    adv(L);
     Buf buf = {0};
     while (L->i < L->n && L->src[L->i] != '"') {
         if (L->src[L->i] == '\\') {
@@ -179,7 +169,7 @@ static int lex_string(Lex *L) {
         set_lex_error(L, sl, sc, "unterminated string");
         return -1;
     }
-    adv(L); /* closing " */
+    adv(L);
     TriadToken t = {0};
     t.kind = TRIAD_TOK_STRING;
     t.text = buf_dup(L->arena, &buf);
@@ -191,10 +181,9 @@ static int lex_string(Lex *L) {
 
 static int lex_fstring(Lex *L) {
     int sl = L->line, sc = L->col;
-    adv(L); /* f */
-    adv(L); /* opening " */
+    adv(L);
+    adv(L);
 
-    /* Collect parts: alternating ("str", text) / ("expr", source). */
     TriadFStringPart *parts = NULL;
     size_t parts_len = 0, parts_cap = 0;
     Buf buf = {0};
@@ -205,7 +194,7 @@ static int lex_fstring(Lex *L) {
                 parts_cap = parts_cap ? parts_cap * 2 : 4; \
                 parts = (TriadFStringPart *)realloc(parts, parts_cap * sizeof(TriadFStringPart)); \
             } \
-            TriadFStringPart pp; pp.is_expr = 0; pp.text = buf_dup(L->arena, &buf); \
+            TriadFStringPart pp; pp.is_expr = 0; pp.text = buf_dup(L->arena, &buf); pp.fmt_spec = NULL; \
             parts[parts_len++] = pp; \
             buf.len = 0; \
         } \
@@ -214,29 +203,60 @@ static int lex_fstring(Lex *L) {
     while (L->i < L->n && L->src[L->i] != '"') {
         if (L->src[L->i] == '{') {
             FLUSH_LITERAL();
-            adv(L); /* { */
+            adv(L);
             Buf ebuf = {0};
+            Buf fbuf = {0};
             int depth = 1;
+            int in_expr = 1;
+            int bracket_depth = 0;
             while (L->i < L->n && depth > 0) {
-                if (L->src[L->i] == '{') depth++;
-                else if (L->src[L->i] == '}') depth--;
+                char ch = L->src[L->i];
+                if (ch == '{') depth++;
+                else if (ch == '}') depth--;
                 if (depth > 0) {
-                    if (L->src[L->i] == '\n') { L->line++; L->col = 1; }
-                    buf_push(&ebuf, L->src[L->i]);
+                    if (ch == '\n') { L->line++; L->col = 1; }
+                    if (in_expr && (ch == '(' || ch == '[' || ch == '{')) bracket_depth++;
+                    else if (in_expr && (ch == ')' || ch == ']' || ch == '}')) bracket_depth--;
+                    if (in_expr && ch == ':' && bracket_depth == 0) {
+                        in_expr = 0;
+                        adv(L);
+                        continue;
+                    } else if (in_expr && ch == '!' && bracket_depth == 0) {
+                        in_expr = 0;
+                    }
+                    if (in_expr) buf_push(&ebuf, ch);
+                    else         buf_push(&fbuf, ch);
                     adv(L);
                 } else {
-                    adv(L); /* closing } */
+                    adv(L);
                 }
             }
             if (parts_len == parts_cap) {
                 parts_cap = parts_cap ? parts_cap * 2 : 4;
                 parts = (TriadFStringPart *)realloc(parts, parts_cap * sizeof(TriadFStringPart));
             }
+            while (fbuf.len > 0 && (fbuf.data[fbuf.len - 1] == ' ' || fbuf.data[fbuf.len - 1] == '\t' ||
+                                    fbuf.data[fbuf.len - 1] == '\n' || fbuf.data[fbuf.len - 1] == '\r'))
+                fbuf.len--;
+            size_t fstart = 0;
+            while (fstart < fbuf.len && (fbuf.data[fstart] == ' ' || fbuf.data[fstart] == '\t' ||
+                                         fbuf.data[fstart] == '\n' || fbuf.data[fstart] == '\r'))
+                fstart++;
             TriadFStringPart pp;
             pp.is_expr = 1;
             pp.text    = buf_dup(L->arena, &ebuf);
+            if (fbuf.len > fstart) {
+                size_t flen = fbuf.len - fstart;
+                char *fsp = (char *)triad_arena_alloc(L->arena, flen + 1);
+                memcpy(fsp, fbuf.data + fstart, flen);
+                fsp[flen] = 0;
+                pp.fmt_spec = fsp;
+            } else {
+                pp.fmt_spec = NULL;
+            }
             parts[parts_len++] = pp;
             buf_free(&ebuf);
+            buf_free(&fbuf);
             continue;
         }
         if (L->src[L->i] == '\\') {
@@ -265,12 +285,11 @@ static int lex_fstring(Lex *L) {
         set_lex_error(L, sl, sc, "unterminated f-string");
         return -1;
     }
-    adv(L); /* closing " */
+    adv(L);
     FLUSH_LITERAL();
     buf_free(&buf);
     #undef FLUSH_LITERAL
 
-    /* Move parts into the arena. */
     TriadFStringPart *aparts = (TriadFStringPart *)triad_arena_alloc(
         L->arena, parts_len * sizeof(TriadFStringPart));
     for (size_t k = 0; k < parts_len; ++k) aparts[k] = parts[k];
@@ -317,9 +336,7 @@ static int lex_number(Lex *L) {
 }
 
 static int try_lex_negative_number(Lex *L) {
-    /* Mirrors the Python "negative number after operator context" rule.
-     * The rule: if previous token is None, or (SYMBOL/KEYWORD and value not in (")", "]")).
-     * Note Python expression has subtle precedence; we reproduce it as-is. */
+
     if (L->src[L->i] != '-' || !isdigit((unsigned char)peek(L, 1))) return 0;
     int eligible;
     if (L->toks_len == 0) {
@@ -329,17 +346,14 @@ static int try_lex_negative_number(Lex *L) {
         int is_sym_or_kw = (prev->kind == TRIAD_TOK_SYMBOL || prev->kind == TRIAD_TOK_KEYWORD);
         const char *v = prev->text ? prev->text : "";
         int is_close = (strcmp(v, ")") == 0 || strcmp(v, "]") == 0);
-        /* Python: `prev is None or prev.kind in ("SYMBOL","KEYWORD") and prev.value not in (")", "]")`
-         * `and` binds tighter than `or`, so the parenthesisation is:
-         *   prev is None or (is_sym_or_kw and not is_close)
-         */
+
         eligible = (is_sym_or_kw && !is_close);
     }
     if (!eligible) return 0;
 
     int sl = L->line, sc = L->col;
     size_t start = L->i;
-    adv(L); /* - */
+    adv(L);
     while (L->i < L->n && isdigit((unsigned char)L->src[L->i])) adv(L);
     if (L->i < L->n && L->src[L->i] == '.') {
         adv(L);
@@ -380,8 +394,6 @@ static int is_multi_sym(const char *p) {
 static int is_single_sym(char c) {
     return strchr("+-*/%=<>(){}[];:,.!@&|^~", c) != NULL;
 }
-
-/* ── Entry ──────────────────────────────────────────────────────── */
 
 int triad_tokenize(TriadArena *arena, const char *src, const char *file,
                    TriadTokenList *out, TriadDiag *diag)
@@ -435,7 +447,7 @@ int triad_tokenize(TriadArena *arena, const char *src, const char *file,
             int r = try_lex_negative_number(&L);
             if (r < 0) goto fail;
             if (r == 1) continue;
-            /* else fall through to symbol handling */
+
         }
 
         if (is_ident_start(c)) {
@@ -443,7 +455,6 @@ int triad_tokenize(TriadArena *arena, const char *src, const char *file,
             continue;
         }
 
-        /* multi-char symbols */
         if (L.i + 1 < L.n && is_multi_sym(L.src + L.i)) {
             int sl = L.line, sc = L.col;
             char two[3] = { L.src[L.i], L.src[L.i + 1], 0 };
@@ -474,7 +485,6 @@ int triad_tokenize(TriadArena *arena, const char *src, const char *file,
         goto fail;
     }
 
-    /* EOF token */
     TriadToken eof = {0};
     eof.kind = TRIAD_TOK_EOF;
     eof.text = triad_arena_strdup(arena, "");
@@ -482,7 +492,6 @@ int triad_tokenize(TriadArena *arena, const char *src, const char *file,
     eof.col  = L.col;
     if (push_tok(&L, eof) != 0) goto fail;
 
-    /* Move into arena-owned array. */
     TriadToken *aitems = (TriadToken *)triad_arena_alloc(arena, L.toks_len * sizeof(TriadToken));
     for (size_t k = 0; k < L.toks_len; ++k) aitems[k] = L.toks[k];
     free(L.toks);

@@ -1,9 +1,9 @@
 from __future__ import annotations
+
 import json
-import sys
-import os
 import re
-from typing import Optional
+import sys
+
 _KEYWORDS = ['let', 'const', 'fn', 'return', 'if', 'elif', 'else', 'for', 'while', 'break', 'continue', 'class', 'type', 'import', 'from', 'as', 'match', 'with', 'and', 'or', 'not', 'true', 'false', 'none', 'yield', 'async', 'await', 'try', 'catch', 'finally', 'throw', 'reg', 'observe', 'run', 'couple', 'pair', 'ring', 'entity', 'world', 'in']
 _STDLIB_MODULES = {'math': ['sqrt', 'sin', 'cos', 'tan', 'log', 'log10', 'exp', 'floor', 'ceil', 'abs', 'pi', 'e', 'min', 'max', 'clamp', 'pow'], 'random': ['random', 'randint', 'choice', 'seed', 'shuffle', 'uniform'], 'io': ['print', 'input'], 'string': ['split', 'join', 'replace', 'lower', 'upper', 'strip', 'starts_with', 'ends_with', 'contains'], 'json': ['parse', 'stringify'], 'fs': ['read_text', 'write_text', 'exists', 'listdir'], 'time': ['now', 'sleep'], 'collections': ['len', 'range', 'enumerate', 'sorted', 'reversed', 'zip', 'map', 'filter']}
 _BUILTINS = ['len', 'range', 'str', 'int', 'float', 'abs', 'min', 'max', 'sorted', 'print', 'type', 'list', 'dict', 'enumerate']
@@ -37,7 +37,7 @@ class TriadLSP:
                 continue
             self._handle(msg)
 
-    def _handle(self, msg: dict):
+    def _handle(self, msg: dict[str, object]):
         method = msg.get('method', '')
         params = msg.get('params', {})
         msg_id = msg.get('id')
@@ -56,8 +56,16 @@ class TriadLSP:
         elif method == 'textDocument/didChange':
             uri = params.get('textDocument', {}).get('uri', '')
             changes = params.get('contentChanges', [])
-            if changes:
-                self._docs[uri] = changes[0].get('text', '')
+            if not changes:
+                self._send_response(msg_id, None)
+                return
+            current = self._docs.get(uri, '')
+            for change in changes:
+                if 'range' in change and change['range'] is not None:
+                    current = self._apply_range_change(current, change)
+                else:
+                    current = change.get('text', '')
+            self._docs[uri] = current
             self._send_response(msg_id, None)
             return
         elif method == 'textDocument/didClose':
@@ -78,6 +86,36 @@ class TriadLSP:
             return
         self._send_response(msg_id, result)
 
+    def _apply_range_change(self, text: str, change: dict) -> str:
+        new_text = change.get('text', '')
+        rng = change.get('range', {})
+        start = rng.get('start', {})
+        end = rng.get('end', {})
+        if not start or not end:
+            return new_text
+        lines = text.split('\n')
+        sc, sr = int(start.get('line', 0)), int(start.get('character', 0))
+        ec, er = int(end.get('line', 0)), int(end.get('character', 0))
+        if sc < 0 or ec < 0 or sc >= len(lines) or ec >= len(lines):
+            return new_text
+        sc_line = lines[sc]
+        ec_line = lines[ec]
+        if sc == ec:
+            sr = min(sr, len(sc_line))
+            er = min(er, len(sc_line))
+            return sc_line[:sr] + new_text + sc_line[er:]
+        prefix = sc_line[:sr] if sr <= len(sc_line) else sc_line
+        suffix = ec_line[er:] if er <= len(ec_line) else ''
+        middle_lines = lines[sc + 1:ec]
+        new_lines = [prefix + new_text + suffix] if new_text else [prefix, suffix]
+        if new_text and '\n' in new_text:
+            new_lines = [prefix] + new_text.split('\n')
+            if not new_text.endswith('\n'):
+                new_lines[-1] += suffix
+            else:
+                new_lines.append(suffix)
+        return '\n'.join(lines[:sc] + new_lines + lines[ec + 1:])
+
     def _send_response(self, msg_id, result):
         if msg_id is None:
             return
@@ -85,12 +123,12 @@ class TriadLSP:
         sys.stdout.write(f'Content-Length: {len(body)}\r\n\r\n{body}')
         sys.stdout.flush()
 
-    def _send_notification(self, method: str, params: dict):
+    def _send_notification(self, method: str, params: dict[str, object]):
         body = json.dumps({'jsonrpc': '2.0', 'method': method, 'params': params})
         sys.stdout.write(f'Content-Length: {len(body)}\r\n\r\n{body}')
         sys.stdout.flush()
 
-    def _word_at(self, line: str, char: int) -> Optional[str]:
+    def _word_at(self, line: str, char: int) -> str | None:
         if char >= len(line):
             char = len(line) - 1
         if char < 0:
@@ -130,7 +168,7 @@ class TriadLSP:
                 continue
         return symbols
 
-    def _completions(self, params: dict) -> dict:
+    def _completions(self, params: dict[str, object]) -> dict[str, object]:
         uri = params.get('textDocument', {}).get('uri', '')
         pos = params.get('position', {})
         line_num = pos.get('line', 0)
@@ -176,7 +214,7 @@ class TriadLSP:
                     items.append({'label': tk, 'kind': 14, 'detail': 'triad'})
         return {'isIncomplete': False, 'items': items}
 
-    def _definition(self, params: dict) -> Optional[dict]:
+    def _definition(self, params: dict[str, object]) -> dict[str, object] | None:
         uri = params.get('textDocument', {}).get('uri', '')
         pos = params.get('position', {})
         line_num = pos.get('line', 0)
@@ -202,7 +240,7 @@ class TriadLSP:
                 return {'uri': uri, 'range': {'start': {'line': i, 'character': col}, 'end': {'line': i, 'character': col + len(stripped)}}}
         return None
 
-    def _hover(self, params: dict) -> Optional[dict]:
+    def _hover(self, params: dict[str, object]) -> dict[str, object] | None:
         uri = params.get('textDocument', {}).get('uri', '')
         pos = params.get('position', {})
         line_num = pos.get('line', 0)
@@ -229,7 +267,7 @@ class TriadLSP:
             return {'contents': {'kind': 'markdown', 'value': f'**{word}** — keyword'}}
         return None
 
-    def _document_symbols(self, params: dict) -> list:
+    def _document_symbols(self, params: dict[str, object]) -> list[dict[str, object]]:
         uri = params.get('textDocument', {}).get('uri', '')
         text = self._docs.get(uri, '')
         symbols = self._parse_symbols(text)

@@ -1,10 +1,3 @@
-/* ═══════════════════════════════════════════════════════════════════
-   TriadLang Native ML — Autograd Tensor
-   ═══════════════════════════════════════════════════════════════════
-   Port of runtime/tensor.py. Dense f64 arrays with reverse-mode AD.
-   Compute graph built forward, gradients computed backward via topo sort.
-   ═══════════════════════════════════════════════════════════════════ */
-
 #include "triad_ml.h"
 #include <stdlib.h>
 #include <string.h>
@@ -16,13 +9,11 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-/* ── global grad toggle ── */
 static int _triad_grad_enabled = 1;
 
 void triad_ml_set_grad(int on) { _triad_grad_enabled = on; }
 int  triad_ml_get_grad(void)   { return _triad_grad_enabled; }
 
-/* ── RNG (xorshift64) ── */
 static uint64_t _ml_rng_state = 123456789ULL;
 
 void triad_ml_seed(uint64_t s) { _ml_rng_state = s ? s : 1ULL; }
@@ -38,7 +29,6 @@ static double _randf(void) {
     return (_xorshift64() >> 11) * (1.0 / 9007199254740992.0);
 }
 
-/* Box-Muller for normal distribution */
 static double _randn(void) {
     double u1 = _randf(), u2 = _randf();
     if (u1 < 1e-30) u1 = 1e-30;
@@ -48,10 +38,6 @@ static double _randn(void) {
 static void _ctx_free_plain(void *ctx) {
     free(ctx);
 }
-
-/* ══════════════════════════════════════
-   Tensor creation / destruction
-   ══════════════════════════════════════ */
 
 TriadTensor *triad_tensor_new(int32_t ndim, const int32_t *shape, int requires_grad) {
     TriadTensor *t = calloc(1, sizeof(TriadTensor));
@@ -83,7 +69,7 @@ TriadTensor *triad_tensor_scalar(double val, int requires_grad) {
     TriadTensor *t = triad_tensor_new(0, shape, requires_grad);
     t->size = 1;
     t->data[0] = val;
-    /* ndim=0 for scalar, but shape is empty */
+
     free(t->shape);
     t->shape = NULL;
     t->ndim = 0;
@@ -91,7 +77,7 @@ TriadTensor *triad_tensor_scalar(double val, int requires_grad) {
 }
 
 TriadTensor *triad_tensor_zeros(int32_t ndim, const int32_t *shape, int rg) {
-    return triad_tensor_new(ndim, shape, rg); /* calloc zeros data */
+    return triad_tensor_new(ndim, shape, rg);
 }
 
 TriadTensor *triad_tensor_ones(int32_t ndim, const int32_t *shape, int rg) {
@@ -156,10 +142,6 @@ void triad_tensor_free(TriadTensor *t) {
 
 void triad_tensor_retain(TriadTensor *t) { if (t) t->refcount++; }
 
-/* ══════════════════════════════════════
-   Helpers
-   ══════════════════════════════════════ */
-
 static void _ensure_grad(TriadTensor *t) {
     if (!t->grad) {
         t->grad = calloc(t->size, sizeof(double));
@@ -182,10 +164,9 @@ static int32_t _norm_axis(int32_t axis, int32_t ndim) {
     return axis;
 }
 
-/* unbroadcast: sum over dims that were broadcast */
 static double *_unbroadcast(const double *g, int32_t g_ndim, const int32_t *g_shape,
                             int32_t t_ndim, const int32_t *t_shape, int64_t t_size) {
-    /* trivial: same shape */
+
     if (g_ndim == t_ndim) {
         int same = 1;
         for (int i = 0; i < g_ndim && same; i++)
@@ -197,14 +178,11 @@ static double *_unbroadcast(const double *g, int32_t g_ndim, const int32_t *g_sh
         }
     }
 
-    /* General: allocate result, sum leading dims then broadcast dims */
     double *out = calloc(t_size, sizeof(double));
 
-    /* Compute total size of g */
     int64_t g_size = 1;
     for (int i = 0; i < g_ndim; i++) g_size *= g_shape[i];
 
-    /* Simple scalar target: sum everything */
     if (t_ndim == 0 || t_size == 1) {
         double s = 0.0;
         for (int64_t i = 0; i < g_size; i++) s += g[i];
@@ -212,13 +190,11 @@ static double *_unbroadcast(const double *g, int32_t g_ndim, const int32_t *g_sh
         return out;
     }
 
-    /* Pad t_shape to g_ndim from left */
     int32_t padded[32];
     int pad = g_ndim - t_ndim;
     for (int i = 0; i < pad; i++) padded[i] = 1;
     for (int i = 0; i < t_ndim; i++) padded[pad + i] = t_shape[i];
 
-    /* Map each g index to a t index */
     for (int64_t gi = 0; gi < g_size; gi++) {
         int64_t idx = gi;
         int64_t ti = 0;
@@ -227,13 +203,13 @@ static double *_unbroadcast(const double *g, int32_t g_ndim, const int32_t *g_sh
             int32_t coord = idx % g_shape[d];
             idx /= g_shape[d];
             int32_t tc = (padded[d] == 1) ? 0 : coord;
-            /* compute the flat index in the target */
+
             int64_t s = 1;
             for (int k = d + 1; k < g_ndim; k++) s *= padded[k];
             ti += tc * s;
             (void)t_stride;
         }
-        /* recompute ti correctly with t's own strides */
+
         int64_t coords[32];
         int64_t tmp = gi;
         for (int d = g_ndim - 1; d >= 0; d--) {
@@ -252,7 +228,6 @@ static double *_unbroadcast(const double *g, int32_t g_ndim, const int32_t *g_sh
     return out;
 }
 
-/* Set children for autograd graph */
 static void _set_children(TriadTensor *out, int n, ...) {
     out->nchildren = n;
     out->children = malloc(n * sizeof(TriadTensor*));
@@ -264,10 +239,6 @@ static void _set_children(TriadTensor *out, int n, ...) {
     }
     va_end(ap);
 }
-
-/* ══════════════════════════════════════
-   Backward pass — topological sort
-   ══════════════════════════════════════ */
 
 typedef struct {
     TriadTensor **topo;
@@ -289,9 +260,8 @@ static int _topo_grow(TopoBuild *tb) {
     return 1;
 }
 
-/* topo sort into dynamic buffers */
 static int _topo_build(TriadTensor *t, TopoBuild *tb) {
-    /* Check if already visited */
+
     int64_t tid = (int64_t)(uintptr_t)t;
     for (int32_t i = 0; i < tb->nvisited; i++)
         if (tb->visited[i] == tid) return 1;
@@ -313,7 +283,6 @@ void triad_tensor_backward(TriadTensor *t, const double *grad_out) {
         for (int64_t i = 0; i < t->size; i++) t->grad[i] = 1.0;
     }
 
-    /* Topo sort */
     TopoBuild tb = {0};
     if (!_topo_grow(&tb) || !_topo_build(t, &tb)) {
         free(tb.topo);
@@ -321,7 +290,6 @@ void triad_tensor_backward(TriadTensor *t, const double *grad_out) {
         return;
     }
 
-    /* Reverse pass */
     for (int32_t i = tb.len - 1; i >= 0; i--) {
         if (tb.topo[i]->grad_fn && tb.topo[i]->grad) {
             tb.topo[i]->grad_fn(tb.topo[i]);
@@ -337,17 +305,11 @@ void triad_tensor_zero_grad(TriadTensor *t) {
     }
 }
 
-/* ══════════════════════════════════════
-   Arithmetic ops with autograd
-   ══════════════════════════════════════ */
-
-/* ── Closure data for binary ops ── */
 typedef struct {
     TriadTensor *a, *b;
     TriadTensor *out;
 } BinaryCtx;
 
-/* ── ADD ── */
 static void _add_backward(TriadTensor *out) {
     BinaryCtx *c = (BinaryCtx*)out->_ctx;
     if (c->a->requires_grad) {
@@ -365,10 +327,10 @@ static void _add_backward(TriadTensor *out) {
 }
 
 TriadTensor *triad_tensor_add(TriadTensor *a, TriadTensor *b) {
-    /* Determine output shape (broadcast) — for now, require same shape or scalar */
+
     int32_t ndim = a->ndim > b->ndim ? a->ndim : b->ndim;
     int32_t shape[32];
-    /* simple broadcast logic */
+
     int32_t a_pad = ndim - a->ndim, b_pad = ndim - b->ndim;
     for (int i = 0; i < ndim; i++) {
         int32_t as = (i >= a_pad && a->shape) ? a->shape[i - a_pad] : 1;
@@ -377,9 +339,8 @@ TriadTensor *triad_tensor_add(TriadTensor *a, TriadTensor *b) {
     }
     TriadTensor *out = triad_tensor_new(ndim, shape, 0);
 
-    /* element-wise add with broadcast */
     for (int64_t oi = 0; oi < out->size; oi++) {
-        /* map flat index oi to coords, then to a and b indices */
+
         int64_t tmp = oi;
         int32_t coords[32];
         for (int d = ndim - 1; d >= 0; d--) {
@@ -409,7 +370,6 @@ TriadTensor *triad_tensor_add(TriadTensor *a, TriadTensor *b) {
     return out;
 }
 
-/* ── SUB ── */
 static void _sub_backward(TriadTensor *out) {
     BinaryCtx *c = (BinaryCtx*)out->_ctx;
     if (c->a->requires_grad) {
@@ -421,7 +381,7 @@ static void _sub_backward(TriadTensor *out) {
     if (c->b->requires_grad) {
         double *ug = _unbroadcast(out->grad, out->ndim, out->shape,
                                    c->b->ndim, c->b->shape, c->b->size);
-        /* negate for sub */
+
         for (int64_t i = 0; i < c->b->size; i++) ug[i] = -ug[i];
         _accumulate_grad(c->b, ug);
         free(ug);
@@ -464,12 +424,11 @@ TriadTensor *triad_tensor_sub(TriadTensor *a, TriadTensor *b) {
     return out;
 }
 
-/* ── MUL (element-wise) ── */
 static void _mul_backward(TriadTensor *out) {
     BinaryCtx *c = (BinaryCtx*)out->_ctx;
     if (c->a->requires_grad) {
         double *tmp = malloc(out->size * sizeof(double));
-        /* need to re-broadcast b for the product */
+
         int32_t ndim = out->ndim;
         int32_t b_pad = ndim - c->b->ndim;
         for (int64_t oi = 0; oi < out->size; oi++) {
@@ -548,7 +507,6 @@ TriadTensor *triad_tensor_mul(TriadTensor *a, TriadTensor *b) {
     return out;
 }
 
-/* ── DIV ── */
 static void _div_backward(TriadTensor *out) {
     BinaryCtx *c = (BinaryCtx*)out->_ctx;
     int32_t ndim = out->ndim;
@@ -629,7 +587,6 @@ TriadTensor *triad_tensor_div(TriadTensor *a, TriadTensor *b) {
     return out;
 }
 
-/* ── NEG ── */
 typedef struct { TriadTensor *a; } UnaryCtx;
 
 static void _neg_backward(TriadTensor *out) {
@@ -656,7 +613,6 @@ TriadTensor *triad_tensor_neg(TriadTensor *a) {
     return out;
 }
 
-/* ── POW ── */
 typedef struct { TriadTensor *a; double exp_val; } PowCtx;
 
 static void _pow_backward(TriadTensor *out) {
@@ -684,13 +640,12 @@ TriadTensor *triad_tensor_pow(TriadTensor *a, double exp_val) {
     return out;
 }
 
-/* ── MATMUL (2D) ── */
 static void _matmul_backward(TriadTensor *out) {
     BinaryCtx *c = (BinaryCtx*)out->_ctx;
     int32_t M = c->a->shape[0], K = c->a->shape[1], N = c->b->shape[1];
     if (c->a->requires_grad) {
         _ensure_grad(c->a);
-        /* dA = grad @ B^T */
+
         for (int32_t i = 0; i < M; i++)
             for (int32_t j = 0; j < K; j++) {
                 double s = 0;
@@ -701,7 +656,7 @@ static void _matmul_backward(TriadTensor *out) {
     }
     if (c->b->requires_grad) {
         _ensure_grad(c->b);
-        /* dB = A^T @ grad */
+
         for (int32_t i = 0; i < K; i++)
             for (int32_t j = 0; j < N; j++) {
                 double s = 0;
@@ -713,7 +668,7 @@ static void _matmul_backward(TriadTensor *out) {
 }
 
 TriadTensor *triad_tensor_matmul(TriadTensor *a, TriadTensor *b) {
-    /* 2D matmul: (M,K) @ (K,N) -> (M,N) */
+
     int32_t M = a->shape[0], K = a->shape[1], N = b->shape[1];
     int32_t shape[] = {M, N};
     TriadTensor *out = triad_tensor_new(2, shape, 0);
@@ -742,7 +697,6 @@ TriadTensor *triad_tensor_matmul(TriadTensor *a, TriadTensor *b) {
     return out;
 }
 
-/* ── RESHAPE / FLATTEN ── */
 typedef struct { TriadTensor *a; } ViewCtx;
 
 static void _reshape_backward(TriadTensor *out) {
@@ -771,7 +725,6 @@ TriadTensor *triad_tensor_flatten(TriadTensor *a) {
     return triad_tensor_reshape(a, 1, shape);
 }
 
-/* ── TRANSPOSE (swap axes) ── */
 typedef struct { TriadTensor *a; int32_t axis1, axis2; } TransposeCtx;
 
 static int64_t _flat_to_swapped_index(int64_t oi, const int32_t *out_shape,
@@ -833,7 +786,6 @@ TriadTensor *triad_tensor_transpose(TriadTensor *a, int32_t axis1, int32_t axis2
     return out;
 }
 
-/* ── BMM: matmul over last two dims with matching leading dims ── */
 static void _bmm_backward(TriadTensor *out) {
     BinaryCtx *c = (BinaryCtx*)out->_ctx;
     int32_t ndim = out->ndim;
@@ -910,7 +862,6 @@ TriadTensor *triad_tensor_bmm(TriadTensor *a, TriadTensor *b) {
     return out;
 }
 
-/* ── SLICE over one axis ── */
 typedef struct {
     TriadTensor *a;
     int32_t axis;
@@ -1040,11 +991,6 @@ TriadTensor *triad_tensor_le(TriadTensor *a, TriadTensor *b) { return _tensor_cm
 TriadTensor *triad_tensor_gt(TriadTensor *a, TriadTensor *b) { return _tensor_cmp(a, b, CMP_GT); }
 TriadTensor *triad_tensor_ge(TriadTensor *a, TriadTensor *b) { return _tensor_cmp(a, b, CMP_GE); }
 
-/* ══════════════════════════════════════
-   Reductions with autograd
-   ══════════════════════════════════════ */
-
-/* ── SUM ── */
 typedef struct { TriadTensor *a; } SumCtx;
 
 static void _sum_backward(TriadTensor *out) {
@@ -1073,7 +1019,6 @@ TriadTensor *triad_tensor_sum(TriadTensor *a) {
     return out;
 }
 
-/* ── MEAN ── */
 static void _mean_backward(TriadTensor *out) {
     SumCtx *c = (SumCtx*)out->_ctx;
     if (c->a->requires_grad) {
@@ -1188,12 +1133,11 @@ TriadTensor *triad_tensor_mean_axis(TriadTensor *a, int32_t axis, int keepdims) 
     return _axis_reduce(a, axis, keepdims, 1);
 }
 
-/* ── MAX / MIN over one axis (argmax routing in backward) ── */
 typedef struct {
     TriadTensor *a;
     int32_t axis;
     int keepdims;
-    int64_t *arg;   /* per output element: flat input index of the chosen value */
+    int64_t *arg;
 } AxisArgCtx;
 
 static void _axis_arg_ctx_free(void *ptr) {
@@ -1259,12 +1203,11 @@ TriadTensor *triad_tensor_min_axis(TriadTensor *a, int32_t axis, int keepdims) {
     return _axis_minmax(a, axis, keepdims, 0);
 }
 
-/* ── CAT / STACK along an axis ── */
 typedef struct {
     TriadTensor **xs;
     int32_t n;
     int32_t axis;
-    int is_stack;     /* stack inserts a new axis of length 1 per input */
+    int is_stack;
 } CatCtx;
 
 static void _cat_ctx_free(void *ptr) {
@@ -1274,7 +1217,6 @@ static void _cat_ctx_free(void *ptr) {
     free(c);
 }
 
-/* map a flat output index to (axis coordinate, offset within slab) using out shape */
 static void _coords_from_flat(const TriadTensor *t, int64_t fi, int32_t *coords) {
     for (int32_t d = t->ndim - 1; d >= 0; d--) {
         coords[d] = (int32_t)(fi % t->shape[d]);
@@ -1285,7 +1227,7 @@ static void _coords_from_flat(const TriadTensor *t, int64_t fi, int32_t *coords)
 static void _cat_backward(TriadTensor *out) {
     CatCtx *c = (CatCtx*)out->_ctx;
     int32_t coords[32];
-    /* per-input starting coordinate along axis */
+
     int32_t starts[256];
     int32_t acc = 0;
     for (int32_t k = 0; k < c->n; k++) {
@@ -1295,16 +1237,16 @@ static void _cat_backward(TriadTensor *out) {
     for (int64_t oi = 0; oi < out->size; oi++) {
         _coords_from_flat(out, oi, coords);
         int32_t a = coords[c->axis];
-        /* find owning input */
+
         int32_t k = 0;
         while (k + 1 < c->n && a >= starts[k + 1]) k++;
         TriadTensor *src = c->xs[k];
         if (!src->requires_grad) continue;
         _ensure_grad(src);
-        /* flat index into src */
+
         int64_t si = 0, stride = 1;
         if (c->is_stack) {
-            /* src has one fewer dim; skip the cat axis */
+
             for (int32_t d = out->ndim - 1; d >= 0; d--) {
                 if (d == c->axis) continue;
                 int32_t sd = d < c->axis ? d : d - 1;
@@ -1332,7 +1274,7 @@ static TriadTensor *_cat_impl(TriadTensor **xs, int32_t n, int32_t axis, int is_
     int32_t shape[32];
     int any_grad = 0;
     if (is_stack) {
-        /* all inputs identical shape; insert new axis of length n */
+
         for (int32_t d = 0, j = 0; d < out_ndim; d++) {
             if (d == axis) { shape[d] = n; continue; }
             shape[d] = xs[0]->shape[j++];
@@ -1347,7 +1289,6 @@ static TriadTensor *_cat_impl(TriadTensor **xs, int32_t n, int32_t axis, int is_
 
     TriadTensor *out = triad_tensor_new(out_ndim, shape, 0);
 
-    /* forward copy */
     int32_t coords[32];
     int32_t starts[256];
     int32_t acc = 0;
@@ -1406,14 +1347,8 @@ TriadTensor *triad_tensor_stack(TriadTensor **xs, int32_t n, int32_t axis) {
     return _cat_impl(xs, n, axis, 1);
 }
 
-/* ══════════════════════════════════════
-   Math functions with autograd
-   ══════════════════════════════════════ */
-
-/* Generic unary: stores output data for backward */
 typedef struct { TriadTensor *a; double *out_data; } MathCtx;
 
-/* ── EXP ── */
 static void _exp_backward(TriadTensor *out) {
     MathCtx *c = (MathCtx*)out->_ctx;
     if (c->a->requires_grad) {
@@ -1438,7 +1373,6 @@ TriadTensor *triad_tensor_exp(TriadTensor *a) {
     return out;
 }
 
-/* ── LOG ── */
 static void _log_backward(TriadTensor *out) {
     MathCtx *c = (MathCtx*)out->_ctx;
     if (c->a->requires_grad) {
@@ -1463,7 +1397,6 @@ TriadTensor *triad_tensor_log(TriadTensor *a) {
     return out;
 }
 
-/* ── SQRT ── */
 static void _sqrt_backward(TriadTensor *out) {
     MathCtx *c = (MathCtx*)out->_ctx;
     if (c->a->requires_grad) {
@@ -1488,7 +1421,6 @@ TriadTensor *triad_tensor_sqrt(TriadTensor *a) {
     return out;
 }
 
-/* ── TANH ── */
 static void _tanh_backward(TriadTensor *out) {
     MathCtx *c = (MathCtx*)out->_ctx;
     if (c->a->requires_grad) {
@@ -1513,7 +1445,6 @@ TriadTensor *triad_tensor_tanh(TriadTensor *a) {
     return out;
 }
 
-/* ── SIGMOID ── */
 static void _sigmoid_backward(TriadTensor *out) {
     MathCtx *c = (MathCtx*)out->_ctx;
     if (c->a->requires_grad) {
@@ -1538,7 +1469,6 @@ TriadTensor *triad_tensor_sigmoid(TriadTensor *a) {
     return out;
 }
 
-/* ── RELU ── */
 static void _relu_backward(TriadTensor *out) {
     UnaryCtx *c = (UnaryCtx*)out->_ctx;
     if (c->a->requires_grad) {
@@ -1563,7 +1493,6 @@ TriadTensor *triad_tensor_relu(TriadTensor *a) {
     return out;
 }
 
-/* ── DROPOUT ── */
 typedef struct { TriadTensor *a; double *mask; } DropoutCtx;
 
 static void _dropout_ctx_free(void *ptr) {
@@ -1624,7 +1553,6 @@ TriadTensor *triad_tensor_dropout(TriadTensor *a, double p, int training) {
     return out;
 }
 
-/* ── SOFTMAX (axis=-1) ── */
 typedef struct { TriadTensor *a; double *softmax_out; int32_t last_dim; } SoftmaxCtx;
 
 static void _softmax_backward(TriadTensor *out) {
@@ -1671,13 +1599,12 @@ TriadTensor *triad_tensor_softmax(TriadTensor *a) {
     return out;
 }
 
-/* ── SOFTMAX over an arbitrary axis ── */
 typedef struct {
     TriadTensor *a;
     double *softmax_out;
-    int64_t outer;   /* product of dims before axis */
-    int32_t D;       /* size of the softmax axis */
-    int64_t inner;   /* product of dims after axis */
+    int64_t outer;
+    int32_t D;
+    int64_t inner;
 } SoftmaxAxisCtx;
 
 static void _softmax_axis_backward(TriadTensor *out) {
@@ -1742,7 +1669,6 @@ TriadTensor *triad_tensor_softmax_axis(TriadTensor *a, int32_t axis) {
     return out;
 }
 
-/* ── LAYER NORM (last dimension) ── */
 typedef struct {
     TriadTensor *a, *gamma, *beta;
     double *x_hat;
@@ -1865,18 +1791,12 @@ TriadTensor *triad_tensor_layer_norm(TriadTensor *a, TriadTensor *gamma,
     return out;
 }
 
-/* ══════════════════════════════════════
-   Loss functions with autograd
-   ══════════════════════════════════════ */
-
-/* ── MSE loss ── */
 TriadTensor *triad_tensor_mse_loss(TriadTensor *pred, TriadTensor *target) {
     TriadTensor *diff = triad_tensor_sub(pred, target);
     TriadTensor *sq = triad_tensor_mul(diff, diff);
     return triad_tensor_mean(sq);
 }
 
-/* ── Cross-entropy loss ── */
 typedef struct { TriadTensor *logits; double *log_probs; int64_t n; int32_t V; int32_t *targets; } CECtx;
 
 static void _ce_ctx_free(void *ptr) {
@@ -1910,7 +1830,6 @@ TriadTensor *triad_tensor_cross_entropy(TriadTensor *logits, TriadTensor *target
     double *log_probs = malloc(logits->size * sizeof(double));
     int32_t *tgt = malloc(n * sizeof(int32_t));
 
-    /* compute log-softmax */
     for (int64_t i = 0; i < n; i++) {
         double mx = -1e308;
         for (int32_t j = 0; j < V; j++)
@@ -1950,7 +1869,7 @@ typedef struct {
     TriadTensor *pred;
     TriadTensor *target;
     double delta;
-    int kind; /* 0=L1, 1=Huber */
+    int kind;
 } RegressionLossCtx;
 
 static void _regression_loss_backward(TriadTensor *out) {
@@ -2018,9 +1937,8 @@ TriadTensor *triad_tensor_smooth_l1_loss(TriadTensor *pred, TriadTensor *target)
     return triad_tensor_huber_loss(pred, target, 1.0);
 }
 
-/* ── Binary cross-entropy losses (manual backward for stability) ── */
 typedef struct {
-    TriadTensor *x;       /* probabilities (BCE) or logits (BCE-with-logits) */
+    TriadTensor *x;
     TriadTensor *target;
     int from_logits;
 } BCECtx;
@@ -2036,14 +1954,14 @@ static void _bce_backward(TriadTensor *out) {
         double gx, gt;
         if (c->from_logits) {
             double s = 1.0 / (1.0 + exp(-c->x->data[i]));
-            gx = (s - t);                 /* dL/dlogit = sigmoid(x) - t */
-            gt = -c->x->data[i];          /* dL/dt = -logit */
+            gx = (s - t);
+            gt = -c->x->data[i];
         } else {
             double p = c->x->data[i];
             if (p < eps) p = eps;
             if (p > 1.0 - eps) p = 1.0 - eps;
-            gx = (p - t) / (p * (1.0 - p)); /* dL/dp */
-            gt = -(log(p) - log(1.0 - p));  /* dL/dt = -(log p - log(1-p)) */
+            gx = (p - t) / (p * (1.0 - p));
+            gt = -(log(p) - log(1.0 - p));
         }
         if (c->x->requires_grad) c->x->grad[i] += gx * g0;
         if (c->target->requires_grad) c->target->grad[i] += gt * g0;
@@ -2076,7 +1994,7 @@ TriadTensor *triad_tensor_bce_loss(TriadTensor *pred, TriadTensor *target) {
 
 TriadTensor *triad_tensor_bce_with_logits(TriadTensor *logits, TriadTensor *target) {
     if (!logits || !target || logits->size != target->size) return NULL;
-    /* stable: max(x,0) - x*t + log(1 + exp(-|x|)) */
+
     double loss = 0.0;
     for (int64_t i = 0; i < logits->size; i++) {
         double x = logits->data[i], t = target->data[i];
@@ -2096,7 +2014,6 @@ TriadTensor *triad_tensor_bce_with_logits(TriadTensor *logits, TriadTensor *targ
     return out;
 }
 
-/* ── Negative log-likelihood: log_probs (..., V) + class-index targets ── */
 typedef struct {
     TriadTensor *log_probs;
     int32_t *targets;
@@ -2151,10 +2068,6 @@ TriadTensor *triad_tensor_nll_loss(TriadTensor *log_probs, TriadTensor *targets)
     }
     return out;
 }
-
-/* ══════════════════════════════════════
-   Scale mul (tensor * scalar)
-   ══════════════════════════════════════ */
 
 typedef struct { TriadTensor *a; double scale; } ScaleCtx;
 

@@ -1,0 +1,183 @@
+import triad.nn as nn;
+import triad.tensor as T;
+import resonance_substrates as rs;
+import resonance_block as rb;
+import triad.ntri as np;
+
+class ResonanceLM {
+    fn __init__(self, vocab_size, d_model=128, d_psi=64, d_res=32,
+                n_blocks=3, n_heads=4, ffn_mult=2, seq_len=64,
+                Lambda=-0.5, gamma_0=0.05, sigma=1.5, alpha=0.15,
+                hbar=1.0, mass=1.0, dt=0.05, T_bath=0.02,
+                nu_min=0.01, nu_max=8.0, seed=0) {
+        self.vocab_size = int(vocab_size);
+        self.d_model = int(d_model);
+        self.d_psi   = int(d_psi);
+        self.n_blocks = int(n_blocks);
+        self.n_heads = int(n_heads);
+        self.seq_len = int(seq_len);
+
+        self.emb = nn.Embedding(int(vocab_size), int(d_model));
+
+        self.blocks = [];
+        for i in range(int(n_blocks)) {
+            let blk = rb.ResonanceBlock(
+                int(d_model), int(d_psi), int(d_res), int(n_heads),
+                int(ffn_mult),
+                Lambda = float(Lambda) + 0.02 * float(i),
+                gamma_0 = float(gamma_0) + 0.005 * float(i),
+                sigma  = float(sigma),
+                alpha  = float(alpha),
+                hbar   = float(hbar),
+                mass   = float(mass),
+                dt     = float(dt),
+                T_bath = float(T_bath) * (1.0 + 0.1 * float(i)),
+                nu_min = float(nu_min),
+                nu_max = float(nu_max),
+                seed   = int(seed) + i
+            );
+            self.blocks.push(blk);
+        }
+
+        self.norm_f = nn.LayerNorm(int(d_model));
+        self.head   = nn.triad(int(d_model), int(vocab_size), bias=false);
+
+        self.T_bath = float(T_bath);
+        self.T_decay = 0.995;
+        self.T_floor = 0.001;
+    }
+
+    fn parameters(self) {
+        let ps = self.emb.parameters();
+        for blk in self.blocks {
+            for p in blk.parameters() { ps.push(p); }
+        }
+        for p in self.norm_f.parameters() { ps.push(p); }
+        for p in self.head.parameters() { ps.push(p); }
+        return ps;
+    }
+
+    fn set_temperature(self, T_new) {
+        self.T_bath = float(T_new);
+        for blk in self.blocks {
+            blk.set_temperature(self.T_bath);
+        }
+    }
+
+    fn anneal_temperature(self) {
+        let T_new = self.T_bath * self.T_decay;
+        if T_new < self.T_floor { T_new = self.T_floor; }
+        self.set_temperature(T_new);
+    }
+
+    fn forward(self, ids, return_observables=false) {
+        let x = self.emb(ids);
+        let y_state = none;
+        let obs_blocks = [];
+        let step = 0;
+        for blk in self.blocks {
+            let r = blk.forward(x, y_state);
+            x = r["output"];
+            y_state = r["y_state"];
+            obs_blocks.push(r["observables"]);
+            step = step + 1;
+        }
+        let x_norm = self.norm_f(x);
+        let logits = self.head(x_norm);
+        if return_observables {
+            return {"logits": logits, "observables": obs_blocks};
+        }
+        return logits;
+    }
+
+    fn loss(self, ids, targets) {
+        let out = self.forward(ids, return_observables=true);
+        let logits = out["logits"];
+        let ce = T.cross_entropy(logits, targets);
+        return {
+            "loss": ce,
+            "ce_loss": ce,
+            "logits": logits,
+            "observables": out["observables"]
+        };
+    }
+
+    fn generate(self, prompt_ids, max_new_tokens, temperature=0.8, top_k=0) {
+        let generated = [];
+        for id in prompt_ids { generated.push(id); }
+        let ctx_len = self.seq_len;
+
+        for step in range(int(max_new_tokens)) {
+            let start = 0;
+            let n_gen = len(generated);
+            if n_gen > ctx_len { start = n_gen - ctx_len; }
+            let ctx = [];
+            for i in range(start, n_gen) { ctx.push(generated[i]); }
+
+            let ctx_arr = np.array(ctx).reshape(1, -1);
+            let ctx_t = T.tensor(ctx_arr);
+
+            let logits_t;
+            with T.no_grad() {
+                logits_t = self.forward(ctx_t);
+            }
+            let logits_arr = logits_t.data;
+            let last = logits_arr[0][len(ctx) - 1];
+
+            let scaled = last;
+            if float(temperature) > 0.0 {
+                scaled = last / float(temperature);
+            }
+
+            if int(top_k) > 0 and int(top_k) < len(scaled) {
+                let order = [];
+                for k in range(len(scaled)) { order.push(k); }
+                for a in range(len(order) - 1) {
+                    for b in range(a + 1, len(order)) {
+                        if scaled[order[b]] > scaled[order[a]] {
+                            let tmp = order[a];
+                            order[a] = order[b];
+                            order[b] = tmp;
+                        }
+                    }
+                }
+                let cut = scaled[order[int(top_k) - 1]];
+                for k in range(len(scaled)) {
+                    if scaled[k] < cut { scaled[k] = -10000000000.0; }
+                }
+            }
+
+            let mx = float(np.max(scaled));
+            let exp_arr = np.exp(scaled - mx);
+            let probs = exp_arr / float(np.sum(exp_arr));
+            let cum = np.cumsum(probs);
+            let r = float(np.random.default_rng(int(step)).random());
+            let nxt = 0;
+            for i in range(len(cum)) {
+                if r < cum[i] { nxt = i; break; }
+            }
+            generated.push(int(nxt));
+        }
+        return generated;
+    }
+}
+
+print("ResonanceFormer LM loaded.");
+print("  ResonanceLM = token embedding + N×ResonanceBlock + norm + head");
+print("  Position is implicit in the causal memory kernel");
+print("  Anneals bath temperature, never isolates the substrates");
+print("");
+
+let TEXT = "the triad field oscillates and remembers. the triad crystallizes. ";
+let tok = nn.CharTokenizer(TEXT);
+let ids = tok.encode(TEXT);
+let VOCAB = tok.vocab_size;
+
+let model = ResonanceLM(VOCAB, 32, 16, 8, 1, 2, 2, 16, seed=0);
+let ps = model.parameters();
+print("params tensors: " + str(len(ps)));
+let ids_t = T.tensor(np.array(ids[:16]).reshape(1, -1));
+let target_t = T.tensor(np.array(ids[1:17]));
+let out = model.loss(ids_t, target_t);
+print("smoke: ce_loss = " + str(float(out["ce_loss"])));
+print("smoke: logits shape = " + str(out["logits"].shape));

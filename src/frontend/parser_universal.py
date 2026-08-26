@@ -1,32 +1,13 @@
 from __future__ import annotations
-from frontend.lexer_universal import Token, tokenize, LexError
+
 from frontend.ast_nodes import *
+from frontend.lexer_universal import Token, tokenize
 
-class ParseError(Exception):
+_SOFT_KEYWORDS = {'run', 'evolve', 'observe', 'couple', 'pair', 'ring',
+                  'sequence', 'reg', 'entity', 'world', 'substrate', 'via'}
 
-    def __init__(self, msg, line=0, col=0, file='', source='', hint=''):
-        self.msg = msg
-        self.line = line
-        self.col = col
-        self.file = file
-        self.source = source
-        self.hint = hint
-        super().__init__(self._format())
+from frontend.errors import ParseError
 
-    def _format(self):
-        
-        if self.source:
-            from frontend.diagnostics import format_code_error
-            return format_code_error(self.file or '<triad>', self.source, self.line, self.col, self.msg, hint=self.hint, code='PARSE')
-        
-        parts = [f'error[PARSE]: {self.msg}']
-        if self.file:
-            parts.append(f'\n  file: {self.file}')
-        if self.line:
-            parts.append(f'\n  line: {self.line}')
-        if self.col:
-            parts.append(f'\n  col: {self.col}')
-        return ''.join(parts)
 
 class Parser:
 
@@ -61,6 +42,10 @@ class Parser:
         t = self.toks[self.i]
         self.i += 1
         return t
+
+    def _lookahead_is(self, off, kind, value):
+        idx = self.i + off
+        return idx < len(self.toks) and self.toks[idx].kind == kind and self.toks[idx].value == value
 
     def _expect(self, kind, value=None) -> Token:
         t = self._peek()
@@ -99,9 +84,12 @@ class Parser:
             if t.value == 'fn':
                 return self._parse_fn()
             if t.value == 'async':
-                next_t = self._peek(1)
-                if next_t.kind == 'KEYWORD' and next_t.value == 'fn':
+                if self._lookahead_is(1, 'KEYWORD', 'fn'):
                     return self._parse_fn(async_=True)
+                if self._lookahead_is(1, 'KEYWORD', 'for'):
+                    return self._parse_async_for()
+                if self._lookahead_is(1, 'KEYWORD', 'with'):
+                    return self._parse_async_with()
             if t.value == 'if':
                 return self._parse_if()
             if t.value == 'for':
@@ -136,8 +124,20 @@ class Parser:
                 return self._parse_with()
             if t.value == 'throw':
                 return self._parse_throw()
+            if t.value == 'assert':
+                return self._parse_assert()
+            if t.value == 'pass':
+                p = self._pos()
+                self._eat()
+                self._eat_semi()
+                from frontend.ast_nodes import PassStmt
+                return PassStmt(pos=p)
+            if t.value == 'del':
+                return self._parse_del()
             if t.value == 'reg':
                 return self._parse_reg()
+            if t.value == 'substrate':
+                return self._parse_substrate()
             if t.value == 'entity':
                 return self._parse_entity()
             if t.value == 'world':
@@ -170,6 +170,19 @@ class Parser:
             val = self._parse_expr()
             self._eat_semi()
             return AssignStmt(target=expr, value=val, pos=expr.pos if hasattr(expr, 'pos') else self._pos())
+        for compound_op, bin_op in [('+=', '+'), ('-=', '-'), ('*=', '*'), ('/=', '/'), ('%=', '%'), ('**=', '**'), ('@=', '@'), ('&=', '&'), ('|=', '|'), ('^=', '^'), ('<<=', '<<'), ('>>=', '>>')]:
+            if self._at('SYMBOL', compound_op):
+                self._eat()
+                val = self._parse_expr()
+                self._eat_semi()
+                return AssignStmt(target=expr, value=BinOp(op=bin_op, left=expr, right=val, pos=expr.pos if hasattr(expr, 'pos') else self._pos()), pos=expr.pos if hasattr(expr, 'pos') else self._pos())
+        from frontend.ast_nodes import CompoundAssignExpr
+        for compound_op in ('??=', '||=', '&&='):
+            if self._at('SYMBOL', compound_op):
+                self._eat()
+                val = self._parse_expr()
+                self._eat_semi()
+                return CompoundAssignExpr(op=compound_op, target=expr, value=val, pos=expr.pos if hasattr(expr, 'pos') else self._pos())
         self._eat_semi()
         return ExprStmt(expr=expr, pos=expr.pos if hasattr(expr, 'pos') else self._pos())
 
@@ -187,17 +200,30 @@ class Parser:
         from frontend.ast_nodes import DestructLetStmt, MapDestructStmt
         p = self._pos()
         self._eat()
-        if self._at('SYMBOL', '('):
-            self._eat()
-            names = [self._expect('IDENT').value]
+        if self._at('SYMBOL', '(') or self._at('SYMBOL', '['):
+            open_sym = self._eat().value
+            close_sym = ')' if open_sym == '(' else ']'
+            names = []
+            star_idx = -1
+            if self._at('SYMBOL', '*'):
+                self._eat()
+                star_idx = 0
+                names.append(self._expect('IDENT').value)
+            else:
+                names.append(self._expect('IDENT').value)
             while self._at('SYMBOL', ','):
                 self._eat()
-                names.append(self._expect('IDENT').value)
-            self._expect_sym(')')
+                if self._at('SYMBOL', '*'):
+                    self._eat()
+                    star_idx = len(names)
+                    names.append(self._expect('IDENT').value)
+                else:
+                    names.append(self._expect('IDENT').value)
+            self._expect_sym(close_sym)
             self._expect_sym('=')
             value = self._parse_expr()
             self._eat_semi()
-            return DestructLetStmt(names=names, value=value, pos=p)
+            return DestructLetStmt(names=names, value=value, star_idx=star_idx, pos=p)
         if self._at('SYMBOL', '{'):
             self._eat()
             names = [self._expect('IDENT').value]
@@ -215,7 +241,7 @@ class Parser:
         type_ann = None
         if self._at('SYMBOL', ':'):
             self._eat()
-            type_ann = self._expect('IDENT').value
+            type_ann = self._parse_type_expr()
         value = None
         if self._at('SYMBOL', '='):
             self._eat()
@@ -241,7 +267,11 @@ class Parser:
         if async_:
             self._eat()
         self._eat()
-        name = self._expect('IDENT').value
+        t = self._peek()
+        if t.kind == 'KEYWORD' and t.value in _SOFT_KEYWORDS:
+            name = self._eat().value
+        else:
+            name = self._expect('IDENT').value
         self._expect_sym('(')
         params = self._parse_params()
         self._expect_sym(')')
@@ -254,7 +284,7 @@ class Parser:
 
     def _parse_params(self) -> list[Param]:
         params = []
-        while not self._at('SYMBOL', ')') and (not self._at('EOF')):
+        while not self._at('SYMBOL', ')') :
             p = self._pos()
             is_args = False
             is_kwargs = False
@@ -282,7 +312,7 @@ class Parser:
         self._expect_sym('{')
         stmts = []
         self._skip_semis()
-        while not self._at('SYMBOL', '}') and (not self._at('EOF')):
+        while not self._at('SYMBOL', '}') :
             stmts.append(self._parse_stmt())
             self._skip_semis()
         self._expect_sym('}')
@@ -325,7 +355,7 @@ class Parser:
         p = self._pos()
         self._eat()
         value = None
-        if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) and (not self._at('EOF')):
+        if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) :
             value = self._parse_expr()
         self._eat_semi()
         return ReturnStmt(value=value, pos=p)
@@ -334,7 +364,7 @@ class Parser:
         p = self._pos()
         self._eat()
         value = None
-        if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) and (not self._at('EOF')):
+        if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) :
             value = self._parse_expr()
         self._eat_semi()
         return YieldStmt(value=value, pos=p)
@@ -347,7 +377,7 @@ class Parser:
         fields = []
         methods = []
         self._skip_semis()
-        while not self._at('SYMBOL', '}') and (not self._at('EOF')):
+        while not self._at('SYMBOL', '}') :
             if self._at('KEYWORD', 'fn'):
                 methods.append(self._parse_fn())
             else:
@@ -369,15 +399,29 @@ class Parser:
         p = self._pos()
         self._eat()
         name = self._expect('IDENT').value
-        parent = None
-        if self._at('SYMBOL', ':'):
+        parents = []
+        if self._at('KEYWORD', 'inherits'):
             self._eat()
-            parent = self._expect('IDENT').value
+            parents.append(self._expect('IDENT').value)
+            while self._at('SYMBOL', ','):
+                self._eat()
+                parents.append(self._expect('IDENT').value)
+        elif self._at('SYMBOL', ':'):
+            self._eat()
+            parents.append(self._expect('IDENT').value)
+            while self._at('SYMBOL', ':'):
+                self._eat()
+                parents.append(self._expect('IDENT').value)
+        parent = parents[0] if parents else None
         self._expect_sym('{')
         fields = []
         methods = []
         self._skip_semis()
-        while not self._at('SYMBOL', '}') and (not self._at('EOF')):
+        while not self._at('SYMBOL', '}') :
+            if self._at('SYMBOL', '@'):
+                self._pending_decorators.append(self._parse_decorator_expr())
+                self._skip_semis()
+                continue
             if self._at('KEYWORD', 'fn'):
                 methods.append(self._parse_fn())
             else:
@@ -395,7 +439,7 @@ class Parser:
                 fields.append(TypeField(name=fname, type_ann=ftype, default=default, pos=fp))
             self._skip_semis()
         self._expect_sym('}')
-        return ClassDecl(name=name, parent=parent, fields=fields, methods=methods, pos=p)
+        return ClassDecl(name=name, parent=parent, parents=parents, fields=fields, methods=methods, pos=p)
 
     def _parse_match(self) -> MatchStmt:
         p = self._pos()
@@ -405,7 +449,7 @@ class Parser:
         self._skip_semis()
         cases = []
         else_body = None
-        while not self._at('SYMBOL', '}') and (not self._at('EOF')):
+        while not self._at('SYMBOL', '}') :
             if self._at('KEYWORD', 'else'):
                 self._eat()
                 if self._at('SYMBOL', '=>'):
@@ -487,7 +531,7 @@ class Parser:
         if self._at('SYMBOL', '{'):
             self._eat()
             overrides = {}
-            while not self._at('SYMBOL', '}') and (not self._at('EOF')):
+            while not self._at('SYMBOL', '}') :
                 k = self._eat().value
                 self._expect_sym(':')
                 v = self._parse_expr()
@@ -496,6 +540,49 @@ class Parser:
             self._expect_sym('}')
         self._eat_semi()
         return RegStmt(name=name, regime=regime, value=value, overrides=overrides, pos=p)
+
+    def _parse_substrate(self) -> SubstrateDecl:
+        from frontend.ast_nodes import SubstrateDecl
+        p = self._pos()
+        self._eat()
+        name = self._expect('IDENT').value
+
+        if self._at('KEYWORD', 'composed_of'):
+            self._eat()
+            self._expect_sym('(')
+            members = [self._expect('IDENT').value]
+            while self._at('SYMBOL', ','):
+                self._eat()
+                members.append(self._expect('IDENT').value)
+            self._expect_sym(')')
+            properties = {}
+            if self._at('SYMBOL', '{'):
+                self._eat()
+                while not self._at('SYMBOL', '}') :
+                    k = self._eat().value
+                    self._expect_sym(':')
+                    properties[k] = self._parse_expr()
+                    self._eat_semi()
+                self._expect_sym('}')
+            self._eat_semi()
+            return SubstrateDecl(name=name, members=members, properties=properties, pos=p)
+
+        regime = None
+        if self._at('SYMBOL', ':'):
+            self._eat()
+            regime = self._expect('IDENT').value
+        overrides = None
+        if self._at('SYMBOL', '{'):
+            self._eat()
+            overrides = {}
+            while not self._at('SYMBOL', '}') :
+                k = self._eat().value
+                self._expect_sym(':')
+                overrides[k] = self._parse_expr()
+                self._eat_semi()
+            self._expect_sym('}')
+        self._eat_semi()
+        return SubstrateDecl(name=name, regime=regime, overrides=overrides, pos=p)
 
     def _parse_entity(self) -> EntityDecl:
         p = self._pos()
@@ -509,7 +596,7 @@ class Parser:
         fields = {}
         methods = []
         self._skip_semis()
-        while not self._at('SYMBOL', '}') and (not self._at('EOF')):
+        while not self._at('SYMBOL', '}') :
             if self._at('KEYWORD', 'fn'):
                 methods.append(self._parse_fn())
             elif self._at('IDENT') and self._peek().value in ('memory', 'phase'):
@@ -518,7 +605,7 @@ class Parser:
                     self._eat()
                     fields[k] = self._parse_expr()
                 else:
-                    while not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) and (not self._at('EOF')):
+                    while not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) :
                         kk = self._eat().value
                         if self._at('SYMBOL', '='):
                             self._eat()
@@ -543,7 +630,7 @@ class Parser:
         entities = []
         body = []
         self._skip_semis()
-        while not self._at('SYMBOL', '}') and (not self._at('EOF')):
+        while not self._at('SYMBOL', '}') :
             if self._at('KEYWORD', 'entity'):
                 entities.append(self._parse_entity())
             elif self._at('KEYWORD', 'run'):
@@ -629,15 +716,15 @@ class Parser:
     def _parse_observe(self) -> ObserveStmt:
         p = self._pos()
         self._eat()
-        target = self._expect('IDENT').value
+        target = self._expect_ident_or_kw().value
         metrics = []
-        if not self._at('SYMBOL', ';') and (not self._at('EOF')):
-            metrics.append(self._expect('IDENT').value)
+        if not self._at('SYMBOL', ';') and not self._at('KEYWORD', 'over_seeds'):
+            metrics.append(self._expect_ident_or_kw().value)
             while self._at('SYMBOL', ','):
                 self._eat()
                 if self._at('KEYWORD', 'over_seeds'):
                     break
-                metrics.append(self._expect('IDENT').value)
+                metrics.append(self._expect_ident_or_kw().value)
         over_seeds = 1
         if self._at('KEYWORD', 'over_seeds'):
             self._eat()
@@ -650,7 +737,7 @@ class Parser:
         p = self._pos()
         self._eat()
         dur = None
-        if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) and (not self._at('EOF')):
+        if self._duration_follows():
             if self._at('IDENT') and self._peek().value == 'T':
                 self._eat()
                 self._expect_sym('=')
@@ -662,12 +749,12 @@ class Parser:
         p = self._pos()
         self._eat()
         target = None
-        if self._at('IDENT'):
+        if self._at('IDENT') and not (self._peek().value == 'T' and self._peek(1).kind == 'SYMBOL' and self._peek(1).value == '='):
             target = self._eat().value
         dur = None
         if self._at('KEYWORD', 'for'):
             self._eat()
-        if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) and (not self._at('EOF')):
+        if self._duration_follows():
             if self._at('IDENT') and self._peek().value == 'T':
                 self._eat()
                 self._expect_sym('=')
@@ -675,7 +762,15 @@ class Parser:
         self._eat_semi()
         return RunStmt(duration=dur, target=target, pos=p)
 
-    def _parse_sequence(self) -> 'SequenceStmt':
+    def _duration_follows(self) -> bool:
+        t = self._peek()
+        if t.kind in ('NUMBER', 'IDENT'):
+            return True
+        if t.kind == 'SYMBOL' and t.value in ('(', '-'):
+            return True
+        return False
+
+    def _parse_sequence(self) -> SequenceStmt:
         from frontend.ast_nodes import SequenceStmt
         p = self._pos()
         self._eat()
@@ -692,26 +787,49 @@ class Parser:
         self._eat_semi()
         return SequenceStmt(inputs=inputs, target=target, each_for=each_for, pos=p)
 
-    def _parse_try(self) -> 'TryCatchStmt':
-        from frontend.ast_nodes import TryCatchStmt
+    def _parse_try(self) -> TryCatchStmt:
+        from frontend.ast_nodes import CatchBlock, TryCatchStmt
         p = self._pos()
         self._eat()
         body = self._parse_block()
-        catch_var = None
-        catch_body = []
-        finally_body = []
-        if self._at('KEYWORD', 'catch'):
+        catches = []
+        while self._at('KEYWORD', 'catch'):
             self._eat()
-            if self._at('IDENT'):
-                catch_var = self._peek().value
+            exceptions = []
+            var = None
+            if self._at('SYMBOL', '('):
                 self._eat()
-            catch_body = self._parse_block()
+                exceptions.append(self._expect('IDENT').value)
+                while self._at('SYMBOL', ','):
+                    self._eat()
+                    exceptions.append(self._expect('IDENT').value)
+                if self._at('KEYWORD', 'as'):
+                    self._eat()
+                    var = self._expect('IDENT').value
+                self._expect_sym(')')
+            elif self._at('IDENT'):
+                ident = self._eat().value
+                if self._at('SYMBOL', '{'):
+                    var = ident
+                else:
+                    exceptions.append(ident)
+            if var is None and self._at('KEYWORD', 'as'):
+                self._eat()
+                var = self._expect('IDENT').value
+            elif var is None and self._at('IDENT'):
+                var = self._eat().value
+            cb = self._parse_block()
+
+            catches.append(CatchBlock(exceptions=exceptions, var=var, body=cb))
+        finally_body = []
         if self._at('KEYWORD', 'finally'):
             self._eat()
             finally_body = self._parse_block()
-        return TryCatchStmt(body=body, catch_var=catch_var, catch_body=catch_body, finally_body=finally_body, pos=p)
+        if catches:
+            return TryCatchStmt(body=body, catches=catches, finally_body=finally_body, catch_var=catches[0].var if catches else None, catch_body=catches[0].body if catches else [], pos=p)
+        return TryCatchStmt(body=body, finally_body=finally_body, pos=p)
 
-    def _parse_with(self) -> 'WithStmt':
+    def _parse_with(self) -> WithStmt:
         from frontend.ast_nodes import WithStmt
         p = self._pos()
         self._eat()
@@ -723,15 +841,81 @@ class Parser:
         body = self._parse_block()
         return WithStmt(expr=expr, var=var, body=body, pos=p)
 
-    def _parse_throw(self) -> 'ThrowStmt':
+    def _parse_throw(self) -> ThrowStmt:
         from frontend.ast_nodes import ThrowStmt
         p = self._pos()
         self._eat()
         value = None
-        if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) and (not self._at('EOF')):
+        if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) :
             value = self._parse_expr()
         self._eat_semi()
         return ThrowStmt(value=value, pos=p)
+
+    def _parse_assert(self):
+        from frontend.ast_nodes import AssertStmt
+        p = self._pos()
+        self._eat()
+        cond = self._parse_expr()
+        msg = None
+        if self._at('SYMBOL', ','):
+            self._eat()
+            msg = self._parse_expr()
+        self._eat_semi()
+        return AssertStmt(condition=cond, message=msg, pos=p)
+
+    def _parse_del(self):
+        from frontend.ast_nodes import DelStmt
+        p = self._pos()
+        self._eat()
+        target = self._parse_expr()
+        self._eat_semi()
+        return DelStmt(target=target, pos=p)
+
+    def _parse_async_for(self):
+        from frontend.ast_nodes import AsyncForStmt
+        p = self._pos()
+        self._eat()
+        self._eat()
+        var = self._expect('IDENT').value
+        self._expect('KEYWORD', 'in')
+        iter_expr = self._parse_expr()
+        body = self._parse_block()
+        return AsyncForStmt(var=var, iter=iter_expr, body=body, pos=p)
+
+    def _parse_async_with(self):
+        from frontend.ast_nodes import AsyncWithStmt
+        p = self._pos()
+        self._eat()
+        self._eat()
+        expr = self._parse_expr()
+        var = None
+        if self._at('KEYWORD', 'as'):
+            self._eat()
+            var = self._expect('IDENT').value
+        body = self._parse_block()
+        return AsyncWithStmt(expr=expr, var=var, body=body, pos=p)
+
+    def _parse_type_expr(self):
+        from frontend.ast_nodes import GenericType, OptionalType, UnionType
+        base = self._expect('IDENT').value
+        if self._at('SYMBOL', '['):
+            self._eat()
+            args = [self._parse_type_expr()]
+            while self._at('SYMBOL', ','):
+                self._eat()
+                args.append(self._parse_type_expr())
+            self._expect_sym(']')
+            base = GenericType(name=base, args=args)
+        if self._at('SYMBOL', '?'):
+            self._eat()
+            base = OptionalType(inner=base)
+        if self._at('SYMBOL', '|'):
+            types = [base]
+            while self._at('SYMBOL', '|'):
+                self._eat()
+                types.append(self._parse_type_expr())
+            base = UnionType(types=types)
+        return base
 
     def _parse_decorator_expr(self):
         p = self._pos()
@@ -759,7 +943,7 @@ class Parser:
         self._eat_semi()
         return expr
 
-    def _parse_annotation(self) -> 'AnnotationStmt':
+    def _parse_annotation(self) -> AnnotationStmt:
         from frontend.ast_nodes import AnnotationStmt
         p = self._pos()
         self._eat()
@@ -769,7 +953,7 @@ class Parser:
         if self._at('SYMBOL', '('):
             self._eat()
             parts = []
-            while not self._at('SYMBOL', ')') and (not self._at('EOF')):
+            while not self._at('SYMBOL', ')') :
                 parts.append(self._peek().value)
                 self._eat()
             self._expect_sym(')')
@@ -778,14 +962,41 @@ class Parser:
         return AnnotationStmt(key=name, args=args, pos=p)
 
     def _parse_expr(self) -> Expr:
-        return self._parse_or()
+        return self._parse_nullish()
 
-    def _parse_or(self) -> Expr:
+    def _parse_nullish(self) -> Expr:
+        from frontend.ast_nodes import ElvisExpr, NullishCoalesceExpr
+        left = self._parse_or()
+        while True:
+            if self._at('SYMBOL', '??'):
+                self._eat()
+                right = self._parse_or()
+                left = NullishCoalesceExpr(left=left, right=right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+            elif self._at('SYMBOL', '?:'):
+                self._eat()
+                right = self._parse_or()
+                left = ElvisExpr(cond=left, else_val=right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+            else:
+                break
+        return left
+
+    def _parse_or(self, allow_ternary=True) -> Expr:
         left = self._parse_and()
         while self._at('KEYWORD', 'or'):
             self._eat()
             right = self._parse_and()
             left = BinOp('or', left, right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        if allow_ternary and self._at('KEYWORD', 'if'):
+            p = self._pos()
+            self._eat()
+            cond = self._parse_or(allow_ternary=False)
+            if not self._at('KEYWORD', 'else'):
+                t = self._peek()
+                raise ParseError('expected keyword else in ternary expression', t.line, t.col, self.file, self.source)
+            self._eat()
+            alt = self._parse_or(allow_ternary=True)
+            from frontend.ast_nodes import TernaryExpr
+            return TernaryExpr(cond=cond, then_val=left, else_val=alt, pos=p)
         return left
 
     def _parse_and(self) -> Expr:
@@ -804,8 +1015,103 @@ class Parser:
         return self._parse_comparison()
 
     def _parse_comparison(self) -> Expr:
+        left = self._parse_pipeline()
+        ops_map = {'==', '!=', '<', '<=', '>', '>=', '//'}
+        if self._at('SYMBOL') and self._peek().value in ops_map:
+            operands = [left]
+            ops = []
+            while self._at('SYMBOL') and self._peek().value in ops_map:
+                op = self._eat().value
+                ops.append(op)
+                operands.append(self._parse_bitor())
+            if len(ops) == 1:
+                return BinOp(ops[0], operands[0], operands[1], pos=operands[0].pos if hasattr(operands[0], 'pos') else self._pos())
+            from frontend.ast_nodes import ChainCmpExpr
+            return ChainCmpExpr(operands=operands, ops=ops, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        if self._at('KEYWORD', 'in'):
+            self._eat()
+            right = self._parse_bitor()
+            return BinOp('in', left, right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        if self._at('KEYWORD', 'not') and self._lookahead_is(1, 'KEYWORD', 'in'):
+            p = self._pos()
+            self._eat()
+            self._eat()
+            right = self._parse_bitor()
+            return BinOp('not_in', left, right, pos=p)
+        if self._at('IDENT', 'not_in'):
+            p = self._pos()
+            self._eat()
+            right = self._parse_bitor()
+            return BinOp('not_in', left, right, pos=p)
+        if self._at('KEYWORD', 'is'):
+            self._eat()
+            if self._at('KEYWORD', 'not'):
+                self._eat()
+                right = self._parse_bitor()
+                return BinOp('is_not', left, right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+            right = self._parse_bitor()
+            return BinOp('is', left, right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        if self._at('IDENT', 'is_not'):
+            p = self._pos()
+            self._eat()
+            right = self._parse_bitor()
+            return BinOp('is_not', left, right, pos=p)
+        if self._at('IDENT', 'is'):
+            p = self._pos()
+            self._eat()
+            right = self._parse_bitor()
+            return BinOp('is', left, right, pos=p)
+        return left
+
+    def _parse_pipeline(self) -> Expr:
+        from frontend.ast_nodes import PipelineExpr
+        left = self._parse_range()
+        while self._at('SYMBOL', '|>'):
+            self._eat()
+            right = self._parse_range()
+            left = PipelineExpr(left=left, right=right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        return left
+
+    def _parse_range(self) -> Expr:
+        from frontend.ast_nodes import RangeExpr
+        left = self._parse_bitor()
+        if self._at('SYMBOL', '..='):
+            self._eat()
+            right = self._parse_bitor()
+            return RangeExpr(start=left, end=right, inclusive=True, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        if self._at('SYMBOL', '..'):
+            self._eat()
+            right = self._parse_bitor()
+            return RangeExpr(start=left, end=right, inclusive=False, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        return left
+
+    def _parse_bitor(self) -> Expr:
+        left = self._parse_bitxor()
+        while self._at('SYMBOL') and self._peek().value == '|':
+            self._eat()
+            right = self._parse_bitxor()
+            left = BinOp('|', left, right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        return left
+
+    def _parse_bitxor(self) -> Expr:
+        left = self._parse_bitand()
+        while self._at('SYMBOL') and self._peek().value == '^':
+            self._eat()
+            right = self._parse_bitand()
+            left = BinOp('^', left, right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        return left
+
+    def _parse_bitand(self) -> Expr:
+        left = self._parse_shift()
+        while self._at('SYMBOL') and self._peek().value == '&':
+            self._eat()
+            right = self._parse_shift()
+            left = BinOp('&', left, right, pos=left.pos if hasattr(left, 'pos') else self._pos())
+        return left
+
+    def _parse_shift(self) -> Expr:
         left = self._parse_add()
-        while self._at('SYMBOL') and self._peek().value in ('==', '!=', '<', '<=', '>', '>='):
+        while self._at('SYMBOL') and self._peek().value in ('<<', '>>'):
             op = self._eat().value
             right = self._parse_add()
             left = BinOp(op, left, right, pos=left.pos if hasattr(left, 'pos') else self._pos())
@@ -821,7 +1127,7 @@ class Parser:
 
     def _parse_mul(self) -> Expr:
         left = self._parse_power()
-        while self._at('SYMBOL') and self._peek().value in ('*', '/', '%', '@'):
+        while self._at('SYMBOL') and self._peek().value in ('*', '/', '%', '@', '//'):
             op = self._eat().value
             right = self._parse_power()
             left = BinOp(op, left, right, pos=left.pos if hasattr(left, 'pos') else self._pos())
@@ -836,6 +1142,7 @@ class Parser:
         return left
 
     def _parse_unary(self) -> Expr:
+        from frontend.ast_nodes import RegexLit, SpreadExpr
         if self._at('KEYWORD', 'await'):
             p = self._pos()
             self._eat()
@@ -848,6 +1155,20 @@ class Parser:
             p = self._pos()
             self._eat()
             return UnaryOp('not', self._parse_unary(), pos=p)
+        if self._at('SYMBOL', '~'):
+            p = self._pos()
+            self._eat()
+            return UnaryOp('~', self._parse_unary(), pos=p)
+        if self._at('SYMBOL', '...'):
+            p = self._pos()
+            self._eat()
+            value = self._parse_unary()
+            return SpreadExpr(value=value, pos=p)
+        if self._peek().kind == 'REGEX':
+            t = self._peek()
+            rp = Pos(t.line, t.col, self.file)
+            self._eat()
+            return RegexLit(pattern=t.value[0], flags=t.value[1], pos=rp)
         return self._parse_postfix()
 
     def _parse_postfix(self) -> Expr:
@@ -894,6 +1215,28 @@ class Parser:
                         else:
                             self._expect_sym(']')
                             expr = IndexExpr(obj=expr, index=first, pos=expr.pos if hasattr(expr, 'pos') else p)
+            elif self._at('SYMBOL', '?.'):
+                from frontend.ast_nodes import OptChainExpr
+                p2 = self._pos()
+                self._eat()
+                if self._at('SYMBOL', '['):
+                    self._eat()
+                    idx = self._parse_expr()
+                    self._expect_sym(']')
+                    expr = OptChainExpr(obj=expr, index=idx, pos=p2)
+                else:
+                    t = self._peek()
+                    if t.kind in ('IDENT', 'KEYWORD'):
+                        field_name = self._eat().value
+                    else:
+                        field_name = self._expect('IDENT').value
+                    if self._at('SYMBOL', '('):
+                        self._eat()
+                        args, kwargs = self._parse_call_args()
+                        self._expect_sym(')')
+                        expr = OptChainExpr(obj=expr, method=field_name, args=args, kwargs=kwargs, pos=p2)
+                    else:
+                        expr = OptChainExpr(obj=expr, attr=field_name, pos=p2)
             elif self._at('SYMBOL', '.'):
                 self._eat()
                 t = self._peek()
@@ -913,10 +1256,15 @@ class Parser:
         return expr
 
     def _parse_call_args(self) -> tuple[list[Expr], dict[str, Expr]]:
+        from frontend.ast_nodes import SpreadExpr
         args = []
         kwargs = {}
-        while not self._at('SYMBOL', ')') and (not self._at('EOF')):
-            if self._at('SYMBOL', '**'):
+        while not self._at('SYMBOL', ')') :
+            if self._at('SYMBOL', '...'):
+                p = self._pos()
+                self._eat()
+                args.append(SpreadExpr(value=self._parse_expr(), pos=p))
+            elif self._at('SYMBOL', '**'):
                 p = self._pos()
                 self._eat()
                 args.append(UnaryOp('**', self._parse_expr(), p))
@@ -934,6 +1282,51 @@ class Parser:
                 self._expect_sym(',')
         return (args, kwargs)
 
+    def _is_arrow_function(self) -> bool:
+        if not self._at('SYMBOL', '('):
+            return False
+        save = self.i
+        self._eat()
+        if self._at('SYMBOL', ')'):
+            self._eat()
+            result = self._at('SYMBOL', '=>')
+            self.i = save
+            return result
+        _ARROW_STOP = {'for', 'in', 'if', 'else', 'while', 'return', 'match', 'case',
+                       'class', 'fn', 'let', 'const', 'import', 'from', 'try', 'catch',
+                       'throw', 'break', 'continue', 'yield', 'async', 'await', 'with',
+                       'is', 'as', 'assert', 'pass', 'del', 'not', 'and', 'or',
+                       'true', 'false', 'none', 'self', 'super'}
+        while True:
+            t = self._peek()
+            if t.kind in ('IDENT', 'KEYWORD') and t.value not in _ARROW_STOP:
+                self._eat()
+                if self._at('SYMBOL', '='):
+                    self._eat()
+                    dt = self._peek()
+                    if dt.kind in ('NUMBER', 'STRING', 'IDENT', 'KEYWORD') and dt.value not in _ARROW_STOP:
+                        self._eat()
+                    elif dt.kind == 'SYMBOL' and dt.value in ('-', '!', '('):
+                        self.i = save
+                        return False
+                    else:
+                        self.i = save
+                        return False
+            else:
+                self.i = save
+                return False
+            if self._at('SYMBOL', ','):
+                self._eat()
+                continue
+            elif self._at('SYMBOL', ')'):
+                self._eat()
+                result = self._at('SYMBOL', '=>')
+                self.i = save
+                return result
+            else:
+                self.i = save
+                return False
+
     def _parse_primary(self) -> Expr:
         t = self._peek()
         p = self._pos()
@@ -942,6 +1335,8 @@ class Parser:
             v = t.value
             if '.' in v or 'e' in v or 'E' in v:
                 return FloatLit(float(v), p)
+            if v.endswith('j') or v.endswith('J'):
+                return ComplexLit(complex(v), p)
             if v.startswith('0x') or v.startswith('0X'):
                 return IntLit(int(v, 16), p)
             if v.startswith('0b') or v.startswith('0B'):
@@ -985,10 +1380,16 @@ class Parser:
             if t.value == 'self':
                 self._eat()
                 return Ident('self', p)
+            if t.value == 'super':
+                self._eat()
+                self._expect_sym('(')
+                self._expect_sym(')')
+                from frontend.ast_nodes import SuperExpr
+                return SuperExpr(pos=p)
             if t.value == 'yield':
                 self._eat()
                 val = None
-                if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) and (not self._at('SYMBOL', ')')) and (not self._at('EOF')):
+                if not self._at('SYMBOL', ';') and (not self._at('SYMBOL', '}')) and (not self._at('SYMBOL', ')')) :
                     val = self._parse_expr()
                 return YieldExpr(value=val, pos=p)
             if t.value == 'await':
@@ -1006,14 +1407,49 @@ class Parser:
             self._eat()
             return Ident(t.value, p)
         if t.kind == 'SYMBOL' and t.value == '(':
+            from frontend.ast_nodes import (
+                AssignExpr,
+                GenCompExpr,
+                LambdaExpr,
+                Param,
+                ReturnStmt,
+                TupleExpr,
+            )
+            if self._is_arrow_function():
+                self._eat()
+                params = []
+                if not self._at('SYMBOL', ')'):
+                    while True:
+                        pname = self._expect_ident_or_kw().value
+                        default = None
+                        if self._at('SYMBOL', '='):
+                            self._eat()
+                            default = self._parse_expr()
+                        params.append(Param(name=pname, type_ann=None, default=default))
+                        if self._at('SYMBOL', ','):
+                            self._eat()
+                        elif self._at('SYMBOL', ')'):
+                            break
+                        else:
+                            break
+                self._expect_sym(')')
+                self._expect_sym('=>')
+                if self._at('SYMBOL', '{'):
+                    body = self._parse_block()
+                else:
+                    expr = self._parse_expr()
+                    body = [ReturnStmt(value=expr, pos=self._pos())]
+                return LambdaExpr(params=params, body=body, pos=p)
             self._eat()
             if self._at('SYMBOL', ')'):
                 self._eat()
-                from frontend.ast_nodes import TupleExpr
                 return TupleExpr(elements=[], pos=p)
             first = self._parse_expr()
+            if self._at('KEYWORD', 'for'):
+                clauses = self._parse_comp_clauses()
+                self._expect_sym(')')
+                return GenCompExpr(expr=first, clauses=clauses, pos=p)
             if self._at('SYMBOL', ','):
-                from frontend.ast_nodes import TupleExpr
                 elems = [first]
                 while self._at('SYMBOL', ','):
                     self._eat()
@@ -1022,6 +1458,11 @@ class Parser:
                     elems.append(self._parse_expr())
                 self._expect_sym(')')
                 return TupleExpr(elements=elems, pos=p)
+            if self._at('SYMBOL', ':='):
+                self._eat()
+                val = self._parse_expr()
+                self._expect_sym(')')
+                return AssignExpr(target=first, value=val, pos=p)
             self._expect_sym(')')
             return first
         if t.kind == 'SYMBOL' and t.value == '[':
@@ -1032,16 +1473,9 @@ class Parser:
             first = self._parse_expr()
             if self._at('KEYWORD', 'for'):
                 from frontend.ast_nodes import ListCompExpr
-                self._eat()
-                var = self._expect('IDENT').value
-                self._expect('KEYWORD', 'in')
-                iter_expr = self._parse_expr()
-                cond = None
-                if self._at('KEYWORD', 'if'):
-                    self._eat()
-                    cond = self._parse_expr()
+                clauses = self._parse_comp_clauses()
                 self._expect_sym(']')
-                return ListCompExpr(expr=first, var=var, iter=iter_expr, condition=cond, pos=p)
+                return ListCompExpr(expr=first, var=clauses[0].var, iter=clauses[0].iter, clauses=clauses, pos=p)
             elems = [first]
             while self._at('SYMBOL', ','):
                 self._eat()
@@ -1052,16 +1486,76 @@ class Parser:
             return ListExpr(elems, p)
         if t.kind == 'SYMBOL' and t.value == '{':
             self._eat()
-            pairs = []
-            while not self._at('SYMBOL', '}') and (not self._at('EOF')):
-                key = self._parse_expr()
-                self._expect_sym(':')
+            if self._at('SYMBOL', '}'):
+                self._eat()
+                return MapExpr(pairs=[], pos=p)
+            is_spread_first = self._at('SYMBOL', '...')
+            first = self._parse_expr()
+            if self._at('SYMBOL', ':') and not is_spread_first:
+                self._eat()
                 val = self._parse_expr()
-                pairs.append((key, val))
-                if not self._at('SYMBOL', '}'):
-                    self._expect_sym(',')
+                if self._at('KEYWORD', 'for'):
+                    from frontend.ast_nodes import DictCompExpr
+                    clauses = self._parse_comp_clauses()
+                    self._expect_sym('}')
+                    return DictCompExpr(key=first, value=val, clauses=clauses, pos=p)
+                pairs = [(first, val)]
+                while self._at('SYMBOL', ','):
+                    self._eat()
+                    if self._at('SYMBOL', '}'):
+                        break
+                    if self._at('SYMBOL', '...'):
+                        sp = self._parse_expr()
+                        pairs.append((sp, None))
+                    else:
+                        k = self._parse_expr()
+                        self._expect_sym(':')
+                        v = self._parse_expr()
+                        pairs.append((k, v))
+                self._expect_sym('}')
+                return MapExpr(pairs=pairs, pos=p)
+            if is_spread_first:
+                pairs = [(first, None)]
+                while self._at('SYMBOL', ','):
+                    self._eat()
+                    if self._at('SYMBOL', '}'):
+                        break
+                    if self._at('SYMBOL', '...'):
+                        sp = self._parse_expr()
+                        pairs.append((sp, None))
+                    elif self._peek(1).kind == 'SYMBOL' and self._peek(1).value == ':':
+                        k = self._parse_expr()
+                        self._expect_sym(':')
+                        v = self._parse_expr()
+                        pairs.append((k, v))
+                    else:
+                        k = self._parse_expr()
+                        if self._at('SYMBOL', ':'):
+                            self._eat()
+                            v = self._parse_expr()
+                            pairs.append((k, v))
+                        else:
+                            pairs.append((k, None))
+                self._expect_sym('}')
+                return MapExpr(pairs=pairs, pos=p)
+            if self._at('KEYWORD', 'for'):
+                from frontend.ast_nodes import SetCompExpr
+                clauses = self._parse_comp_clauses()
+                self._expect_sym('}')
+                return SetCompExpr(expr=first, clauses=clauses, pos=p)
+            elements = [first]
+            while self._at('SYMBOL', ','):
+                self._eat()
+                if self._at('SYMBOL', '}'):
+                    break
+                elements.append(self._parse_expr())
             self._expect_sym('}')
-            return MapExpr(pairs, p)
+            from frontend.ast_nodes import SetExpr
+            return SetExpr(elements=elements, pos=p)
+        if t.kind == 'REGEX':
+            from frontend.ast_nodes import RegexLit
+            self._eat()
+            return RegexLit(pattern=t.value[0], flags=t.value[1], pos=self._pos())
         raise ParseError(f'unexpected token {t.kind} {t.value!r}', t.line, t.col, self.file)
 
     def _parse_lambda(self) -> LambdaExpr:
@@ -1092,6 +1586,25 @@ class Parser:
         body = [ReturnStmt(value=expr, pos=self._pos())]
         return LambdaExpr(params=params, body=body, pos=p)
 
+    def _parse_comp_clauses(self):
+        from frontend.ast_nodes import CompClause
+        self._eat()
+        clauses = []
+        while True:
+            var = self._expect('IDENT').value
+            self._expect('KEYWORD', 'in')
+            iter_expr = self._parse_or(allow_ternary=False)
+            conditions = []
+            while self._at('KEYWORD', 'if'):
+                self._eat()
+                conditions.append(self._parse_or(allow_ternary=False))
+            clauses.append(CompClause(var=var, iter=iter_expr, conditions=conditions))
+            if not self._at('KEYWORD', 'for'):
+                break
+            self._eat()
+        return clauses
+
 def parse(source: str, file: str='') -> Module:
     tokens = tokenize(source, file)
     return Parser(tokens, file, source).parse_module()
+

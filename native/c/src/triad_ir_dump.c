@@ -1,9 +1,3 @@
-/* triad_ir_dump.c — JSON dumper for the native IR.
- *
- * Schema mirrors compiler/emit_json.py exactly: every IR dataclass
- * becomes {"_type": "<ClassName>", "<field>": ...}; tuples → arrays;
- * dicts → objects; None → null.
- */
 #include "triad_ir.h"
 
 #include <math.h>
@@ -56,8 +50,33 @@ static void emit_string(S *s, const char *t) {
             case '\b': s_puts(s, "\\b"); break;
             case '\f': s_puts(s, "\\f"); break;
             default:
-                if (c < 0x20) s_printf(s, "\\u%04x", c);
-                else          s_putc(s, (char)c);
+                if (c < 0x20) {
+                    s_printf(s, "\\u%04x", c);
+                } else if (c < 0x80) {
+                    s_putc(s, (char)c);
+                } else {
+
+                    unsigned cp = 0;
+                    int extra = 0;
+                    if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; extra = 1; }
+                    else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; extra = 2; }
+                    else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; extra = 3; }
+                    else { s_putc(s, (char)c); continue; }
+                    int ok = 1;
+                    for (int k = 1; k <= extra; ++k) {
+                        if ((p[k] & 0xC0) != 0x80) { ok = 0; break; }
+                        cp = (cp << 6) | (p[k] & 0x3F);
+                    }
+                    if (!ok) { s_putc(s, (char)c); continue; }
+                    p += extra;
+                    if (cp > 0xFFFF) {
+                        cp -= 0x10000;
+                        s_printf(s, "\\u%04x", 0xD800 + (cp >> 10));
+                        s_printf(s, "\\u%04x", 0xDC00 + (cp & 0x3FF));
+                    } else {
+                        s_printf(s, "\\u%04x", cp);
+                    }
+                }
         }
     }
     s_putc(s, '"');
@@ -70,7 +89,6 @@ static void emit_nl(S *s, Ctx *c) {
     for (int i = 0; i < c->indent * c->depth; ++i) s_putc(s, ' ');
 }
 
-/* Python-compatible repr for doubles — shared with triad_ast_dump.c. */
 static void emit_float(S *s, double v) {
     if (isnan(v)) { s_puts(s, "NaN"); return; }
     if (isinf(v)) { s_puts(s, v > 0 ? "Infinity" : "-Infinity"); return; }
@@ -163,7 +181,6 @@ static void emit_string_array(S *s, Ctx *c, const char *const *items, size_t n) 
     c->depth--; emit_nl(s, c); s_putc(s, ']');
 }
 
-/* Pairs of (string, string) for IRTypeDecl.fields. */
 static void emit_string_pair_array(S *s, Ctx *c, const TriadIRTypeField *items, size_t n) {
     if (n == 0) { s_puts(s, "[]"); return; }
     s_putc(s, '['); c->depth++;
@@ -179,7 +196,6 @@ static void emit_string_pair_array(S *s, Ctx *c, const TriadIRTypeField *items, 
     c->depth--; emit_nl(s, c); s_putc(s, ']');
 }
 
-/* Map pairs from IRMap: list[tuple[IRNode, IRNode]] → array of 2-elem arrays. */
 static void emit_map_pairs(S *s, Ctx *c, const TriadIRMapPair *items, size_t n) {
     if (n == 0) { s_puts(s, "[]"); return; }
     s_putc(s, '['); c->depth++;
@@ -195,7 +211,6 @@ static void emit_map_pairs(S *s, Ctx *c, const TriadIRMapPair *items, size_t n) 
     c->depth--; emit_nl(s, c); s_putc(s, ']');
 }
 
-/* IRFString.parts: list[tuple[str, Optional[IRNode]]]. */
 static void emit_fstring_parts(S *s, Ctx *c, const TriadIRFStringPart *items, size_t n) {
     if (n == 0) { s_puts(s, "[]"); return; }
     s_putc(s, '['); c->depth++;
@@ -213,7 +228,6 @@ static void emit_fstring_parts(S *s, Ctx *c, const TriadIRFStringPart *items, si
     c->depth--; emit_nl(s, c); s_putc(s, ']');
 }
 
-/* dict[str, IRNode]. */
 static void emit_str_node_map(S *s, Ctx *c, const TriadIRStrEntry *e, size_t n) {
     s_putc(s, '{'); c->depth++;
     for (size_t k = 0; k < n; ++k) {
@@ -228,7 +242,6 @@ static void emit_str_node_map(S *s, Ctx *c, const TriadIRStrEntry *e, size_t n) 
     s_putc(s, '}');
 }
 
-/* IRCall.kwargs: dict[str, IRNode]. */
 static void emit_kwargs(S *s, Ctx *c, const TriadIRKwArg *items, size_t n) {
     s_putc(s, '{'); c->depth++;
     for (size_t k = 0; k < n; ++k) {
@@ -243,7 +256,6 @@ static void emit_kwargs(S *s, Ctx *c, const TriadIRKwArg *items, size_t n) {
     s_putc(s, '}');
 }
 
-/* IRIf.elif_clauses: list[tuple[IRNode, list[IRNode]]]. */
 static void emit_elif_clauses(S *s, Ctx *c, const TriadIRElifClause *items, size_t n) {
     if (n == 0) { s_puts(s, "[]"); return; }
     s_putc(s, '['); c->depth++;
@@ -337,6 +349,53 @@ static void emit_node(S *s, Ctx *c, const TriadIRNode *n) {
             f_sep(s, c, &fs); f_key(s, "target"); emit_node(s, c, n->u.assign_expr.target);
             f_sep(s, c, &fs); f_key(s, "value"); emit_node(s, c, n->u.assign_expr.value);
             break;
+        case TRIAD_IR_COMPLEX:
+            f_sep(s, c, &fs); f_key(s, "real"); emit_float(s, n->u.complex_lit.real_val);
+            f_sep(s, c, &fs); f_key(s, "imag"); emit_float(s, n->u.complex_lit.imag_val);
+            break;
+        case TRIAD_IR_BYTES:
+            f_sep(s, c, &fs); f_key(s, "value"); emit_str_or_null(s, n->u.bytes_lit.bytes_val);
+            break;
+        case TRIAD_IR_TUPLE:
+            f_sep(s, c, &fs); f_key(s, "elements");
+            emit_node_array(s, c, n->u.tuple_lit.elements, n->u.tuple_lit.elements_len);
+            break;
+        case TRIAD_IR_SET:
+            f_sep(s, c, &fs); f_key(s, "elements");
+            emit_node_array(s, c, n->u.set_lit.elements, n->u.set_lit.elements_len);
+            break;
+        case TRIAD_IR_TERNARY:
+            f_sep(s, c, &fs); f_key(s, "condition"); emit_node(s, c, n->u.ternary.condition);
+            f_sep(s, c, &fs); f_key(s, "then_val"); emit_node(s, c, n->u.ternary.then_val);
+            f_sep(s, c, &fs); f_key(s, "else_val"); emit_node(s, c, n->u.ternary.else_val);
+            break;
+        case TRIAD_IR_CHAIN_CMP:
+            f_sep(s, c, &fs); f_key(s, "operands");
+            emit_node_array(s, c, n->u.chain_cmp.operands, n->u.chain_cmp.operands_len);
+            f_sep(s, c, &fs); f_key(s, "ops");
+            emit_string_array(s, c, n->u.chain_cmp.ops, n->u.chain_cmp.ops_len);
+            break;
+        case TRIAD_IR_SUPER:
+            f_sep(s, c, &fs); f_key(s, "args");
+            emit_node_array(s, c, n->u.super_expr.args, n->u.super_expr.args_len);
+            break;
+        case TRIAD_IR_DICT_COMP:
+            f_sep(s, c, &fs); f_key(s, "key_expr"); emit_node(s, c, n->u.dict_comp.key_expr);
+            f_sep(s, c, &fs); f_key(s, "value_expr"); emit_node(s, c, n->u.dict_comp.value_expr);
+            break;
+        case TRIAD_IR_SET_COMP:
+            f_sep(s, c, &fs); f_key(s, "expr"); emit_node(s, c, n->u.set_comp.expr);
+            break;
+        case TRIAD_IR_GEN_COMP:
+            f_sep(s, c, &fs); f_key(s, "expr"); emit_node(s, c, n->u.gen_comp.expr);
+            break;
+        case TRIAD_IR_YIELD_EXPR:
+            f_sep(s, c, &fs); f_key(s, "value");
+            if (n->u.yield_expr.value) emit_node(s, c, n->u.yield_expr.value); else emit_null(s);
+            break;
+        case TRIAD_IR_AWAIT:
+            f_sep(s, c, &fs); f_key(s, "value"); emit_node(s, c, n->u.await_expr.value);
+            break;
 
         case TRIAD_IR_LET:
             f_sep(s, c, &fs); f_key(s, "name"); emit_string(s, n->u.let_stmt.name ? n->u.let_stmt.name : "");
@@ -360,6 +419,18 @@ static void emit_node(S *s, Ctx *c, const TriadIRNode *n) {
             f_sep(s, c, &fs); f_key(s, "value");
             if (n->u.ret_or_throw.value) emit_node(s, c, n->u.ret_or_throw.value); else emit_null(s);
             break;
+        case TRIAD_IR_PASS:
+            break;
+        case TRIAD_IR_ASSERT:
+            f_sep(s, c, &fs); f_key(s, "condition");
+            emit_node(s, c, n->u.assert_stmt.condition);
+            f_sep(s, c, &fs); f_key(s, "message");
+            if (n->u.assert_stmt.message) emit_node(s, c, n->u.assert_stmt.message); else emit_null(s);
+            break;
+        case TRIAD_IR_DEL:
+            f_sep(s, c, &fs); f_key(s, "target");
+            emit_node(s, c, n->u.del_stmt.target);
+            break;
         case TRIAD_IR_BREAK:
         case TRIAD_IR_CONTINUE:
             break;
@@ -371,10 +442,17 @@ static void emit_node(S *s, Ctx *c, const TriadIRNode *n) {
             if (n->u.if_stmt.has_else) emit_node_array(s, c, n->u.if_stmt.else_body, n->u.if_stmt.else_body_len);
             else                       emit_null(s);
             break;
+        case TRIAD_IR_ASYNC_FOR:
         case TRIAD_IR_FOR:
             f_sep(s, c, &fs); f_key(s, "var"); emit_string(s, n->u.for_stmt.var ? n->u.for_stmt.var : "");
             f_sep(s, c, &fs); f_key(s, "iter"); emit_node(s, c, n->u.for_stmt.iter);
             f_sep(s, c, &fs); f_key(s, "body"); emit_node_array(s, c, n->u.for_stmt.body, n->u.for_stmt.body_len);
+            break;
+        case TRIAD_IR_ASYNC_WITH:
+        case TRIAD_IR_WITH:
+            f_sep(s, c, &fs); f_key(s, "expr"); emit_node(s, c, n->u.with_stmt.expr);
+            f_sep(s, c, &fs); f_key(s, "var"); emit_str_or_null(s, n->u.with_stmt.var);
+            f_sep(s, c, &fs); f_key(s, "body"); emit_node_array(s, c, n->u.with_stmt.body, n->u.with_stmt.body_len);
             break;
         case TRIAD_IR_WHILE:
             f_sep(s, c, &fs); f_key(s, "condition"); emit_node(s, c, n->u.while_stmt.condition);
@@ -413,6 +491,14 @@ static void emit_node(S *s, Ctx *c, const TriadIRNode *n) {
             f_sep(s, c, &fs); f_key(s, "fields"); emit_str_node_map(s, c, n->u.world_decl.fields, n->u.world_decl.fields_len);
             f_sep(s, c, &fs); f_key(s, "entities"); emit_node_array(s, c, n->u.world_decl.entities, n->u.world_decl.entities_len);
             break;
+        case TRIAD_IR_SUBSTRATE_DECL:
+            f_sep(s, c, &fs); f_key(s, "name"); emit_string(s, n->u.substrate_decl.name ? n->u.substrate_decl.name : "");
+            f_sep(s, c, &fs); f_key(s, "regime"); emit_str_or_null(s, n->u.substrate_decl.regime);
+            f_sep(s, c, &fs); f_key(s, "members"); emit_string_array(s, c, n->u.substrate_decl.members, n->u.substrate_decl.members_len);
+            f_sep(s, c, &fs); f_key(s, "properties"); emit_str_node_map(s, c, n->u.substrate_decl.properties, n->u.substrate_decl.properties_len);
+            f_sep(s, c, &fs); f_key(s, "overrides"); emit_str_node_map(s, c, n->u.substrate_decl.overrides, n->u.substrate_decl.overrides_len);
+            f_sep(s, c, &fs); f_key(s, "is_composed"); emit_bool(s, n->u.substrate_decl.is_composed);
+            break;
         case TRIAD_IR_REG_DECL:
             f_sep(s, c, &fs); f_key(s, "name"); emit_string(s, n->u.reg_decl.name ? n->u.reg_decl.name : "");
             f_sep(s, c, &fs); f_key(s, "regime"); emit_str_or_null(s, n->u.reg_decl.regime);
@@ -426,10 +512,48 @@ static void emit_node(S *s, Ctx *c, const TriadIRNode *n) {
         case TRIAD_IR_RUN:
             f_sep(s, c, &fs); f_key(s, "duration");
             if (n->u.run.duration) emit_node(s, c, n->u.run.duration); else emit_null(s);
+            f_sep(s, c, &fs); f_key(s, "target"); emit_str_or_null(s, n->u.run.target);
+            break;
+        case TRIAD_IR_SEQUENCE:
+            f_sep(s, c, &fs); f_key(s, "inputs");
+            emit_node(s, c, n->u.sequence.inputs);
+            f_sep(s, c, &fs); f_key(s, "target");
+            emit_str_or_null(s, n->u.sequence.target);
+            f_sep(s, c, &fs); f_key(s, "each_for");
+            if (n->u.sequence.each_for) emit_node(s, c, n->u.sequence.each_for); else emit_null(s);
+            break;
+        case TRIAD_IR_COUPLE:
+            f_sep(s, c, &fs); f_key(s, "src"); emit_str_or_null(s, n->u.couple.src);
+            f_sep(s, c, &fs); f_key(s, "dst"); emit_str_or_null(s, n->u.couple.dst);
+            f_sep(s, c, &fs); f_key(s, "kappa");
+            if (n->u.couple.kappa) emit_node(s, c, n->u.couple.kappa); else emit_null(s);
+            f_sep(s, c, &fs); f_key(s, "duration");
+            if (n->u.couple.duration) emit_node(s, c, n->u.couple.duration); else emit_null(s);
+            break;
+        case TRIAD_IR_PAIR:
+            f_sep(s, c, &fs); f_key(s, "a"); emit_str_or_null(s, n->u.pair.a);
+            f_sep(s, c, &fs); f_key(s, "b"); emit_str_or_null(s, n->u.pair.b);
+            f_sep(s, c, &fs); f_key(s, "kappa");
+            if (n->u.pair.kappa) emit_node(s, c, n->u.pair.kappa); else emit_null(s);
+            f_sep(s, c, &fs); f_key(s, "duration");
+            if (n->u.pair.duration) emit_node(s, c, n->u.pair.duration); else emit_null(s);
+            break;
+        case TRIAD_IR_RING:
+            f_sep(s, c, &fs); f_key(s, "members");
+            emit_string_array(s, c, n->u.ring.members, n->u.ring.members_len);
+            f_sep(s, c, &fs); f_key(s, "kappa");
+            if (n->u.ring.kappa) emit_node(s, c, n->u.ring.kappa); else emit_null(s);
+            f_sep(s, c, &fs); f_key(s, "duration");
+            if (n->u.ring.duration) emit_node(s, c, n->u.ring.duration); else emit_null(s);
+            break;
+        case TRIAD_IR_ANNOTATION:
+            f_sep(s, c, &fs); f_key(s, "key"); emit_str_or_null(s, n->u.annotation.key);
+            f_sep(s, c, &fs); f_key(s, "args"); emit_str_or_null(s, n->u.annotation.args);
             break;
         case TRIAD_IR_IMPORT:
             f_sep(s, c, &fs); f_key(s, "path"); emit_string_array(s, c, n->u.import_stmt.path, n->u.import_stmt.path_len);
             f_sep(s, c, &fs); f_key(s, "alias"); emit_str_or_null(s, n->u.import_stmt.alias);
+            f_sep(s, c, &fs); f_key(s, "names"); emit_string_array(s, c, n->u.import_stmt.names, n->u.import_stmt.names_len);
             break;
         case TRIAD_IR_DESTRUCT_LET:
             f_sep(s, c, &fs); f_key(s, "names"); emit_string_array(s, c, n->u.destruct_let.names, n->u.destruct_let.names_len);

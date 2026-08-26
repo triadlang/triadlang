@@ -1,11 +1,12 @@
 from __future__ import annotations
-import os
-import sys
-import time
+
 import json
+import os
 import re
-import numpy as np
+import time
 from pathlib import Path
+
+from triad import ntri as np
 
 D_MODEL = 512
 N_SOLVER = 16384
@@ -27,15 +28,16 @@ def gsm8k_extract_answer(text: str) -> str:
     return nums[-1] if nums else ''
 
 def train():
-    from runtime.ml.ml_device import set_device, mem_info, reset_pool, is_gpu
+    from runtime.ml.ml_device import is_gpu, mem_info, reset_pool, set_device
     set_device('cuda', 'float32')
     print(f'device: {"GPU" if is_gpu() else "CPU"}')
 
-    from runtime.ml.language import CharTokenizer, TriadLM, TextDataset
-    from runtime.ml.nn import Adam
-    from runtime.ml.tensor import tensor, no_grad
-    from runtime.ml.serialization import save_weights, load_weights
     from datasets import load_dataset
+
+    from runtime.ml.language import CharTokenizer, TextDataset, TriadLM
+    from runtime.ml.nn import Adam
+    from runtime.ml.serialization import save_weights
+    from runtime.ml.tensor import no_grad, tensor
 
     np.random.seed(SEED)
 
@@ -132,7 +134,7 @@ def train():
                 ids = model.generate(prompt, max_new=150, temperature=0.3, top_k=5)
             generated = tok.decode(ids)
             pred_answer = gsm8k_extract_answer(generated[len(prompt_text):])
-        except Exception:
+        except (ValueError, RuntimeError, IndexError):
             pred_answer = ''
 
         match = pred_answer.strip() == gold_answer.strip()
@@ -186,3 +188,4 @@ def train():
 
 if __name__ == '__main__':
     train()
+

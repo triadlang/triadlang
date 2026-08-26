@@ -1,0 +1,271 @@
+import triad.nn as nn;
+import triad.tensor as T;
+import resonance_architecture as ra;
+import resonance_substrates as rs;
+import resonance_block as rb;
+import resonance_lm as lm;
+import triad.ntri as np;
+
+class ResonanceTrainer {
+    fn __init__(self, model, lr, lambda_phys, lambda_norm, lambda_crystal,
+                T_bath_init, T_bath_final, T_bath_decay,
+                calibrate_every, calibrate_window,
+                seed) {
+        self.model = model;
+        self.lr = float(lr);
+        self.lambda_phys = float(lambda_phys);
+        self.lambda_norm = float(lambda_norm);
+        self.lambda_crystal = float(lambda_crystal);
+
+        self.optimizer = nn.TriadFlow(
+            model.parameters(),
+            lr=float(lr),
+            regime="B0",
+            seed=int(seed),
+            freeze=true
+        );
+
+        self.T_bath_init = float(T_bath_init);
+        self.T_bath_final = float(T_bath_final);
+        self.T_bath_decay = float(T_bath_decay);
+        self.T_current = float(T_bath_init);
+
+        self.calibrate_every = int(calibrate_every);
+        self.calibrate_window = int(calibrate_window);
+
+        self.hyper = {
+            "Lambda":  -0.5,
+            "sigma":   1.5,
+            "gamma_0": 0.05,
+            "alpha":   0.15
+        };
+
+        self.step_count = 0;
+        self.obs_log = [];
+        self.loss_history = [];
+        self.crystal_history = [];
+    }
+
+    fn physics_loss(self, observables) {
+        let phys_loss = 0.0;
+        let norm_loss = 0.0;
+        let crystal_bonus = 0.0;
+
+        for obs in observables {
+            let ipr = float(obs["ipr"]);
+            let nv  = float(obs["norm"]);
+            let cr  = float(obs["crystallinity"]);
+
+            if ipr < 0.02 {
+                phys_loss = phys_loss + (0.02 - ipr) * 10.0;
+            }
+            if ipr > 0.8 {
+                phys_loss = phys_loss + (ipr - 0.8) * 10.0;
+            }
+            let d = nv - 1.0;
+            norm_loss = norm_loss + d * d;
+            if cr >= 0.15 and cr <= 0.55 {
+                crystal_bonus = crystal_bonus - 0.0005;
+            }
+        }
+        return {
+            "phys_loss": phys_loss,
+            "norm_loss": norm_loss,
+            "crystal_bonus": crystal_bonus
+        };
+    }
+
+    fn anneal(self) {
+        let T_new = self.T_current * self.T_bath_decay;
+        if T_new < self.T_bath_final {
+            T_new = self.T_bath_final;
+        }
+        self.T_current = T_new;
+        self.model.set_temperature(T_new);
+    }
+
+    fn self_calibrate(self) {
+        if len(self.obs_log) < self.calibrate_window {
+            return;
+        }
+        let window = [];
+        let start = len(self.obs_log) - self.calibrate_window;
+        for i in range(start, len(self.obs_log)) {
+            window.push(self.obs_log[i]);
+        }
+        let hyper = ra.self_calibrate(window, self.hyper);
+        self.hyper = hyper;
+        for blk in self.model.blocks {
+            blk.set_Lambda(float(hyper["Lambda"]));
+        }
+    }
+
+    fn train_step(self, x_ids, y_ids) {
+
+        self.step_count = self.step_count + 1;
+
+        let out = self.model.loss(x_ids, y_ids);
+        let ce_loss = out["ce_loss"];
+        let observables = out["observables"];
+
+        let phys = self.physics_loss(observables);
+        let total_loss = ce_loss
+            + T.tensor(np.array(phys["phys_loss"])) * self.lambda_phys
+            + T.tensor(np.array(phys["norm_loss"])) * self.lambda_norm
+            + T.tensor(np.array(phys["crystal_bonus"])) * self.lambda_crystal;
+
+        self.optimizer.zero_grad();
+        total_loss.backward();
+        self.optimizer.step();
+
+        self.anneal();
+
+        let last_obs = observables[len(observables) - 1];
+        self.obs_log.push(last_obs);
+
+        let crys_frac = self.optimizer.crystal_fraction();
+        self.loss_history.push(float(ce_loss));
+        self.crystal_history.push(crys_frac);
+
+        if self.step_count % self.calibrate_every == 0 {
+            self.self_calibrate();
+        }
+
+        return {
+            "step": self.step_count,
+            "ce_loss": float(ce_loss),
+            "phys_loss": phys["phys_loss"],
+            "norm_loss": phys["norm_loss"],
+            "crystal_bonus": phys["crystal_bonus"],
+            "crystal_frac": crys_frac,
+            "T_bath": self.T_current,
+            "Lambda": self.hyper["Lambda"]
+        };
+    }
+
+    fn train_epoch(self, dataset, batch_size, batches_per_epoch) {
+        let total_loss = 0.0;
+        let total_crys = 0.0;
+        for b in range(int(batches_per_epoch)) {
+            let sample = dataset.batch(int(batch_size));
+            let x = T.tensor(np.array(sample[0]));
+            let y = T.tensor(np.array(sample[1]));
+            let info = self.train_step(x, y);
+            total_loss = total_loss + info["ce_loss"];
+            total_crys = total_crys + info["crystal_frac"];
+        }
+        return {
+            "avg_loss": total_loss / float(batches_per_epoch),
+            "avg_crystal": total_crys / float(batches_per_epoch),
+            "T_bath": self.T_current
+        };
+    }
+
+    fn stats(self) {
+        print("╔════════════════════════════════════════════╗");
+        print("║ ResonanceTrainer                            ║");
+        print("╠════════════════════════════════════════════╣");
+        print("║  Steps:           " + str(self.step_count));
+        print("║  T_bath:          " + str(self.T_current));
+        print("║  Crystal frac:    " + str(self.optimizer.crystal_fraction()));
+        print("║  Lambda:          " + str(self.hyper["Lambda"]));
+        print("║  Gamma:           " + str(self.hyper["gamma_0"]));
+        print("║  Sigma:           " + str(self.hyper["sigma"]));
+        print("║  Alpha:           " + str(self.hyper["alpha"]));
+        if len(self.loss_history) > 0 {
+            let recent = 10;
+            if recent > len(self.loss_history) { recent = len(self.loss_history); }
+            let s = 0.0;
+            for i in range(len(self.loss_history) - recent, len(self.loss_history)) {
+                s = s + self.loss_history[i];
+            }
+            print("║  Recent ce_loss:  " + str(s / float(recent)));
+        }
+        print("╚════════════════════════════════════════════╝");
+    }
+}
+
+fn make_corpus() {
+    return "the triad field oscillates and remembers. "
+         + "the triad field couples and crystallizes. "
+         + "memory persists through  dynamics. "
+         + "the triad Triad governs all three substrates. "
+         + "wavefunction psi evolves under the hamiltonian. "
+         + "the memory field captures nonlocal correlations. "
+         + "the physical reservoir provides high dimensional chaos. "
+         + "at the threshold of chaos computation is maximal. "
+         + "crystallization emerges from self organization. "
+         + "attractor basins store long term patterns. "
+         + " noise drives exploration then anneals. "
+         + "self calibration adjusts lambda and gamma. "
+         + "the field Triad is the compute substrate. "
+         + "fft based spectral methods replace attention. "
+         + "multi scale exponential memory captures context. "
+         + "the field is the compute, the compute is the field. ";
+}
+
+fn expand_ids(ids, n_copies) {
+    let out = [];
+    for i in range(int(n_copies)) {
+        for j in range(len(ids)) {
+            out.push(ids[j]);
+        }
+    }
+    return out;
+}
+
+print("ResonanceFormer training loop loaded.");
+print("  ResonanceTrainer = TriadFlow + physics loss + annealing + self-calibration");
+print("  Self-calibration: every K steps, Λ / Γ / σ are nudged from observables");
+print("");
+
+let TEXT = make_corpus();
+let tok = nn.CharTokenizer(TEXT);
+let all_ids = tok.encode(TEXT);
+let big_ids = expand_ids(all_ids, 5);
+let VOCAB = tok.vocab_size;
+print("vocab: " + str(VOCAB) + "  tokens: " + str(len(big_ids)));
+
+let D_MODEL = 32;
+let D_PSI = 16;
+let N_BLOCKS = 1;
+let N_HEADS = 2;
+let FFN_MULT = 2;
+let SEQ_LEN = 16;
+let BATCH = 4;
+let LR = 0.01;
+let T_BATH_INIT = 0.05;
+let T_BATH_FINAL = 0.001;
+
+let model = lm.ResonanceLM(
+    VOCAB, D_MODEL, D_PSI, 8, N_BLOCKS, N_HEADS, FFN_MULT, SEQ_LEN,
+    Lambda=-0.5, gamma_0=0.05, sigma=1.5, alpha=0.15,
+    hbar=1.0, mass=1.0, dt=0.05,
+    T_bath=T_BATH_INIT, nu_min=0.01, nu_max=8.0, seed=42
+);
+print("model parameters: " + str(len(model.parameters())));
+
+let trainer = ResonanceTrainer(
+    model, LR, 0.01, 0.001, 0.0001,
+    T_BATH_INIT, T_BATH_FINAL, 0.98,
+    5, 8, 42
+);
+
+let dataset = nn.TextDataset(big_ids, SEQ_LEN);
+print("training (10 steps)...");
+let first_loss = 0.0;
+let last_loss = 0.0;
+for step in range(10) {
+    let sample = dataset.batch(BATCH);
+    let x = T.tensor(np.array(sample[0]));
+    let y = T.tensor(np.array(sample[1]));
+    let info = trainer.train_step(x, y);
+    if step == 0 { first_loss = info["ce_loss"]; }
+    last_loss = info["ce_loss"];
+    print("  step " + str(info["step"]) + " ce=" + str(info["ce_loss"])
+          + " crystal=" + str(info["crystal_frac"])
+          + " T=" + str(info["T_bath"]));
+}
+print("loss: " + str(first_loss) + " -> " + str(last_loss));
+print("");
+trainer.stats();

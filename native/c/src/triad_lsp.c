@@ -1,13 +1,3 @@
-/* triad_lsp.c — Port of cli/lsp.py functional core.
- *
- * Every handler returns a JSON string identical to what
- * json.dumps(...) produces in Python with default separators:
- *   item sep ", "    key sep ": "
- * dict key insertion order is preserved.
- *
- * The stdio JSON-RPC loop is a thin wrapper around these (not provided
- * here; lives in triad_cli once the CLI subcommand lands).
- */
 #include "triad_lsp.h"
 
 #include <ctype.h>
@@ -15,8 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ─── Constant tables (mirror Python order) ─────────────────────── */
 
 static const char *KEYWORDS[] = {
     "let", "const", "fn", "return", "if", "elif", "else",
@@ -39,7 +27,6 @@ static const char *TRIAD_KEYWORDS[] = {
 };
 #define N_TRIAD_KEYWORDS (sizeof(TRIAD_KEYWORDS) / sizeof(TRIAD_KEYWORDS[0]))
 
-/* Module → (functions array, len). Order must match Python source. */
 typedef struct {
     const char        *name;
     const char *const *fns;
@@ -69,8 +56,6 @@ static const StdlibMod STDLIB_MODULES[] = {
     {"collections", MOD_collections, sizeof(MOD_collections) / sizeof(*MOD_collections)},
 };
 #define N_MODS (sizeof(STDLIB_MODULES) / sizeof(*STDLIB_MODULES))
-
-/* ─── Buf ─── */
 
 typedef struct { char *data; size_t len, cap; } Buf;
 static void buf_init(Buf *b) { b->data=NULL; b->len=b->cap=0; }
@@ -109,10 +94,6 @@ static const char *buf_to_arena(TriadArena *a, Buf *b) {
     return o;
 }
 
-/* JSON string emission (Python json.dumps default: ASCII-safe? No;
- * ensure_ascii=True by default, which would escape non-ASCII. Our
- * inputs in the test set are pure ASCII so we can pass bytes through.
- * Escape: \ " and control chars (\n \r \t etc.). */
 static void json_string_into(Buf *b, const char *s) {
     buf_putc(b, '"');
     for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
@@ -129,8 +110,6 @@ static void json_string_into(Buf *b, const char *s) {
     }
     buf_putc(b, '"');
 }
-
-/* ─── Line splitting (text.split("\n")) ─── */
 
 typedef struct {
     const char **lines;
@@ -169,17 +148,14 @@ static TextLines split_text(TriadArena *a, const char *text) {
     return T;
 }
 
-/* ─── Helpers ─── */
-
 static int is_ident(char c) { return isalnum((unsigned char)c) || c == '_'; }
-/* lstrip count (whitespace per Python str.lstrip default) */
+
 static int lstrip_n(const char *s) {
     int n = 0;
     while (s[n] == ' ' || s[n] == '\t' || s[n] == '\v' || s[n] == '\f' || s[n] == '\r') n++;
     return n;
 }
 
-/* Match: ^<kw>\s+<ident>  on a stripped line. Returns name length, or 0. */
 static size_t match_decl(const char *stripped, const char *kw,
                          const char **out_name) {
     size_t kl = strlen(kw);
@@ -194,15 +170,12 @@ static size_t match_decl(const char *stripped, const char *kw,
     return (size_t)(p - s);
 }
 
-/* Match m_kw = re.match(r'^(let|const)\s+(\w+)', stripped). */
 static size_t match_let_const(const char *stripped, const char **out_name) {
     size_t L;
     if ((L = match_decl(stripped, "let", out_name))) return L;
     if ((L = match_decl(stripped, "const", out_name))) return L;
     return 0;
 }
-
-/* ─── parse_symbols ─── */
 
 void triad_lsp_parse_symbols(TriadArena *a, const char *text,
                              TriadLspSymbol **out, size_t *out_len) {
@@ -253,8 +226,6 @@ void triad_lsp_parse_symbols(TriadArena *a, const char *text,
     *out = final;
 }
 
-/* ─── word_at ─── */
-
 const char *triad_lsp_word_at(TriadArena *a, const char *line, int char_pos) {
     int L = (int)strlen(line);
     int c = char_pos;
@@ -274,9 +245,6 @@ const char *triad_lsp_word_at(TriadArena *a, const char *line, int char_pos) {
     return out;
 }
 
-/* ─── completions ─── */
-
-/* Append a {"label":...,"kind":N,"detail":"..."} object. */
 static void emit_completion_item(Buf *b, const char *label, int kind, const char *detail) {
     buf_puts(b, "{\"label\": ");
     json_string_into(b, label);
@@ -304,12 +272,10 @@ const char *triad_lsp_completions_json(TriadArena *a, const char *text,
     int char_clamp = char_pos > curL ? curL : char_pos;
     if (char_clamp < 0) char_clamp = 0;
 
-    /* prefix = current_line[:char] */
     char *prefix = (char *)triad_arena_alloc(a, (size_t)char_clamp + 1);
     memcpy(prefix, cur, (size_t)char_clamp);
     prefix[char_clamp] = '\0';
 
-    /* dot_match: r'(\w+)\.(\w*)$' */
     int plen = (int)strlen(prefix);
     int j = plen;
     while (j > 0 && is_ident(prefix[j-1])) j--;
@@ -319,7 +285,7 @@ const char *triad_lsp_completions_json(TriadArena *a, const char *text,
         int k = dot_pos;
         while (k > 0 && is_ident(prefix[k-1])) k--;
         if (k < dot_pos) {
-            /* matched module.partial */
+
             char *modname = (char *)triad_arena_alloc(a, (size_t)(dot_pos - k) + 1);
             memcpy(modname, prefix + k, (size_t)(dot_pos - k));
             modname[dot_pos - k] = '\0';
@@ -348,7 +314,6 @@ const char *triad_lsp_completions_json(TriadArena *a, const char *text,
         }
     }
 
-    /* word_match: r'(\w+)$' on prefix */
     const char *partial = prefix + partial_start;
     int partial_len = plen - partial_start;
     int prefix_ends_space = (plen > 0 && prefix[plen-1] == ' ');
@@ -357,14 +322,12 @@ const char *triad_lsp_completions_json(TriadArena *a, const char *text,
         return buf_to_arena(a, &out);
     }
 
-    /* Symbols from text */
     TriadLspSymbol *syms = NULL; size_t nsyms = 0;
     triad_lsp_parse_symbols(a, text, &syms, &nsyms);
 
     Buf items; buf_init(&items);
     int first = 1;
 
-    /* local_names set for keyword filtering */
     const char **locals = (const char **)triad_arena_alloc(a, sizeof(char *) * (nsyms + 1));
     size_t nlocals = 0;
     for (size_t i = 0; i < nsyms; ++i) {
@@ -380,10 +343,9 @@ const char *triad_lsp_completions_json(TriadArena *a, const char *text,
         locals[nlocals++] = syms[i].name;
     }
 
-    /* not prefix.endswith(".") */
     int prefix_endswith_dot = (plen > 0 && prefix[plen-1] == '.');
     if (!prefix_endswith_dot) {
-        /* keywords */
+
         for (size_t i = 0; i < N_KEYWORDS; ++i) {
             const char *kw = KEYWORDS[i];
             if (strncmp(kw, partial, (size_t)partial_len) == 0 &&
@@ -428,9 +390,6 @@ const char *triad_lsp_completions_json(TriadArena *a, const char *text,
     return buf_to_arena(a, &out);
 }
 
-/* ─── definition ─── */
-
-/* Mirror: ^<kw>\s+<word>\b. Returns 1 on match. */
 static int matches_def(const char *stripped, const char *kw, const char *word) {
     size_t kl = strlen(kw);
     if (strncmp(stripped, kw, kl) != 0) return 0;
@@ -475,8 +434,6 @@ const char *triad_lsp_definition_json(TriadArena *a, const char *text,
     return NULL;
 }
 
-/* ─── hover ─── */
-
 const char *triad_lsp_hover_json(TriadArena *a, const char *text,
                                  int line_num, int char_pos) {
     TextLines T = split_text(a, text);
@@ -484,7 +441,6 @@ const char *triad_lsp_hover_json(TriadArena *a, const char *text,
     const char *word = triad_lsp_word_at(a, T.lines[line_num], char_pos);
     if (!word) return NULL;
 
-    /* word matches a module name */
     for (size_t i = 0; i < N_MODS; ++i) {
         if (strcmp(STDLIB_MODULES[i].name, word) == 0) {
             Buf v; buf_init(&v);
@@ -504,7 +460,7 @@ const char *triad_lsp_hover_json(TriadArena *a, const char *text,
             return buf_to_arena(a, &out);
         }
     }
-    /* word in some module's exports */
+
     for (size_t i = 0; i < N_MODS; ++i) {
         for (size_t f = 0; f < STDLIB_MODULES[i].n; ++f) {
             if (strcmp(STDLIB_MODULES[i].fns[f], word) == 0) {
@@ -520,7 +476,7 @@ const char *triad_lsp_hover_json(TriadArena *a, const char *text,
             }
         }
     }
-    /* local symbol */
+
     TriadLspSymbol *syms = NULL; size_t nsyms = 0;
     triad_lsp_parse_symbols(a, text, &syms, &nsyms);
     for (size_t i = 0; i < nsyms; ++i) {
@@ -536,7 +492,7 @@ const char *triad_lsp_hover_json(TriadArena *a, const char *text,
             return buf_to_arena(a, &out);
         }
     }
-    /* keyword */
+
     for (size_t i = 0; i < N_KEYWORDS; ++i) {
         if (strcmp(KEYWORDS[i], word) == 0) {
             char value[128];
@@ -550,8 +506,6 @@ const char *triad_lsp_hover_json(TriadArena *a, const char *text,
     }
     return NULL;
 }
-
-/* ─── documentSymbol ─── */
 
 const char *triad_lsp_document_symbols_json(TriadArena *a, const char *text,
                                             const char *uri) {
@@ -581,10 +535,8 @@ const char *triad_lsp_document_symbols_json(TriadArena *a, const char *text,
     return buf_to_arena(a, &out);
 }
 
-/* ─── initialize ─── */
-
 const char *triad_lsp_initialize_result_json(TriadArena *a) {
-    /* Exactly mirror json.dumps insertion order from Python. */
+
     static const char *S =
         "{\"capabilities\": {\"completionProvider\": {\"triggerCharacters\": [\".\", \" \"]}, "
         "\"definitionProvider\": true, \"hoverProvider\": true, "

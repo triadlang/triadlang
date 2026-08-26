@@ -26,4 +26,4 @@ struct TriadChatBackend {
     void (*free)(TriadChatBackend *backend);
 };
 
-#endif /* TRIAD_CHAT_BACKEND_H */
+#endif

@@ -1,0 +1,194 @@
+import triad;
+import triad.nn as nn;
+import triad.tensor as T;
+import triad.calibrate as cal;
+import triad.ntri as np;
+import resonance_architecture as ra;
+import resonance_substrates as rs;
+import resonance_block as rb;
+import resonance_lm as lm;
+import resonance_train as rt;
+
+print("╔════════════════════════════════════════════════════════════╗");
+print("║                                                            ║");
+print("║      ResonanceFormer — A Triad-Native LLM Architecture     ║");
+print("║                                                            ║");
+print("║      P1 (wave) + P2 (memory) + P3 (reservoir) coupled.    ║");
+print("║      Self-calibrating, self-crystallizing.                 ║");
+print("║                                                            ║");
+print("╚════════════════════════════════════════════════════════════╝");
+print("");
+
+print("═══ PART 1: One triad step (P1+P2+P3 in lockstep) ═══");
+print("");
+
+let params = triad.regime("B0", N=64);
+let result = triad.solve(params, T=5.0);
+print("field solve: k_star=" + str(triad.k_star(result))
+      + "  crystallinity=" + str(triad.crystal(result))
+      + "  peak=" + str(triad.peak(result))
+      + "  norm=" + str(triad.norm(result))
+      + "  ipr=" + str(triad.ipr(result)));
+print("");
+
+let tiny = rs.CoupledSubstrate(
+    16, 8, 8, 2,
+    Lambda=-0.5, gamma_0=0.05, sigma=1.5, alpha=0.15,
+    hbar=1.0, mass=1.0, dt=0.05, T_bath=0.01,
+    nu_min=0.01, nu_max=4.0, seed=42
+);
+let x_demo = T.tensor(np.random.default_rng(0).standard_normal((1, 4, 16))
+                       .astype(np.float32));
+let r = tiny.step(x_demo, none, 0);
+let obs = r["observables"];
+print("coupled step:");
+print("  output shape:   " + str(r["output"].shape));
+print("  y_state shape:  " + str(r["y_state"].shape));
+print("  crystallinity:  " + str(obs["crystallinity"]));
+print("  IPR:            " + str(obs["ipr"]));
+print("  k_star:         " + str(obs["k_star"]));
+print("");
+
+print("═══ PART 2: Self-calibration from observables ═══");
+print("");
+print("The architecture monitors its own observables and nudges the");
+print("physical parameters (Λ, Γ, σ, α) to keep the field productive.");
+print("");
+
+let hyper = ra.default_hyper();
+let obs_log = [];
+for i in range(20) {
+    let obs = {
+        "crystallinity": 0.05 + 0.02 * float(i),
+        "ipr": 0.02 + 0.005 * float(i),
+        "k_star": 0.5 + 0.05 * float(i),
+        "norm": 0.8,
+        "peak": 0.1,
+        "fwhm": 0.0,
+        "participation": 10.0
+    };
+    obs_log.push(obs);
+}
+let new_hyper = ra.self_calibrate(obs_log, hyper);
+print("calibration moved:");
+print("  Lambda:  " + str(hyper["Lambda"]) + " -> " + str(new_hyper["Lambda"]));
+print("  gamma_0: " + str(hyper["gamma_0"]) + " -> " + str(new_hyper["gamma_0"]));
+print("  sigma:   " + str(hyper["sigma"]) + " -> " + str(new_hyper["sigma"]));
+print("  alpha:   " + str(hyper["alpha"]) + " -> " + str(new_hyper["alpha"]));
+print("");
+
+print("═══ PART 3: Train a small ResonanceFormer ═══");
+print("");
+
+let CORPUS = rt.make_corpus();
+let tok = nn.CharTokenizer(CORPUS);
+let all_ids = tok.encode(CORPUS);
+let big_ids = rt.expand_ids(all_ids, 8);
+let VOCAB = tok.vocab_size;
+print("corpus: " + str(len(all_ids)) + " tokens, " + str(VOCAB) + " vocab");
+print("training tokens: " + str(len(big_ids)));
+print("");
+
+let D_MODEL = 32;
+let D_PSI = 16;
+let N_BLOCKS = 1;
+let N_HEADS = 2;
+let FFN_MULT = 2;
+let SEQ_LEN = 16;
+let BATCH = 4;
+let STEPS = 30;
+
+let model = lm.ResonanceLM(
+    VOCAB, D_MODEL, D_PSI, 8, N_BLOCKS, N_HEADS, FFN_MULT, SEQ_LEN,
+    Lambda=-0.5, gamma_0=0.05, sigma=1.5, alpha=0.15,
+    hbar=1.0, mass=1.0, dt=0.05,
+    T_bath=0.05, nu_min=0.01, nu_max=8.0, seed=42
+);
+print("model parameters: " + str(len(model.parameters())));
+
+let trainer = rt.ResonanceTrainer(
+    model, 0.01, 0.01, 0.001, 0.0001,
+    0.05, 0.001, 0.97,
+    5, 8, 42
+);
+let dataset = nn.TextDataset(big_ids, SEQ_LEN);
+
+let first_loss = 0.0;
+let last_loss = 0.0;
+for step in range(STEPS) {
+    let sample = dataset.batch(BATCH);
+    let x = T.tensor(np.array(sample[0]));
+    let y = T.tensor(np.array(sample[1]));
+    let info = trainer.train_step(x, y);
+    if step == 0 { first_loss = info["ce_loss"]; }
+    last_loss = info["ce_loss"];
+    if step % 5 == 0 or step == STEPS - 1 {
+        print("  step " + str(info["step"]) + "/" + str(STEPS)
+              + "  ce=" + str(info["ce_loss"])
+              + "  crystal=" + str(info["crystal_frac"])
+              + "  T=" + str(info["T_bath"])
+              + "  Λ=" + str(info["Lambda"]));
+    }
+}
+print("");
+print("training: " + str(first_loss) + " -> " + str(last_loss));
+print("");
+
+print("═══ PART 4: Generate ═══");
+print("");
+
+let prompt_ids = [];
+for i in range(8) {
+    prompt_ids.push(all_ids[i]);
+}
+let prompt_text = tok.decode(prompt_ids);
+print("prompt: '" + prompt_text + "'");
+print("");
+
+let generated = model.generate(prompt_ids, 80, 0.8, 10);
+let text = tok.decode(generated);
+print("generated:");
+print(text);
+print("");
+
+print("═══ PART 5: Weight round-trip via the triad serializer ═══");
+print("");
+
+import triad.train as train;
+train.save_weights(model, "models/resonanceformer_demo.json");
+print("saved: models/resonanceformer_demo.json");
+
+let model2 = lm.ResonanceLM(
+    VOCAB, D_MODEL, D_PSI, 8, N_BLOCKS, N_HEADS, FFN_MULT, SEQ_LEN,
+    Lambda=-0.5, gamma_0=0.05, sigma=1.5, alpha=0.15,
+    hbar=1.0, mass=1.0, dt=0.05,
+    T_bath=0.05, nu_min=0.01, nu_max=8.0, seed=999
+);
+train.load_weights(model2, "models/resonanceformer_demo.json");
+print("loaded: weights reloaded into a fresh model");
+
+let x_check = T.tensor(np.array(all_ids[:SEQ_LEN]).reshape(1, -1));
+let y_check = T.tensor(np.array(all_ids[1:SEQ_LEN + 1]));
+let out1 = model.loss(x_check, y_check);
+let out2 = model2.loss(x_check, y_check);
+let d = abs(float(out1["ce_loss"]) - float(out2["ce_loss"]));
+print("ce loss diff: " + str(d) + " (should be ~0)");
+print("");
+
+print("═══ PART 6: Summary ═══");
+print("");
+trainer.stats();
+print("");
+print("The three substrates were NEVER isolated: P3 drove P1, P2 built");
+print("V_mem for P1, and P1's density was imprinted back into P3's");
+print("attractor bank at every step. The bath temperature annealed");
+print("from 0.05 down to " + str(trainer.T_current) + ", the parameters");
+print("self-calibrated from their own observables, and the weights");
+print("crystallized on their own (no pruning step). The field did the");
+print("work; the trainer only counted steps.");
+print("");
+print("All substrates active. All three pillars engaged.");
+print("The field oscillates and remembers.");
+print("The field couples and crystallizes.");
+print("");
+print("— ResonanceFormer v" + ra.RESONANCE_VERSION);

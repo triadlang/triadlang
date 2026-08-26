@@ -1,0 +1,37 @@
+print("Native wave — XOR by interference, zero activations, zero Python");
+
+let onda = ml_wave(2, 4);
+let cabeca = ml_triad(4, 1);
+let opt = ml_wave_adam(onda, cabeca, 0.05);
+
+let X = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]];
+let Y = [[0.0], [1.0], [1.0], [0.0]];
+let xt = ml_tensor(X, false);
+let yt = ml_tensor(Y, false);
+
+let primeira = 0.0;
+let ultima = 0.0;
+for passo in range(400) {
+    let h = ml_wave_forward(onda, xt);
+    let pred = ml_forward(cabeca, h);
+    let perda = ml_mse_loss(pred, yt);
+    ml_adam_zero(opt);
+    ml_backward(perda);
+    ml_adam_step(opt);
+    let v = ml_item(perda);
+    if passo == 0 {
+        primeira = v;
+    }
+    ultima = v;
+}
+print(f"loss {primeira} -> {ultima}");
+
+let h = ml_wave_forward(onda, xt);
+let pred = ml_forward(cabeca, h);
+print("predictions:");
+for i in range(4) {
+    print(ml_data(pred, i));
+}
+if ultima < 0.01 {
+    print("XOR solved by interference in native C");
+}

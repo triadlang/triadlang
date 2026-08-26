@@ -1,0 +1,31 @@
+import triad.chain as tc;
+
+print("TriadChain — Proof of Crystallization");
+print("======================================");
+
+let chain = tc.Chain();
+let alice = tc.Wallet(seed=1);
+let bob = tc.Wallet(seed=2);
+print(f"alice: {alice.address[:16]}...");
+print(f"bob  : {bob.address[:16]}...");
+print("");
+
+print("mining 8 blocks (difficulty emerging from chaos):");
+for i in range(8) {
+    let blk = chain.mine(alice.address);
+    print(f"  block {blk.index}: seal={blk.seal["crystallinity"]:.4f}  attempts={blk.nonce + 1}  next_d={chain.difficulty:.4f}");
+}
+print("");
+
+let tx = alice.sign_tx(bob.address, 120, seq=0);
+chain.mine(bob.address, [tx]);
+print(f"transfer: alice -> bob 120 (ed25519-signed, mined by bob)");
+print(f"balances: alice={chain.balance(alice.address)}  bob={chain.balance(bob.address)}");
+print("");
+
+let v = chain.validate();
+print(f"validation intact: {v}");
+
+chain.blocks[3].txs[0]["amount"] = 9999;
+let v2 = chain.validate();
+print(f"after tampering with block 3: {v2}");

@@ -1,0 +1,372 @@
+import triad.nn as nn;
+import triad.tensor as T;
+import triad.ntri as np;
+
+class AttractorBasin {
+    fn __init__(self, dim, depth=1.0, width=0.5) {
+        self.dim = dim;
+        self.depth = float(depth);
+        self.width = float(width);
+        self.center_re = np.zeros(dim);
+        self.center_im = np.zeros(dim);
+        self.is_written = false;
+        self.access_count = 0;
+        self.age = 0;
+        self.stability = 0.0;
+    }
+
+    fn write(self, re_pattern, im_pattern) {
+        self.center_re = np.array(re_pattern);
+        self.center_im = np.array(im_pattern);
+        self.is_written = true;
+        self.access_count = 0;
+        self.age = 0;
+        self.stability = 0.0;
+    }
+
+    fn similarity(self, re_query, im_query) {
+        if not self.is_written {
+            return 0.0;
+        }
+        let dot_r = np.sum(re_query * self.center_re + im_query * self.center_im);
+        let dot_i = np.sum(im_query * self.center_re - re_query * self.center_im);
+        let overlap = (dot_r * dot_r + dot_i * dot_i);
+        let norm_q = np.sum(re_query * re_query + im_query * im_query) + 1e-10;
+        let norm_c = np.sum(self.center_re * self.center_re
+                            + self.center_im * self.center_im) + 1e-10;
+        return float(overlap / (norm_q * norm_c));
+    }
+
+    fn pull(self, re_query, im_query, strength=0.1) {
+        if not self.is_written {
+            return {"re": re_query, "im": im_query};
+        }
+        let new_re = re_query + strength * (self.center_re - re_query);
+        let new_im = im_query + strength * (self.center_im - im_query);
+        self.access_count = self.access_count + 1;
+        return {"re": new_re, "im": new_im};
+    }
+
+    fn age_one_step(self) {
+        self.age = self.age + 1;
+        if self.access_count > 0 {
+            self.stability = 1.0 - 1.0 / (1.0 + float(self.access_count) * 0.1);
+        }
+    }
+}
+
+class FieldAttractorBank {
+    fn __init__(self, dim, n_slots=16, depth=1.0, width=0.5, seed=0) {
+        self.dim = dim;
+        self.n_slots = n_slots;
+        self.slots = [];
+        for i in range(n_slots) {
+            self.slots.push(AttractorBasin(dim, depth, width));
+        }
+        self.seed = seed;
+        self.total_stores = 0;
+        self.total_recalls = 0;
+    }
+
+    fn store(self, re_pattern, im_pattern) {
+        let re_p = np.array(re_pattern).reshape(-1);
+        let im_p = np.array(im_pattern).reshape(-1);
+
+        let empty_idx = -1;
+        for i in range(self.n_slots) {
+            if not self.slots[i].is_written {
+                empty_idx = i;
+                break;
+            }
+        }
+
+        if empty_idx >= 0 {
+            self.slots[empty_idx].write(re_p, im_p);
+            self.total_stores = self.total_stores + 1;
+            return empty_idx;
+        }
+
+        let min_stability = 2.0;
+        let evict_idx = 0;
+        for i in range(self.n_slots) {
+            let s = self.slots[i].stability;
+            if s < min_stability {
+                min_stability = s;
+                evict_idx = i;
+            }
+        }
+        self.slots[evict_idx].write(re_p, im_p);
+        self.total_stores = self.total_stores + 1;
+        return evict_idx;
+    }
+
+    fn recall(self, re_query, im_query, k=4, settle_steps=5) {
+
+        let re_q = np.array(re_query).reshape(-1);
+        let im_q = np.array(im_query).reshape(-1);
+
+        let sims = [];
+        for i in range(self.n_slots) {
+            let s = self.slots[i].similarity(re_q, im_q);
+            sims.push({"idx": i, "sim": s});
+        }
+
+        for i in range(len(sims)) {
+            for j in range(i + 1, len(sims)) {
+                if sims[j]["sim"] > sims[i]["sim"] {
+                    let tmp = sims[i];
+                    sims[i] = sims[j];
+                    sims[j] = tmp;
+                }
+            }
+        }
+
+        let k_actual = k;
+        if k_actual > len(sims) { k_actual = len(sims); }
+        let top_k = [];
+        for i in range(k_actual) {
+            if sims[i]["sim"] > 0.0 {
+                top_k.push(sims[i]);
+            }
+        }
+
+        if len(top_k) == 0 {
+            self.total_recalls = self.total_recalls + 1;
+            return {"re": re_q, "im": im_q, "matched": false, "similarity": 0.0};
+        }
+
+        let cur_re = re_q.copy();
+        let cur_im = im_q.copy();
+
+        for step in range(settle_steps) {
+            let total_weight = 0.0;
+            let pull_re = np.zeros(self.dim);
+            let pull_im = np.zeros(self.dim);
+
+            for entry in top_k {
+                let idx = entry["idx"];
+                let w = entry["sim"];
+                let pulled = self.slots[idx].pull(cur_re, cur_im, strength=0.3);
+
+                pull_re = pull_re + w * (pulled["re"] - cur_re);
+                pull_im = pull_im + w * (pulled["im"] - cur_im);
+                total_weight = total_weight + w;
+            }
+
+            if total_weight > 0.0 {
+                pull_re = pull_re / total_weight;
+                pull_im = pull_im / total_weight;
+                cur_re = cur_re + pull_re;
+                cur_im = cur_im + pull_im;
+            }
+
+            let norm = np.sqrt(np.sum(cur_re * cur_re + cur_im * cur_im));
+            if norm > 1e-10 {
+                cur_re = cur_re / norm;
+                cur_im = cur_im / norm;
+            }
+        }
+
+        for i in range(self.n_slots) {
+            self.slots[i].age_one_step();
+        }
+
+        self.total_recalls = self.total_recalls + 1;
+
+        let best_sim = 0.0;
+        if len(top_k) > 0 { best_sim = top_k[0]["sim"]; }
+
+        return {
+            "re": cur_re,
+            "im": cur_im,
+            "matched": best_sim > 0.3,
+            "similarity": best_sim,
+            "top_slot": top_k[0]["idx"]
+        };
+    }
+
+    fn stats(self) {
+        let occupied = 0;
+        for i in range(self.n_slots) {
+            if self.slots[i].is_written { occupied = occupied + 1; }
+        }
+        print("FieldAttractorBank: " + str(occupied) + "/" + str(self.n_slots)
+              + " slots occupied, " + str(self.total_stores) + " stores, "
+              + str(self.total_recalls) + " recalls");
+    }
+}
+
+class AttractorAttention {
+    fn __init__(self, d_psi, n_attractors=64, k_nearest=4,
+                settle_steps=3, depth=1.0, width=0.5, seed=0) {
+        self.d_psi = d_psi;
+        self.n_attractors = n_attractors;
+
+        self.bank = FieldAttractorBank(d_psi, n_attractors, depth, width, seed);
+
+        self.query_re = nn.triad(d_psi, d_psi);
+        self.query_im = nn.triad(d_psi, d_psi);
+
+        self.out_re = nn.triad(d_psi, d_psi);
+        self.out_im = nn.triad(d_psi, d_psi);
+
+        self.k = k_nearest;
+        self.settle_steps = settle_steps;
+        self.seed = seed;
+        self.step_count = 0;
+    }
+
+    fn parameters(self) {
+        let ps = [];
+        for p in self.query_re.parameters() { ps.push(p); }
+        for p in self.query_im.parameters() { ps.push(p); }
+        for p in self.out_re.parameters() { ps.push(p); }
+        for p in self.out_im.parameters() { ps.push(p); }
+        return ps;
+    }
+
+    fn forward(self, psi_re, psi_im, store_mode=false) {
+
+        let re_data = psi_re.data;
+        let im_data = psi_im.data;
+
+        let B = re_data.shape[0];
+        let L = re_data.shape[1];
+        let D = re_data.shape[2];
+
+        if store_mode {
+            for b in range(B) {
+                for l in range(L) {
+                    let re_vec = re_data[b][l];
+                    let im_vec = im_data[b][l];
+
+                    let found = false;
+                    let best_sim = 0.0;
+                    let best_idx = 0;
+
+                    for slot_idx in range(self.n_attractors) {
+                        let sim = self.bank.slots[slot_idx].similarity(re_vec, im_vec);
+                        if sim > best_sim {
+                            best_sim = sim;
+                            best_idx = slot_idx;
+                        }
+                    }
+
+                    if best_sim < 0.5 {
+                        self.bank.store(re_vec, im_vec);
+                    }
+                }
+            }
+            self.step_count = self.step_count + 1;
+            return {"re": psi_re, "im": psi_im};
+        }
+
+        let out_re_data = np.zeros_like(re_data);
+        let out_im_data = np.zeros_like(im_data);
+
+        for b in range(B) {
+            for l in range(L) {
+                let re_vec = re_data[b][l];
+                let im_vec = im_data[b][l];
+
+                let recalled = self.bank.recall(re_vec, im_vec,
+                                                self.k, self.settle_steps);
+
+                let blend = 0.3;
+                out_re_data[b][l] = re_vec * (1.0 - blend)
+                                       + recalled["re"] * blend;
+                out_im_data[b][l] = im_vec * (1.0 - blend)
+                                       + recalled["im"] * blend;
+            }
+        }
+
+        self.step_count = self.step_count + 1;
+
+        return {
+            "re": T.tensor(out_re_data.astype(np.float32)),
+            "im": T.tensor(out_im_data.astype(np.float32))
+        };
+    }
+
+    fn bank_stats(self) {
+        self.bank.stats();
+    }
+}
+
+class CrossAttractorAttention {
+    fn __init__(self, d_psi, n_attractors=32, k_nearest=4,
+                settle_steps=3, seed=0) {
+        self.d_psi = d_psi;
+        self.n_attractors = n_attractors;
+
+        self.src_re = nn.triad(d_psi, d_psi);
+        self.src_im = nn.triad(d_psi, d_psi);
+
+        self.tgt_re = nn.triad(d_psi, d_psi);
+        self.tgt_im = nn.triad(d_psi, d_psi);
+
+        self.bank = FieldAttractorBank(d_psi, n_attractors, seed=seed);
+
+        self.out_re = nn.triad(d_psi, d_psi);
+        self.out_im = nn.triad(d_psi, d_psi);
+
+        self.k = k_nearest;
+        self.settle_steps = settle_steps;
+    }
+
+    fn parameters(self) {
+        let ps = [];
+        for p in self.src_re.parameters() { ps.push(p); }
+        for p in self.src_im.parameters() { ps.push(p); }
+        for p in self.tgt_re.parameters() { ps.push(p); }
+        for p in self.tgt_im.parameters() { ps.push(p); }
+        for p in self.out_re.parameters() { ps.push(p); }
+        for p in self.out_im.parameters() { ps.push(p); }
+        return ps;
+    }
+
+    fn encode_source(self, src_re, src_im) {
+        let re_data = src_re.data;
+        let im_data = src_im.data;
+        let L = re_data.shape[1];
+
+        for l in range(L) {
+            let re_vec = re_data[0][l];
+            let im_vec = im_data[0][l];
+            self.bank.store(re_vec, im_vec);
+        }
+    }
+
+    fn forward(self, tgt_re, tgt_im) {
+        let re_data = tgt_re.data;
+        let im_data = tgt_im.data;
+        let L = re_data.shape[1];
+
+        let out_re_data = np.zeros_like(re_data);
+        let out_im_data = np.zeros_like(im_data);
+
+        for l in range(L) {
+            let re_vec = re_data[0][l];
+            let im_vec = im_data[0][l];
+            let recalled = self.bank.recall(re_vec, im_vec,
+                                            self.k, self.settle_steps);
+
+            let blend = 0.3;
+            out_re_data[0][l] = re_vec * (1.0 - blend)
+                                   + recalled["re"] * blend;
+            out_im_data[0][l] = im_vec * (1.0 - blend)
+                                   + recalled["im"] * blend;
+        }
+
+        return {
+            "re": T.tensor(out_re_data.astype(np.float32)),
+            "im": T.tensor(out_im_data.astype(np.float32))
+        };
+    }
+}
+
+print("Attractor-based field attention loaded.");
+print("  AttractorBasin       — single attractor (center + basin)");
+print("  FieldAttractorBank   — bank of attractors with recall");
+print("  AttractorAttention   — field attention replacement");
+print("  CrossAttractorAttention — cross-sequence attractor recall");

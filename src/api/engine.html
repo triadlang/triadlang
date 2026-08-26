@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TriadLang · 3D Engine</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #07090d; color: #cdd6e4; font: 13px/1.5 system-ui, sans-serif; overflow: hidden; }
+  #view { position: fixed; inset: 0; }
+  #panel {
+    position: fixed; top: 12px; left: 12px; width: 270px;
+    background: rgba(13,17,26,.92); border: 1px solid #1d2738;
+    border-radius: 10px; padding: 14px; backdrop-filter: blur(6px);
+  }
+  h1 { font-size: 14px; color: #7fd4ff; margin-bottom: 2px; }
+  .sub { color: #5b6880; font-size: 11px; margin-bottom: 10px; }
+  fieldset { border: 1px solid #1d2738; border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+  legend { color: #8fa3c0; padding: 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 4px 0; }
+  input[type=range] { flex: 1; accent-color: #36b3f5; }
+  input[type=number] { width: 64px; background:#0b0f17; color:#cdd6e4; border:1px solid #243149; border-radius:5px; padding:2px 5px; }
+  .val { width: 38px; text-align: right; color: #7fd4ff; font-variant-numeric: tabular-nums; }
+  button {
+    background: #14304a; color: #bfe7ff; border: 1px solid #2c5a82;
+    border-radius: 7px; padding: 6px 10px; margin: 3px 2px 0 0; cursor: pointer; font-size: 12px;
+  }
+  button:hover { background: #1b4264; }
+  button.primary { background: #0f4d33; border-color: #1c7a52; color: #b8f5d8; }
+  button.primary:hover { background: #156844; }
+  #hud {
+    position: fixed; right: 12px; top: 12px; text-align: right;
+    background: rgba(13,17,26,.92); border: 1px solid #1d2738;
+    border-radius: 10px; padding: 10px 14px; font-variant-numeric: tabular-nums;
+  }
+  #hud b { color: #7fd4ff; font-size: 16px; }
+  #msg { position: fixed; bottom: 12px; left: 12px; color: #5b6880; font-size: 11px; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="view"></div>
+
+<div id="panel">
+  <h1>TriadLang · 3D Engine</h1>
+  <div class="sub">the physics is the Triad</div>
+
+  <fieldset>
+    <legend>world</legend>
+    <label>N <input id="wN" type="number" value="32" min="8" max="64"> seed <input id="wSeed" type="number" value="11"></label>
+    <button class="primary" id="btnNew">new world</button>
+    <button id="btnGolf">golf preset</button>
+    <button id="btnRing">ring preset</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>spawn atom</legend>
+    <label>x <input id="sx" type="range" min="-7" max="7" step="0.5" value="-5"><span class="val" id="sxv">-5</span></label>
+    <label>y <input id="sy" type="range" min="-7" max="7" step="0.5" value="0"><span class="val" id="syv">0</span></label>
+    <label>z <input id="sz" type="range" min="-7" max="7" step="0.5" value="0"><span class="val" id="szv">0</span></label>
+    <label>vx <input id="svx" type="range" min="-4" max="4" step="0.2" value="2"><span class="val" id="svxv">2</span></label>
+    <label>vy <input id="svy" type="range" min="-4" max="4" step="0.2" value="0"><span class="val" id="svyv">0</span></label>
+    <button class="primary" id="btnSpawn">spawn</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>time</legend>
+    <button class="primary" id="btnPlay">play</button>
+    <button id="btnStep">step 0.1</button>
+  </fieldset>
+</div>
+
+<div id="hud">
+  <div>t = <b id="hudT">0.0</b></div>
+  <div>atoms: <b id="hudAtoms">0</b></div>
+  <div>mass: <b id="hudMass">0</b></div>
+</div>
+<div id="msg">creating world…</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const $ = id => document.getElementById(id);
+for (const k of ['sx','sy','sz','svx','svy'])
+  $(k).addEventListener('input', () => $(k + 'v').textContent = $(k).value);
+
+// ── three ───────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07090d);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 400);
+camera.position.set(18, 14, 18);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+$('view').appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+scene.add(new THREE.AmbientLight(0x8899bb, 1.4));
+const key = new THREE.DirectionalLight(0xddeeff, 1.2); key.position.set(10,20,10); scene.add(key);
+
+let L = 16;
+let box = new THREE.LineSegments(
+  new THREE.Geometry(new THREE.BoxGeometry(L, L, L)),
+  new THREE.LineBasicMaterial({ color: 0x22304a }));
+scene.add(box);
+
+// nuvem de densidade
+let cloud = null, potCloud = null;
+const atomMeshes = new THREE.Group(); scene.add(atomMeshes);
+const atomGeo = new THREE.SphereGeometry(0.42, 18, 14);
+const atomMat = new THREE.MeshStandardMaterial({ color: 0x59d8ff, emissive: 0x1c5f80, roughness: 0.35 });
+
+function decodeF32(b64) {
+  const bin = atob(b64); const buf = new ArrayBuffer(bin.length);
+  const u8 = new Uint8Array(buf);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Float32Array(buf);
+}
+
+function buildCloud(rho, pot, N, Lw, rhoMax) {
+  if (cloud) { scene.remove(cloud); cloud.geometry.dispose(); }
+  if (potCloud) { scene.remove(potCloud); potCloud.geometry.dispose(); }
+  const dx = Lw / N, off = -Lw / 2 + dx / 2;
+  const pos = [], col = [], ppos = [];
+  const thresh = Math.max(rhoMax * 0.05, 1e-9);
+  const c = new THREE.Color();
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) for (let k = 0; k < N; k++) {
+    const idx = (i * N + j) * N + k;
+    const v = rho[idx];
+    if (v > thresh) {
+      pos.push(off + i*dx, off + j*dx, off + k*dx);
+      const u = Math.min(v / rhoMax, 1);
+      c.setHSL(0.58 - 0.5 * u, 0.95, 0.25 + 0.55 * u);
+      col.push(c.r, c.g, c.b);
+    }
+    if (pot[idx] > 0.5 && ((i + j + k) % 2 === 0)) ppos.push(off + i*dx, off + j*dx, off + k*dx);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  cloud = new THREE.Points(g, new THREE.PointsMaterial({
+    size: dx * 1.5, vertexColors: true, transparent: true, opacity: 0.85,
+    sizeAttenuation: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  scene.add(cloud);
+  const pg = new THREE.BufferGeometry();
+  pg.setAttribute('position', new THREE.Float32BufferAttribute(ppos, 3));
+  potCloud = new THREE.Points(pg, new THREE.PointsMaterial({
+    size: dx * 0.9, color: 0x4a5670, transparent: true, opacity: 0.5, depthWrite: false }));
+  scene.add(potCloud);
+}
+
+function setAtoms(atoms) {
+  while (atomMeshes.children.length > atoms.length)
+    atomMeshes.remove(atomMeshes.children[atomMeshes.children.length - 1]);
+  while (atomMeshes.children.length < atoms.length)
+    atomMeshes.add(new THREE.Mesh(atomGeo, atomMat));
+  atoms.forEach((a, i) => {
+    const m = atomMeshes.children[i];
+    m.position.set(a.x, a.y, a.z);
+    const s = Math.cbrt(Math.max(a.mass, 0.05)) * 0.55;
+    m.scale.setScalar(Math.min(Math.max(s, 0.3), 2.2));
+  });
+}
+
+// ── api ─────────────────────────────────────────────────────────────
+let SID = null, playing = false, busy = false;
+const api = (path, body, method) =>
+  fetch('/engine3d' + path, {
+    method: method || (body !== undefined ? 'POST' : 'GET'),
+    headers: { 'Content-Type': 'application/json' },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+
+function hud(st) {
+  $('hudT').textContent = st.t.toFixed(1);
+  $('hudAtoms').textContent = st.atom_count;
+  $('hudMass').textContent = st.total_mass.toFixed(2);
+  setAtoms(st.atoms);
+}
+
+async function refreshField() {
+  const d = await api(`/${SID}/density`);
+  L = d.L;
+  buildCloud(decodeF32(d.density_b64), decodeF32(d.potential_b64), d.N, d.L, d.rho_max);
+}
+
+async function newWorld(preset) {
+  playing = false; $('btnPlay').textContent = 'play';
+  $('msg').textContent = 'creating world…';
+  if (SID) api(`/${SID}`, undefined, 'DELETE').catch(() => {});
+  const st = await api('/create', { N: +$('wN').value, L: 16.0, seed: +$('wSeed').value });
+  SID = st.session;
+  if (preset === 'golf') {
+    await api(`/${SID}/wall`, { center: [0,0,0], size: [1,16,16], height: 10, gap: 2.2 });
+    await api(`/${SID}/well`, { center: [5,0,0], radius: 2.2, depth: 4 });
+    await api(`/${SID}/spawn`, { x: -5, y: 0, z: 0, width: 1.1, vx: 2.2, vy: 0, vz: 0 });
+  } else if (preset === 'ring') {
+    const pts = [];
+    for (let i = 0; i < 8; i++) {
+      const a = 2 * Math.PI * i / 8;
+      pts.push([4 * Math.cos(a), 4 * Math.sin(a), 0]);
+    }
+    await api(`/${SID}/shape`, { points: pts, width: 0.9 });
+  }
+  hud(await api(`/${SID}/state`));
+  await refreshField();
+  $('msg').textContent = `session ${SID} · drag to orbit, scroll to zoom`;
+}
+
+async function doStep() {
+  if (!SID || busy) return;
+  busy = true;
+  try {
+    hud(await api(`/${SID}/step`, { dt: 0.1 }));
+    await refreshField();
+  } finally { busy = false; }
+}
+
+$('btnNew').onclick   = () => newWorld();
+$('btnGolf').onclick  = () => newWorld('golf');
+$('btnRing').onclick  = () => newWorld('ring');
+$('btnStep').onclick  = doStep;
+$('btnPlay').onclick  = () => {
+  playing = !playing;
+  $('btnPlay').textContent = playing ? 'pause' : 'play';
+};
+$('btnSpawn').onclick = async () => {
+  if (!SID) return;
+  hud(await api(`/${SID}/spawn`, {
+    x: +$('sx').value, y: +$('sy').value, z: +$('sz').value,
+    vx: +$('svx').value, vy: +$('svy').value, vz: 0 }));
+  await refreshField();
+};
+
+(async function loop() {
+  if (playing && !busy) await doStep().catch(() => {});
+  setTimeout(loop, 60);
+})();
+
+(function render() {
+  requestAnimationFrame(render);
+  controls.update();
+  renderer.render(scene, camera);
+})();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+newWorld('golf').catch(e => $('msg').textContent = 'error: ' + e);
+</script>
+</body>
+</html>

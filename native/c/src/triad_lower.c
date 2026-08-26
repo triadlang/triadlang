@@ -1,15 +1,8 @@
-/* triad_lower.c — Port of compiler/lower.py.
- *
- * Lowers a universal AST module into the native IR. Mirrors the Python
- * lower_module / lower_stmt / lower_expr / _lower_match / _lower_class /
- * _match_condition functions 1:1.
- */
 #include "triad_ir.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ── Helpers ─────────────────────────────────────────────────────── */
 
 typedef struct {
     void  **items;
@@ -33,8 +26,6 @@ static TriadIRNode *ir_new(TriadArena *a, TriadIRKind k) {
     return n;
 }
 
-/* ── Forward declarations ────────────────────────────────────────── */
-
 static TriadIRNode *lower_stmt(TriadArena *a, const TriadAstNode *s);
 static TriadIRNode *lower_expr(TriadArena *a, const TriadAstNode *e);
 static TriadIRNode *lower_match(TriadArena *a, const TriadAstNode *s);
@@ -42,7 +33,6 @@ static TriadIRNode *lower_class(TriadArena *a, const TriadAstNode *s);
 static TriadIRNode *match_condition(TriadArena *a, TriadIRNode *subject,
                                     const TriadAstNode *pattern);
 
-/* Lower a list of stmts to a TriadIRNode** array (arena-owned). */
 static TriadIRNode **lower_stmt_list(TriadArena *a, TriadAstNode *const *items,
                                      size_t n, size_t *out_len) {
     if (n == 0) { *out_len = 0; return NULL; }
@@ -60,8 +50,6 @@ static TriadIRNode **lower_expr_list(TriadArena *a, TriadAstNode *const *items,
     *out_len = n;
     return arr;
 }
-
-/* ── lower_expr ──────────────────────────────────────────────────── */
 
 static TriadIRNode *lower_expr(TriadArena *a, const TriadAstNode *e) {
     if (!e) return ir_new(a, TRIAD_IR_NONE);
@@ -219,16 +207,88 @@ static TriadIRNode *lower_expr(TriadArena *a, const TriadAstNode *e) {
             n->u.list_comp.var       = e->u.list_comp.var;
             n->u.list_comp.iter      = lower_expr(a, e->u.list_comp.iter);
             n->u.list_comp.condition = e->u.list_comp.condition ? lower_expr(a, e->u.list_comp.condition) : NULL;
+            n->u.list_comp.clauses_len = 0;
+            n->u.list_comp.clauses = NULL;
             return n;
         }
-        /* Tuples, yield-expr, await-expr have no IR lowering rule in
-         * compiler/lower.py — they fall through to IRNone(). Match. */
+        case TRIAD_AST_COMPLEX_LIT: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_COMPLEX);
+            n->u.complex_lit.real_val = e->u.complex_lit.real_val;
+            n->u.complex_lit.imag_val = e->u.complex_lit.imag_val;
+            return n;
+        }
+        case TRIAD_AST_BYTES_LIT: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_BYTES);
+            n->u.bytes_lit.bytes_val = e->u.bytes_lit.bytes_val;
+            n->u.bytes_lit.bytes_len = e->u.bytes_lit.bytes_len;
+            return n;
+        }
+        case TRIAD_AST_TUPLE: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_TUPLE);
+            n->u.tuple_lit.elements = lower_expr_list(a, e->u.list.elements, e->u.list.elements_len, &n->u.tuple_lit.elements_len);
+            return n;
+        }
+        case TRIAD_AST_SET_LIT: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_SET);
+            n->u.set_lit.elements = lower_expr_list(a, e->u.set_lit.elements, e->u.set_lit.elements_len, &n->u.set_lit.elements_len);
+            return n;
+        }
+        case TRIAD_AST_TERNARY: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_TERNARY);
+            n->u.ternary.condition = lower_expr(a, e->u.ternary.condition);
+            n->u.ternary.then_val   = lower_expr(a, e->u.ternary.then_val);
+            n->u.ternary.else_val   = lower_expr(a, e->u.ternary.else_val);
+            return n;
+        }
+        case TRIAD_AST_CHAIN_CMP: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_CHAIN_CMP);
+            n->u.chain_cmp.operands = lower_expr_list(a, e->u.chain_cmp.operands, e->u.chain_cmp.operands_len, &n->u.chain_cmp.operands_len);
+            n->u.chain_cmp.ops = e->u.chain_cmp.ops;
+            n->u.chain_cmp.ops_len = e->u.chain_cmp.ops_len;
+            return n;
+        }
+        case TRIAD_AST_SUPER: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_SUPER);
+            n->u.super_expr.args = lower_expr_list(a, e->u.super_expr.args, e->u.super_expr.args_len, &n->u.super_expr.args_len);
+            return n;
+        }
+        case TRIAD_AST_DICT_COMP: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_DICT_COMP);
+            n->u.dict_comp.key_expr   = lower_expr(a, e->u.dict_comp.key_expr);
+            n->u.dict_comp.value_expr = lower_expr(a, e->u.dict_comp.value_expr);
+            n->u.dict_comp.clauses_len = 0;
+            n->u.dict_comp.clauses = NULL;
+            return n;
+        }
+        case TRIAD_AST_SET_COMP: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_SET_COMP);
+            n->u.set_comp.expr = lower_expr(a, e->u.set_comp.expr);
+            n->u.set_comp.clauses_len = 0;
+            n->u.set_comp.clauses = NULL;
+            return n;
+        }
+        case TRIAD_AST_GEN_COMP: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_GEN_COMP);
+            n->u.gen_comp.expr = lower_expr(a, e->u.gen_comp.expr);
+            n->u.gen_comp.clauses_len = 0;
+            n->u.gen_comp.clauses = NULL;
+            return n;
+        }
+        case TRIAD_AST_YIELD_EXPR: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_YIELD_EXPR);
+            n->u.yield_expr.value = e->u.yield_expr.value ? lower_expr(a, e->u.yield_expr.value) : NULL;
+            return n;
+        }
+        case TRIAD_AST_AWAIT_EXPR: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_AWAIT);
+            n->u.await_expr.value = lower_expr(a, e->u.await_expr.value);
+            return n;
+        }
+
         default:
             return ir_new(a, TRIAD_IR_NONE);
     }
 }
-
-/* ── _match_condition ───────────────────────────────────────────── */
 
 static TriadIRNode *match_condition(TriadArena *a, TriadIRNode *subject,
                                     const TriadAstNode *pattern) {
@@ -236,17 +296,13 @@ static TriadIRNode *match_condition(TriadArena *a, TriadIRNode *subject,
         TriadIRNode *n = ir_new(a, TRIAD_IR_BOOL);
         n->u.bool_val = 1; return n;
     }
-    /* Wildcard ident `_` -> IRBool(True). */
+
     if (pattern->kind == TRIAD_AST_IDENT &&
         pattern->u.ident_name && strcmp(pattern->u.ident_name, "_") == 0) {
         TriadIRNode *n = ir_new(a, TRIAD_IR_BOOL);
         n->u.bool_val = 1; return n;
     }
-    /* For supported pattern kinds emit `subject == lower(pattern)`. The
-     * Python code special-cases each literal but the resulting IR is
-     * always `IRBinOp("==", subject, IR<lit>(value))`, so lower_expr is
-     * the same answer (Ident also becomes IRIdent, ListExpr becomes
-     * IRList[lower_expr(el)] which is what Python emits). */
+
     switch (pattern->kind) {
         case TRIAD_AST_INT_LIT:
         case TRIAD_AST_FLOAT_LIT:
@@ -268,20 +324,16 @@ static TriadIRNode *match_condition(TriadArena *a, TriadIRNode *subject,
     }
 }
 
-/* ── _lower_match ───────────────────────────────────────────────── */
-
 static TriadIRNode *lower_match(TriadArena *a, const TriadAstNode *s) {
     TriadIRNode *subject = lower_expr(a, s->u.match_stmt.subject);
 
     if (s->u.match_stmt.cases_len == 0) {
-        /* No cases: Python would crash referencing first_cond / first_body.
-         * That mirrors a malformed match anyway; emit a placeholder. */
+
         TriadIRNode *n = ir_new(a, TRIAD_IR_IF);
         n->u.if_stmt.condition = subject;
         return n;
     }
 
-    /* Build elif clauses for all but the first case. */
     PV elifs = {0};
     TriadIRNode  *first_cond = NULL;
     TriadIRNode **first_body = NULL;
@@ -305,7 +357,6 @@ static TriadIRNode *lower_match(TriadArena *a, const TriadAstNode *s) {
         }
     }
 
-    /* else_body resolution: explicit else_body > pop last elif > none. */
     int has_else = 0;
     TriadIRNode **else_body = NULL;
     size_t        else_body_len = 0;
@@ -339,8 +390,6 @@ static TriadIRNode *lower_match(TriadArena *a, const TriadAstNode *s) {
     return iff;
 }
 
-/* ── _lower_class ───────────────────────────────────────────────── */
-
 static TriadIRNode *lower_class(TriadArena *a, const TriadAstNode *s) {
     TriadIRNode *cd = ir_new(a, TRIAD_IR_CLASS_DECL);
     cd->u.class_decl.name   = s->u.type_decl.name;
@@ -373,8 +422,6 @@ static TriadIRNode *lower_class(TriadArena *a, const TriadAstNode *s) {
     }
     return cd;
 }
-
-/* ── lower_stmt ─────────────────────────────────────────────────── */
 
 static TriadIRNode *lower_stmt(TriadArena *a, const TriadAstNode *s) {
     if (!s) {
@@ -480,11 +527,12 @@ static TriadIRNode *lower_stmt(TriadArena *a, const TriadAstNode *s) {
             return n;
         }
         case TRIAD_AST_FROM_IMPORT: {
-            /* Python lowering drops `names` and just keeps the path. */
             TriadIRNode *n = ir_new(a, TRIAD_IR_IMPORT);
-            n->u.import_stmt.path     = s->u.from_import.path;
-            n->u.import_stmt.path_len = s->u.from_import.path_len;
-            n->u.import_stmt.alias    = NULL;
+            n->u.import_stmt.path      = s->u.from_import.path;
+            n->u.import_stmt.path_len  = s->u.from_import.path_len;
+            n->u.import_stmt.alias     = NULL;
+            n->u.import_stmt.names     = s->u.from_import.names;
+            n->u.import_stmt.names_len = s->u.from_import.names_len;
             return n;
         }
         case TRIAD_AST_REG: {
@@ -521,7 +569,7 @@ static TriadIRNode *lower_stmt(TriadArena *a, const TriadAstNode *s) {
                 n->u.world_decl.fields = arr;
                 n->u.world_decl.fields_len = s->u.world_decl.fields_len;
             }
-            /* Entities: each WorldDecl entity becomes an IREntityDecl (Python builds a fresh IREntityDecl, not via lower_stmt). */
+
             if (s->u.world_decl.entities_len) {
                 TriadIRNode **arr = (TriadIRNode **)triad_arena_alloc(a, s->u.world_decl.entities_len * sizeof(TriadIRNode *));
                 for (size_t k = 0; k < s->u.world_decl.entities_len; ++k) {
@@ -545,6 +593,33 @@ static TriadIRNode *lower_stmt(TriadArena *a, const TriadAstNode *s) {
             }
             return n;
         }
+        case TRIAD_AST_SUBSTRATE: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_SUBSTRATE_DECL);
+            n->u.substrate_decl.name = s->u.substrate_decl.name;
+            n->u.substrate_decl.regime = s->u.substrate_decl.regime;
+            n->u.substrate_decl.members = s->u.substrate_decl.members;
+            n->u.substrate_decl.members_len = s->u.substrate_decl.members_len;
+            n->u.substrate_decl.is_composed = s->u.substrate_decl.is_composed;
+            if (s->u.substrate_decl.properties_len) {
+                TriadIRStrEntry *arr = (TriadIRStrEntry *)triad_arena_alloc(a, s->u.substrate_decl.properties_len * sizeof(TriadIRStrEntry));
+                for (size_t k = 0; k < s->u.substrate_decl.properties_len; ++k) {
+                    arr[k].key = s->u.substrate_decl.properties[k].key;
+                    arr[k].value = lower_expr(a, s->u.substrate_decl.properties[k].value);
+                }
+                n->u.substrate_decl.properties = arr;
+                n->u.substrate_decl.properties_len = s->u.substrate_decl.properties_len;
+            }
+            if (s->u.substrate_decl.overrides_len) {
+                TriadIRStrEntry *arr = (TriadIRStrEntry *)triad_arena_alloc(a, s->u.substrate_decl.overrides_len * sizeof(TriadIRStrEntry));
+                for (size_t k = 0; k < s->u.substrate_decl.overrides_len; ++k) {
+                    arr[k].key = s->u.substrate_decl.overrides[k].key;
+                    arr[k].value = lower_expr(a, s->u.substrate_decl.overrides[k].value);
+                }
+                n->u.substrate_decl.overrides = arr;
+                n->u.substrate_decl.overrides_len = s->u.substrate_decl.overrides_len;
+            }
+            return n;
+        }
         case TRIAD_AST_OBSERVE: {
             TriadIRNode *n = ir_new(a, TRIAD_IR_OBSERVE);
             n->u.observe.target      = s->u.observe_stmt.target;
@@ -555,6 +630,7 @@ static TriadIRNode *lower_stmt(TriadArena *a, const TriadAstNode *s) {
         case TRIAD_AST_RUN: {
             TriadIRNode *n = ir_new(a, TRIAD_IR_RUN);
             n->u.run.duration = s->u.run_stmt.duration ? lower_expr(a, s->u.run_stmt.duration) : NULL;
+            n->u.run.target = s->u.run_stmt.target;
             return n;
         }
         case TRIAD_AST_DESTRUCT_LET:
@@ -569,14 +645,7 @@ static TriadIRNode *lower_stmt(TriadArena *a, const TriadAstNode *s) {
             TriadIRNode *n = ir_new(a, TRIAD_IR_TRY_CATCH);
             n->u.try_catch.body = lower_stmt_list(a, s->u.try_catch.body, s->u.try_catch.body_len, &n->u.try_catch.body_len);
             n->u.try_catch.catch_var = s->u.try_catch.catch_var;
-            /* Python: catch_body is `list[Stmt]` (defaulting to [] empty
-             * list when no `catch` clause is present). The lower passes
-             * `[lower_stmt(st) for st in s.catch_body] if s.catch_body
-             * else None`. Mirror that: if catch_body_len == 0 and there
-             * was no `catch` keyword consumed, IR carries None. We use
-             * catch_body_len > 0 OR catch_var as the "has catch" signal,
-             * which matches Python's semantics (an empty catch body is
-             * still serialized as []). */
+
             if (s->u.try_catch.catch_body_len > 0 || s->u.try_catch.catch_var) {
                 n->u.try_catch.catch_body = lower_stmt_list(a, s->u.try_catch.catch_body, s->u.try_catch.catch_body_len, &n->u.try_catch.catch_body_len);
                 n->u.try_catch.has_catch = 1;
@@ -592,6 +661,34 @@ static TriadIRNode *lower_stmt(TriadArena *a, const TriadAstNode *s) {
             n->u.ret_or_throw.value = s->u.unary_value.value ? lower_expr(a, s->u.unary_value.value) : NULL;
             return n;
         }
+        case TRIAD_AST_WITH:
+        case TRIAD_AST_ASYNC_WITH: {
+            TriadIRNode *n = ir_new(a, s->kind == TRIAD_AST_ASYNC_WITH ? TRIAD_IR_ASYNC_WITH : TRIAD_IR_WITH);
+            n->u.with_stmt.expr = s->u.with_stmt.expr ? lower_expr(a, s->u.with_stmt.expr) : NULL;
+            n->u.with_stmt.var = s->u.with_stmt.var;
+            n->u.with_stmt.body = lower_stmt_list(a, s->u.with_stmt.body, s->u.with_stmt.body_len, &n->u.with_stmt.body_len);
+            return n;
+        }
+        case TRIAD_AST_ASSERT: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_ASSERT);
+            n->u.assert_stmt.condition = lower_expr(a, s->u.assert_stmt.condition);
+            n->u.assert_stmt.message = s->u.assert_stmt.message ? lower_expr(a, s->u.assert_stmt.message) : NULL;
+            return n;
+        }
+        case TRIAD_AST_PASS:
+            return ir_new(a, TRIAD_IR_PASS);
+        case TRIAD_AST_DEL: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_DEL);
+            n->u.del_stmt.target = lower_expr(a, s->u.del_stmt.target);
+            return n;
+        }
+        case TRIAD_AST_ASYNC_FOR: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_ASYNC_FOR);
+            n->u.for_stmt.var = s->u.for_stmt.var;
+            n->u.for_stmt.iter = lower_expr(a, s->u.for_stmt.iter);
+            n->u.for_stmt.body = lower_stmt_list(a, s->u.for_stmt.body, s->u.for_stmt.body_len, &n->u.for_stmt.body_len);
+            return n;
+        }
         case TRIAD_AST_MATCH:      return lower_match(a, s);
         case TRIAD_AST_CLASS_DECL: return lower_class(a, s);
         case TRIAD_AST_YIELD_STMT: {
@@ -599,16 +696,48 @@ static TriadIRNode *lower_stmt(TriadArena *a, const TriadAstNode *s) {
             n->u.ret_or_throw.value = s->u.unary_value.value ? lower_expr(a, s->u.unary_value.value) : NULL;
             return n;
         }
-        default: {
-            /* AnnotationStmt and any other unrecognised stmt -> IRExprStmt(IRNone()). */
-            TriadIRNode *n = ir_new(a, TRIAD_IR_EXPR_STMT);
-            n->u.expr_stmt.expr = ir_new(a, TRIAD_IR_NONE);
+        case TRIAD_AST_COUPLE: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_COUPLE);
+            n->u.couple.src = s->u.couple_stmt.src;
+            n->u.couple.dst = s->u.couple_stmt.dst;
+            n->u.couple.kappa = s->u.couple_stmt.kappa ? lower_expr(a, s->u.couple_stmt.kappa) : NULL;
+            n->u.couple.duration = s->u.couple_stmt.duration ? lower_expr(a, s->u.couple_stmt.duration) : NULL;
             return n;
         }
+        case TRIAD_AST_PAIR: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_PAIR);
+            n->u.pair.a = s->u.pair_stmt.a;
+            n->u.pair.b = s->u.pair_stmt.b;
+            n->u.pair.kappa = s->u.pair_stmt.kappa ? lower_expr(a, s->u.pair_stmt.kappa) : NULL;
+            n->u.pair.duration = s->u.pair_stmt.duration ? lower_expr(a, s->u.pair_stmt.duration) : NULL;
+            return n;
+        }
+        case TRIAD_AST_RING: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_RING);
+            n->u.ring.members = s->u.ring_stmt.members;
+            n->u.ring.members_len = s->u.ring_stmt.members_len;
+            n->u.ring.kappa = s->u.ring_stmt.kappa ? lower_expr(a, s->u.ring_stmt.kappa) : NULL;
+            n->u.ring.duration = s->u.ring_stmt.duration ? lower_expr(a, s->u.ring_stmt.duration) : NULL;
+            return n;
+        }
+        case TRIAD_AST_ANNOTATION: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_ANNOTATION);
+            n->u.annotation.key = s->u.annotation_stmt.key;
+            n->u.annotation.args = s->u.annotation_stmt.args;
+            return n;
+        }
+        case TRIAD_AST_SEQUENCE: {
+            TriadIRNode *n = ir_new(a, TRIAD_IR_SEQUENCE);
+            n->u.sequence.inputs = lower_expr(a, s->u.sequence_stmt.inputs);
+            n->u.sequence.target = s->u.sequence_stmt.target;
+            n->u.sequence.each_for = s->u.sequence_stmt.each_for ? lower_expr(a, s->u.sequence_stmt.each_for) : NULL;
+            return n;
+        }
+        default:
+            fprintf(stderr, "lower_stmt: unhandled AST kind %d\n", (int)s->kind);
+            exit(1);
     }
 }
-
-/* ── Entry ──────────────────────────────────────────────────────── */
 
 TriadIRNode *triad_ir_lower_module(TriadArena *a, const TriadAstNode *module,
                                    TriadDiag *diag) {
@@ -657,16 +786,41 @@ const char *triad_ir_kind_name(TriadIRKind k) {
         case TRIAD_IR_FUNCTION:      return "IRFunction";
         case TRIAD_IR_TRY_CATCH:     return "IRTryCatch";
         case TRIAD_IR_THROW:         return "IRThrow";
+        case TRIAD_IR_WITH:          return "IRWith";
+        case TRIAD_IR_ASSERT:        return "IRAssert";
+        case TRIAD_IR_PASS:          return "IRPass";
+        case TRIAD_IR_DEL:           return "IRDel";
+        case TRIAD_IR_ASYNC_FOR:     return "IRAsyncFor";
+        case TRIAD_IR_ASYNC_WITH:    return "IRAsyncWith";
         case TRIAD_IR_TYPE_DECL:     return "IRTypeDecl";
         case TRIAD_IR_ENTITY_DECL:   return "IREntityDecl";
         case TRIAD_IR_WORLD_DECL:    return "IRWorldDecl";
         case TRIAD_IR_REG_DECL:      return "IRRegDecl";
         case TRIAD_IR_OBSERVE:       return "IRObserve";
+        case TRIAD_IR_SUBSTRATE_DECL:return "IRSubstrateDecl";
         case TRIAD_IR_RUN:           return "IRRun";
         case TRIAD_IR_IMPORT:        return "IRImport";
         case TRIAD_IR_DESTRUCT_LET:  return "IRDestructLet";
         case TRIAD_IR_CLASS_DECL:    return "IRClassDecl";
         case TRIAD_IR_YIELD:         return "IRYield";
+        case TRIAD_IR_COUPLE:        return "IRCouple";
+        case TRIAD_IR_PAIR:          return "IRPair";
+        case TRIAD_IR_RING:          return "IRRing";
+        case TRIAD_IR_SEQUENCE:      return "IRSequence";
+        case TRIAD_IR_ANNOTATION:    return "IRAnnotation";
+        case TRIAD_IR_COMPLEX:      return "IRComplex";
+        case TRIAD_IR_BYTES:        return "IRBytes";
+        case TRIAD_IR_TUPLE:        return "IRTuple";
+        case TRIAD_IR_SET:          return "IRSet";
+        case TRIAD_IR_TERNARY:      return "IRTernary";
+        case TRIAD_IR_CHAIN_CMP:    return "IRChainCmp";
+        case TRIAD_IR_SUPER:        return "IRSuper";
+        case TRIAD_IR_DICT_COMP:    return "IRDictComp";
+        case TRIAD_IR_SET_COMP:     return "IRSetComp";
+        case TRIAD_IR_GEN_COMP:     return "IRGenComp";
+        case TRIAD_IR_YIELD_EXPR:   return "IRYieldExpr";
+        case TRIAD_IR_AWAIT:        return "IRAwait";
+        case TRIAD_IR_COMP_CLAUSE:  return "IRCompClause";
         case TRIAD_IR_MODULE:        return "IRModule";
         default:                     return "Unknown";
     }

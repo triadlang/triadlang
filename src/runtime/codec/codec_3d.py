@@ -1,6 +1,7 @@
 from __future__ import annotations
-from typing import Optional
-import numpy as np
+
+from triad import ntri as np
+
 FAMILIES = ('SC', 'BCC', 'FCC', 'HCP')
 
 def _gaussian_at(x, y, z, x0, sigma):

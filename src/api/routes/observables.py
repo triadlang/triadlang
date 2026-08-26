@@ -1,6 +1,13 @@
 from __future__ import annotations
+
 from fastapi import APIRouter, HTTPException
-from api.models import ObservablesRequest, ObservablesResult, PowerSpectrumRequest, PowerSpectrumResult
+
+from api.models import (
+    ObservablesRequest,
+    ObservablesResult,
+    PowerSpectrumRequest,
+    PowerSpectrumResult,
+)
 from api.serialization import b64_to_ndarray, ndarray_to_b64
 
 router = APIRouter()
@@ -19,8 +26,13 @@ async def compute_observables(req: ObservablesRequest):
 
     try:
         from runtime.physics.observables import (
-            crystallinity, dominant_wavenumber, peak_density,
-            ipr, fwhm, norm, participation_ratio,
+            crystallinity,
+            dominant_wavenumber,
+            fwhm,
+            ipr,
+            norm,
+            participation_ratio,
+            peak_density,
         )
         return ObservablesResult(
             crystallinity=float(crystallinity(psi_1d, dx, k_cutoff=req.k_cutoff)),
@@ -42,9 +54,9 @@ async def power_spectrum_endpoint(req: PowerSpectrumRequest):
         raise HTTPException(status_code=422, detail=f'failed to decode psi_b64: {exc}')
 
     try:
-        from runtime.physics.observables import power_spectrum
         from runtime.backend import asnumpy
-        import numpy as np
+        from runtime.physics.observables import power_spectrum
+        from triad import ntri as np
         k, P = power_spectrum(psi.ravel(), req.dx)
         k_np = asnumpy(k).astype(np.float64)
         P_np = asnumpy(P).astype(np.float64)

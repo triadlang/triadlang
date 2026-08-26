@@ -1,0 +1,370 @@
+from crystal_core import CrystalLM;
+import triad.nn as nn;
+import triad.tensor as T;
+import triad.net as net;
+import triad.train as train;
+import triad.ntri as np;
+
+class CrystalTrainer {
+    fn __init__(self, model, vocab_size, d_model, d_psi,
+                lr=0.001, T_bath_init=0.5, T_bath_final=0.001,
+                T_bath_decay=0.995, crystal_threshold=0.005,
+                lambda_physics=0.01, lambda_conserve=0.001,
+                lambda_crystal=0.0001, seed=42) {
+        self.model = model;
+        self.vocab_size = vocab_size;
+        self.d_model = d_model;
+        self.d_psi = d_psi;
+
+        self.optimizer = nn.TriadFlow(
+            model.parameters(),
+            lr=float(lr),
+            regime="B0",
+            seed=seed,
+            freeze=true
+        );
+
+        self.T_bath_init = float(T_bath_init);
+        self.T_bath_final = float(T_bath_final);
+        self.T_bath_decay = float(T_bath_decay);
+        self.T_current = float(T_bath_init);
+
+        self.crystal_threshold = float(crystal_threshold);
+        self.crystal_min_steps = 100;
+
+        self.lambda_physics = float(lambda_physics);
+        self.lambda_conserve = float(lambda_conserve);
+        self.lambda_crystal = float(lambda_crystal);
+
+        self.step_count = 0;
+        self.loss_history = [];
+        self.crystal_history = [];
+        self.obs_history = [];
+        self.hyperparams = {
+            "Lambda": float(self.model.blocks[0].evolution.Lambda),
+            "gamma_0": float(self.model.blocks[0].evolution.gamma_0),
+            "sigma": float(self.model.blocks[0].evolution.sigma)
+        };
+    }
+
+    fn anneal_temperature(self) {
+        self.T_current = self.T_current * self.T_bath_decay;
+        if self.T_current < self.T_bath_final {
+            self.T_current = self.T_bath_final;
+        }
+        self.model.set_temperature(self.T_current);
+    }
+
+    fn compute_physics_loss(self, observables_list) {
+        let phys_loss = 0.0;
+        let cons_loss = 0.0;
+        let crystal_bonus = 0.0;
+
+        for block_obs in observables_list {
+            let ipr = float(block_obs["ipr"]);
+            let norm_val = float(block_obs["norm"]);
+            let crys = float(block_obs["crystallinity"]);
+
+            if ipr < 0.02 {
+                phys_loss = phys_loss + (0.02 - ipr) * 10.0;
+            }
+            if ipr > 0.8 {
+                phys_loss = phys_loss + (ipr - 0.8) * 10.0;
+            }
+
+            let norm_dev = norm_val - 1.0;
+            cons_loss = cons_loss + norm_dev * norm_dev;
+
+            if crys >= 0.2 and crys <= 0.5 {
+                crystal_bonus = crystal_bonus - 0.001;
+            }
+            if crys > 0.8 {
+                crystal_bonus = crystal_bonus + (crys - 0.8) * 0.01;
+            }
+        }
+
+        return {
+            "phys_loss": phys_loss,
+            "cons_loss": cons_loss,
+            "crystal_bonus": crystal_bonus
+        };
+    }
+
+    fn compute_field_residual(self, psi_re, psi_im, V_mem) {
+
+        let re_data = psi_re.data;
+        let im_data = psi_im.data;
+
+        let rho = np.mean(re_data * re_data + im_data * im_data,
+                          axis=-1, keepdims=true);
+        let V_est = self.hyperparams["Lambda"] * rho + V_mem.data;
+        let angle_est = V_est * 0.05;
+
+        let cos_a = np.cos(angle_est);
+        let sin_a = np.sin(angle_est);
+
+        let expected_re = re_data * cos_a + im_data * sin_a;
+        let expected_im = im_data * cos_a - re_data * sin_a;
+
+        let diff_re = re_data - expected_re;
+        let diff_im = im_data - expected_im;
+        let residual = float(np.mean(diff_re * diff_re + diff_im * diff_im));
+
+        return residual;
+    }
+
+    fn train_step(self, x_ids, y_ids) {
+
+        self.step_count = self.step_count + 1;
+
+        let result = self.model.loss(x_ids, y_ids);
+
+        let ce_loss = float(result["ce_loss"]);
+        let phys_info = self.compute_physics_loss(result["results"]["observables"]);
+        let residual = 0.0;
+
+        let total_loss = result["loss"];
+
+        self.optimizer.zero_grad();
+        total_loss.backward();
+        self.optimizer.step();
+
+        self.anneal_temperature();
+
+        let crystal_frac = self.optimizer.crystal_fraction();
+        self.loss_history.push(ce_loss);
+        self.crystal_history.push(crystal_frac);
+
+        let last_obs = result["results"]["observables"];
+        let final_obs = last_obs[len(last_obs) - 1];
+        self.obs_history.push(final_obs);
+
+        if self.step_count % 50 == 0 and len(self.obs_history) >= 20 {
+            self._self_calibrate();
+        }
+
+        return {
+            "step": self.step_count,
+            "ce_loss": ce_loss,
+            "phys_loss": phys_info["phys_loss"],
+            "cons_loss": phys_info["cons_loss"],
+            "crystal_frac": crystal_frac,
+            "temperature": self.T_current,
+            "total_loss": float(total_loss)
+        };
+    }
+
+    fn _self_calibrate(self) {
+        if len(self.obs_history) < 20 { return; }
+
+        let n_recent = 20;
+        let recent = self.obs_history[len(self.obs_history) - n_recent:];
+
+        let mean_ipr = 0.0;
+        let mean_crys = 0.0;
+        for obs in recent {
+            mean_ipr = mean_ipr + float(obs["ipr"]);
+            mean_crys = mean_crys + float(obs["crystallinity"]);
+        }
+        mean_ipr = mean_ipr / float(len(recent));
+        mean_crys = mean_crys / float(len(recent));
+
+        if mean_ipr < 0.03 {
+            self.hyperparams["Lambda"] = self.hyperparams["Lambda"] - 0.02;
+        } elif mean_ipr > 0.7 {
+            self.hyperparams["Lambda"] = self.hyperparams["Lambda"] + 0.02;
+        }
+
+        if self.hyperparams["Lambda"] > 0.0 { self.hyperparams["Lambda"] = -0.01; }
+        if self.hyperparams["Lambda"] < -2.0 { self.hyperparams["Lambda"] = -2.0; }
+
+        let new_L = self.hyperparams["Lambda"];
+        for i in range(len(self.model.blocks)) {
+            let blk = self.model.blocks[i];
+            blk.evolution.Lambda = float(new_L) + float(i) * 0.02;
+            blk.evolution.gamma_0 = max(0.001, 0.01 * (1.0 - mean_crys));
+        }
+    }
+
+    fn train_epoch(self, dataset, batch_size, batches_per_epoch) {
+        let epoch_loss = 0.0;
+        let epoch_crystal = 0.0;
+
+        for b_idx in range(batches_per_epoch) {
+            let sample = dataset.batch(batch_size);
+            let x_ids = T.tensor(sample[0]);
+            let y_ids = T.tensor(sample[1]);
+
+            let info = self.train_step(x_ids, y_ids);
+
+            epoch_loss = epoch_loss + info["ce_loss"];
+            epoch_crystal = epoch_crystal + info["crystal_frac"];
+
+            if (b_idx + 1) % 10 == 0 {
+                print("  batch " + str(b_idx + 1) + "/" + str(batches_per_epoch)
+                      + " ce=" + str(info["ce_loss"])
+                      + " crystal=" + str(info["crystal_frac"])
+                      + " T=" + str(info["temperature"]));
+            }
+        }
+
+        epoch_loss = epoch_loss / float(batches_per_epoch);
+        epoch_crystal = epoch_crystal / float(batches_per_epoch);
+
+        return {
+            "avg_loss": epoch_loss,
+            "avg_crystal": epoch_crystal,
+            "temperature": self.T_current
+        };
+    }
+
+    fn stats(self) {
+        print("═══════════════════════════════════════");
+        print("  CrystalTrainer Status");
+        print("  Steps:          " + str(self.step_count));
+        print("  Temperature:    " + str(self.T_current));
+        print("  Crystal frac:   " + str(self.optimizer.crystal_fraction()));
+        print("  Lambda:        " + str(self.hyperparams["Lambda"]));
+        print("  Gamma:         " + str(self.hyperparams["gamma_0"]));
+
+        if len(self.loss_history) > 0 {
+            let recent_n = 50;
+            if recent_n > len(self.loss_history) {
+                recent_n = len(self.loss_history);
+            }
+            let sum_loss = 0.0;
+            for i in range(len(self.loss_history) - recent_n,
+                           len(self.loss_history)) {
+                sum_loss = sum_loss + self.loss_history[i];
+            }
+            print("  Recent loss:    "
+                  + str(sum_loss / float(recent_n)));
+        }
+
+        if len(self.crystal_history) > 0 {
+            let recent_c = self.crystal_history[len(self.crystal_history) - 1];
+            print("  Recent crystal: " + str(recent_c));
+        }
+        print("═══════════════════════════════════════");
+    }
+}
+
+fn text_to_dataset(text, seq_len) {
+    let tok = nn.CharTokenizer(text);
+    let ids = tok.encode(text);
+    let dataset = nn.TextDataset(ids, seq_len);
+    return {"dataset": dataset, "tokenizer": tok, "ids": ids};
+}
+
+fn replicate_dataset(ids, n_copies) {
+    let big = [];
+    for i in range(n_copies) {
+        for j in range(len(ids)) {
+            big.push(ids[j]);
+        }
+    }
+    return big;
+}
+
+print("╔══════════════════════════════════════════════════════════╗");
+print("║     CrystalFormer Training — Physics-Constrained LM     ║");
+print("╚══════════════════════════════════════════════════════════╝");
+print("");
+
+let CORPUS = "the field oscillates and the field remembers. "
+           + "the field couples and crystallizes. "
+           + "memory persists through  dynamics. "
+           + "the triad Triad governs all three substrates. "
+           + "wavefunction psi evolves under the hamiltonian. "
+           + "the memory field captures nonlocal correlations. "
+           + "the physical reservoir provides high dimensional chaos. "
+           + "at the threshold of chaos computation is maximal. "
+           + "crystallization emerges from self organization. "
+           + "the attractor basins store long term patterns. "
+           + " noise drives exploration then anneals. "
+           + "self calibration adjusts lambda and gamma. "
+           + "the field Triad is the compute substrate. "
+           + "fft based spectral methods replace attention. "
+           + "multi scale exponential memory captures context. ";
+
+let VOCAB_SIZE = 64;
+let D_MODEL = 64;
+let D_PSI = 32;
+let N_BLOCKS = 3;
+let N_HEADS = 4;
+let FFN_MULT = 2;
+let SEQ_LEN = 32;
+let BATCH_SIZE = 4;
+let BATCHES_PER_EPOCH = 10;
+let N_EPOCHS = 50;
+let LR = 0.01;
+
+print("preparing data...");
+let tok = nn.CharTokenizer(CORPUS);
+let all_ids = tok.encode(CORPUS);
+let big_ids = replicate_dataset(all_ids, 20);
+let VOCAB = tok.vocab_size;
+print("vocab=" + str(VOCAB) + " tokens=" + str(len(big_ids)));
+
+let dataset = nn.TextDataset(big_ids, SEQ_LEN);
+
+print("building CrystalLM...");
+let model = CrystalLM(
+    VOCAB, D_MODEL, D_PSI, N_BLOCKS, N_HEADS, FFN_MULT, SEQ_LEN,
+    Lambda=-0.5, gamma_0=0.01, dt=0.05,
+    nu_min=0.01, nu_max=10.0,
+    T_bath=0.1, seed=42
+);
+
+let n_params = len(model.parameters());
+print("parameters: " + str(n_params));
+
+print("initializing CrystalTrainer...");
+let trainer = CrystalTrainer(
+    model, VOCAB, D_MODEL, D_PSI,
+    lr=LR,
+    T_bath_init=0.1,
+    T_bath_final=0.001,
+    seed=42
+);
+
+print("");
+print("training...");
+print("");
+
+for epoch in range(N_EPOCHS) {
+    print("epoch " + str(epoch + 1) + "/" + str(N_EPOCHS)
+          + " (T=" + str(trainer.T_current) + ")");
+
+    let info = trainer.train_epoch(dataset, BATCH_SIZE, BATCHES_PER_EPOCH);
+
+    print("  avg loss: " + str(info["avg_loss"])
+          + "  crystal: " + str(info["avg_crystal"])
+          + "  T: " + str(info["temperature"]));
+
+    if (epoch + 1) % 10 == 0 {
+        let prompt = all_ids[0:8];
+        print("  generating...");
+        let gen = model.generate(prompt, 40, 0.7, 10);
+        let text = tok.decode(gen);
+        print("  sample: " + text);
+        print("");
+    }
+}
+
+print("");
+trainer.stats();
+
+print("");
+print("final generation:");
+let prompt = all_ids[0:10];
+let gen = model.generate(prompt, 80, 0.7, 10);
+let text = tok.decode(gen);
+print(text);
+
+train.save_weights(model, "models/crystalformer_weights.json");
+print("");
+print("weights saved to models/crystalformer_weights.json");
+print("");
+print("CrystalFormer training complete.");
+print("The field has crystallized.");

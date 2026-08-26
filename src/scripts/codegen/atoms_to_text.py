@@ -1,7 +1,15 @@
-import os, sys
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import numpy as np
-from runtime.physics.observables_atoms import atom_count_nd, atom_centroids_nd, atom_separation, atoms_per_region
+from runtime.physics.observables_atoms import (
+    atom_centroids_nd,
+    atom_count_nd,
+    atom_separation,
+    atoms_per_region,
+)
+from triad import ntri as np
+
 
 def _f(x):
     return repr(float(x))
@@ -22,7 +30,7 @@ def _emit_centroids(arr: np.ndarray, D: int) -> str:
                 parts.append(_f(v))
     return ' '.join(parts)
 
-def dump_fixture(name: str, psi: np.ndarray, dx: float, D: int, N: int, thr: float, lines: list) -> None:
+def dump_fixture(name: str, psi: np.ndarray, dx: float, D: int, N: int, thr: float, lines: list[str]) -> None:
     lines.append(f'fixture {name}')
     lines.append(f'D {D} N {N} dx {_f(dx)} thr {_f(thr)}')
     c = atom_count_nd(psi, dx, threshold_frac=thr)

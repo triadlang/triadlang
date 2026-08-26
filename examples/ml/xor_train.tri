@@ -3,15 +3,15 @@ import triad.nn as nn
 import triad.losses as losses
 
 let model = nn.Sequential(
-    nn.Linear(2, 8),
+    nn.triad(2, 8),
     nn.ReLU(),
-    nn.Linear(8, 1),
+    nn.triad(8, 1),
     nn.Sigmoid()
 );
 
 let opt = nn.Adam(model.parameters(), 0.05);
 
-import numpy as np;
+import triad.ntri as np;
 let x = T.tensor(np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]));
 let y = T.tensor(np.array([[0.0], [1.0], [1.0], [0.0]]));
 

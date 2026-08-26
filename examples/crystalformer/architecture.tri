@@ -1,0 +1,147 @@
+import triad;
+import triad.tensor as T;
+import triad.calibrate as cal;
+
+const CRYSTAL_VERSION = "0.1.0";
+
+const DEFAULT_D_MODEL   = 512;
+const DEFAULT_D_PSI     = 256;
+const DEFAULT_N_HEADS   = 8;
+const DEFAULT_N_BLOCKS  = 8;
+const DEFAULT_FFN_MULT  = 4;
+const DEFAULT_SEQ_LEN   = 2048;
+
+const DEFAULT_NU_MIN    = 0.01;
+const DEFAULT_NU_MAX    = 10.0;
+const DEFAULT_LAMBDA    = -0.5;
+const DEFAULT_SIGMA     = 1.2;
+const DEFAULT_ALPHA     = 0.1;
+const DEFAULT_GAMMA_0   = 0.01;
+const DEFAULT_HBAR      = 1.0;
+const DEFAULT_MASS      = 1.0;
+const DEFAULT_DT        = 0.05;
+
+const T_BATH_INITIAL    = 0.5;
+const T_BATH_FINAL      = 0.001;
+const T_BATH_DECAY      = 0.995;
+
+const CRYSTAL_THRESHOLD = 0.005;
+const CRYSTAL_MIN_STEPS = 100;
+
+const LAMBDA_PHYSICS    = 0.01;
+const LAMBDA_CONSERVE   = 0.001;
+const LAMBDA_CRYSTAL    = 0.0001;
+
+const OBS_CRYSTALLINITY = "crystallinity";
+const OBS_K_STAR        = "k_star";
+const OBS_PEAK          = "peak";
+const OBS_IPR           = "ipr";
+const OBS_FWHM          = "fwhm";
+const OBS_NORM          = "norm";
+const OBS_PARTICIPATION = "participation";
+
+const TARGET_CRYSTALLINITY_RANGE = [0.1, 0.6];
+const TARGET_IPR_RANGE = [0.05, 0.4];
+const TARGET_K_STAR_MIN = 0.1;
+
+fn define_crystal_regimes() {
+
+    let warm_params = triad.regime("B0", N=128, seed=42);
+    let train_params = triad.regime("anti_collapse", N=128, seed=43);
+    let fine_params = triad.regime("R5_crystal", N=128, seed=44);
+
+    print("CrystalFormer regimes defined:");
+    print("  warm:  B0          (exploration, high noise)");
+    print("  train: anti_collapse (learning, self-trapping)");
+    print("  fine:  R5_crystal  (crystallization, low noise)");
+
+    return {"warm": warm_params, "train": train_params, "fine": fine_params};
+}
+
+fn self_calibrate(observables_log, current_params) {
+
+    if len(observables_log) < 20 {
+        return current_params;
+    }
+
+    let recent = [];
+    let start = len(observables_log) - 20;
+    for i in range(start, len(observables_log)) {
+        recent.push(observables_log[i]);
+    }
+
+    let mean_crystal = 0.0;
+    let mean_ipr = 0.0;
+    let mean_kstar = 0.0;
+    for obs in recent {
+        mean_crystal = mean_crystal + obs[OBS_CRYSTALLINITY];
+        mean_ipr = mean_ipr + obs[OBS_IPR];
+        mean_kstar = mean_kstar + obs[OBS_K_STAR];
+    }
+    mean_crystal = mean_crystal / float(len(recent));
+    mean_ipr = mean_ipr / float(len(recent));
+    mean_kstar = mean_kstar / float(len(recent));
+
+    let new_params = {};
+    for key in current_params {
+        new_params[key] = current_params[key];
+    }
+
+    if mean_crystal < TARGET_CRYSTALLINITY_RANGE[0] {
+        new_params["Lambda"] = current_params["Lambda"] - 0.02;
+    } elif mean_crystal > TARGET_CRYSTALLINITY_RANGE[1] {
+        new_params["Lambda"] = current_params["Lambda"] + 0.02;
+    }
+
+    if mean_ipr < TARGET_IPR_RANGE[0] {
+        new_params["gamma_0"] = current_params["gamma_0"] + 0.001;
+    } elif mean_ipr > TARGET_IPR_RANGE[1] {
+        new_params["gamma_0"] = current_params["gamma_0"] - 0.001;
+    }
+
+    if mean_kstar < TARGET_K_STAR_MIN {
+        new_params["sigma"] = current_params["sigma"] + 0.02;
+    }
+
+    if new_params["Lambda"] > 0.0 { new_params["Lambda"] = -0.01; }
+    if new_params["Lambda"] < -2.0 { new_params["Lambda"] = -2.0; }
+    if new_params["gamma_0"] < 0.0 { new_params["gamma_0"] = 0.0; }
+    if new_params["gamma_0"] > 0.1 { new_params["gamma_0"] = 0.1; }
+    if new_params["sigma"] < 0.5 { new_params["sigma"] = 0.5; }
+    if new_params["sigma"] > 2.0 { new_params["sigma"] = 2.0; }
+
+    return new_params;
+}
+
+fn auto_config(available_memory_gb) {
+
+    if available_memory_gb >= 24.0 {
+        return {"d_model": 512, "d_psi": 256, "n_heads": 8, "n_blocks": 8, "seq_len": 2048};
+    } elif available_memory_gb >= 12.0 {
+        return {"d_model": 384, "d_psi": 192, "n_heads": 6, "n_blocks": 6, "seq_len": 1024};
+    } elif available_memory_gb >= 8.0 {
+        return {"d_model": 256, "d_psi": 128, "n_heads": 4, "n_blocks": 4, "seq_len": 512};
+    } else {
+        return {"d_model": 128, "d_psi": 64, "n_heads": 4, "n_blocks": 2, "seq_len": 256};
+    }
+}
+
+fn architecture_report() {
+    print("╔══════════════════════════════════════════════════╗");
+    print("║  CrystalFormer v" + CRYSTAL_VERSION + " — Triad-Native LLM          ║");
+    print("╠══════════════════════════════════════════════════╣");
+    print("║  Compute:     Field evolution (FFT spectral)     ║");
+    print("║  Memory:      Multi-scale exponential (O(L logL))║");
+    print("║  Attention:   Attractor basins (field dynamics)  ║");
+    print("║  Training:    TriadFlow + physics constraints    ║");
+    print("║  Sparsity:    Self-crystallization               ║");
+    print("║  Tuning:      Self-calibrating                   ║");
+    print("╚══════════════════════════════════════════════════╝");
+    print("");
+    print("Triad: iℏ ∂_t Ψ = [-(ℏ²/2m)∇² + V_ext + Λ|Ψ|² + V_mem + α(-Δ)^(σ/2) - iΓ]Ψ + η");
+    print("Substrates: P1(wavefunction) + P2(memory) + P3(reservoir) = TRIAD");
+    print("");
+}
+
+architecture_report();
+print("CrystalFormer specification loaded.");

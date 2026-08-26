@@ -1,6 +1,3 @@
-/*
- * TriadLang Native Runtime — NDArray (n-dimensional array, row-major)
- */
 #include "triad_rt.h"
 #include <stdlib.h>
 #include <string.h>

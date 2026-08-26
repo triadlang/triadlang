@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import os
-import sys
+
 from frontend.ast_nodes import *
+
 
 class TriadError(Exception):
 
@@ -71,6 +73,7 @@ class Environment:
 
     def __init__(self, parent=None):
         self.vars: dict = {}
+        self.consts: set = set()
         self.parent = parent
 
     def get(self, name):
@@ -87,10 +90,17 @@ class Environment:
             return self.parent.has(name)
         return False
 
+    def set_const(self, name):
+        self.consts.add(name)
+
     def set(self, name, val):
+        if name in self.consts:
+            raise TriadError(f"cannot reassign const '{name}'")
         self.vars[name] = val
 
     def update(self, name, val):
+        if name in self.consts:
+            raise TriadError(f"cannot reassign const '{name}'")
         if name in self.vars:
             self.vars[name] = val
             return True
@@ -207,21 +217,28 @@ class Interpreter:
             if len(args) == 1 and isinstance(args[0], list):
                 return max(args[0])
             return max(args)
+        import json as _json
         import math as _math
         import random as _random
-        import json as _json
         for name, fn in [('print', _print), ('input', _input), ('len', _len), ('range', _range), ('enumerate', _enumerate), ('str', _str), ('int', _int), ('float', _float), ('type', _type_of), ('abs', _abs), ('min', _min), ('max', _max), ('append', lambda lst, x: lst.append(x) or lst)]:
             g.set(name, fn)
         math_env = {'sqrt': _math.sqrt, 'sin': _math.sin, 'cos': _math.cos, 'tan': _math.tan, 'log': _math.log, 'log10': _math.log10, 'exp': _math.exp, 'floor': _math.floor, 'ceil': _math.ceil, 'abs': abs, 'pi': _math.pi, 'e': _math.e, 'min': _min, 'max': _max, 'clamp': lambda x, lo, hi: max(lo, min(x, hi)), 'pow': pow}
         self._module_cache['math'] = TriadModule('math', math_env)
-        random_env = {'random': _random.random, 'randint': _random.randint, 'choice': _random.choice, 'seed': _random.seed, 'shuffle': lambda x: _random.shuffle(x) or x, 'uniform': _random.uniform}
+        random_env = {'random': _random.random, 'randint': _random.randint, 'choice': _random.choice, 'seed': _random.seed, 'shuffle': lambda x: _random.shuffle(x) or x, 'uniform': _random.uniform, 'gauss': _random.gauss}
         self._module_cache['random'] = TriadModule('random', random_env)
         io_env = {'print': _print, 'input': _input}
         self._module_cache['io'] = TriadModule('io', io_env)
-        string_env = {'split': lambda s, sep=None: s.split(sep), 'join': lambda sep, lst: sep.join((str(x) for x in lst)), 'replace': lambda s, old, new: s.replace(old, new), 'lower': lambda s: s.lower(), 'upper': lambda s: s.upper(), 'strip': lambda s: s.strip(), 'starts_with': lambda s, p: s.startswith(p), 'ends_with': lambda s, p: s.endswith(p), 'contains': lambda s, p: p in s}
+        string_env = {'split': lambda s, sep=None: s.split(sep), 'join': lambda sep, lst: sep.join(str(x) for x in lst), 'replace': lambda s, old, new: s.replace(old, new), 'lower': lambda s: s.lower(), 'upper': lambda s: s.upper(), 'strip': lambda s: s.strip(), 'starts_with': lambda s, p: s.startswith(p), 'ends_with': lambda s, p: s.endswith(p), 'contains': lambda s, p: p in s}
         self._module_cache['string'] = TriadModule('string', string_env)
         json_env = {'parse': _json.loads, 'stringify': lambda x, indent=None: _json.dumps(x, indent=indent, default=str)}
         self._module_cache['json'] = TriadModule('json', json_env)
+
+        def _solve(params_dict, psi0=None, y0=None):
+
+            from runtime.core.solver import TriadParams, integrate
+            p = TriadParams(**params_dict)
+            return integrate(p, psi0=psi0, y0=y0)
+        g.set('solve', _solve)
 
         def _read_text(p):
             with open(p) as f:
@@ -236,13 +253,48 @@ class Interpreter:
 
         def _listdir(p='.'):
             return os.listdir(p)
-        fs_env = {'read_text': _read_text, 'write_text': _write_text, 'exists': _exists, 'listdir': _listdir}
+        import tempfile as _tempfile
+        fs_env = {'read_text': _read_text, 'write_text': _write_text, 'exists': _exists, 'listdir': _listdir, 'tempdir': _tempfile.gettempdir, 'join': os.path.join}
         self._module_cache['fs'] = TriadModule('fs', fs_env)
         import time as _time
         time_env = {'now': _time.time, 'sleep': _time.sleep}
         self._module_cache['time'] = TriadModule('time', time_env)
         collections_env = {'len': _len, 'range': _range, 'enumerate': _enumerate, 'sorted': lambda x, **kw: sorted(x, **kw), 'reversed': lambda x: list(reversed(x)), 'zip': lambda *args: [list(t) for t in zip(*args)], 'map': lambda f, xs: [f(x) for x in xs], 'filter': lambda f, xs: [x for x in xs if f(x)], 'reduce': lambda f, xs, init=None: __import__('functools').reduce(f, xs) if init is None else __import__('functools').reduce(f, xs, init)}
         self._module_cache['collections'] = TriadModule('collections', collections_env)
+        from triad import ntri as _np
+        numpy_env = {
+            'array': lambda *args, **kw: _np.array(*args, **kw),
+            'zeros': lambda *args, **kw: _np.zeros(*args, **kw),
+            'ones': lambda *args, **kw: _np.ones(*args, **kw),
+            'linspace': lambda *args, **kw: _np.linspace(*args, **kw),
+            'arange': lambda *args, **kw: _np.arange(*args, **kw),
+            'sum': lambda a, **kw: float(_np.sum(a, **kw)),
+            'mean': lambda a, **kw: float(_np.mean(a, **kw)),
+            'std': lambda a, **kw: float(_np.std(a, **kw)),
+            'min': lambda a: float(_np.min(a)),
+            'max': lambda a: float(_np.max(a)),
+            'argmin': lambda a: int(_np.argmin(a)),
+            'argmax': lambda a: int(_np.argmax(a)),
+            'abs': lambda a: _np.abs(a),
+            'sqrt': lambda a: _np.sqrt(_np.asarray(a, dtype=float)),
+            'exp': lambda a: _np.exp(_np.asarray(a, dtype=float)),
+            'sin': lambda a: _np.sin(_np.asarray(a, dtype=float)),
+            'cos': lambda a: _np.cos(_np.asarray(a, dtype=float)),
+            'reshape': lambda a, *shape: _np.reshape(a, shape) if len(shape) > 1 else _np.reshape(a, shape[0]),
+            'shape': lambda a: list(_np.asarray(a).shape),
+            'dot': lambda a, b: _np.dot(_np.asarray(a), _np.asarray(b)),
+            'matmul': lambda a, b: _np.matmul(_np.asarray(a), _np.asarray(b)),
+            'e': float(_np.e),
+            'real': lambda a: _np.real(_np.asarray(a, dtype=complex)),
+            'imag': lambda a: _np.imag(_np.asarray(a, dtype=complex)),
+            'conj': lambda a: _np.conj(_np.asarray(a, dtype=complex)),
+            'fft': lambda a, **kw: _np.fft.fft(_np.asarray(a), **kw),
+            'ifft': lambda a, **kw: _np.fft.ifft(_np.asarray(a), **kw),
+            'fftfreq': lambda *args, **kw: _np.fft.fftfreq(*args, **kw),
+            'complex': lambda re, im: complex(float(re), float(im)),
+            'pi': float(_np.pi),
+        }
+        self._module_cache['numpy'] = TriadModule('numpy', numpy_env)
 
     def run(self, mod: Module):
         self._search_paths = [os.path.dirname(os.path.abspath(mod.file)) if mod.file else '.']
@@ -268,17 +320,32 @@ class Interpreter:
         if isinstance(s, DestructLetStmt):
             val = self._eval(s.value, env)
             if isinstance(val, (list, tuple)):
-                for i, name in enumerate(s.names):
-                    env.set(name, val[i] if i < len(val) else None)
+                if s.star_idx >= 0:
+                    before = s.star_idx
+                    after = len(s.names) - s.star_idx - 1
+                    for i in range(before):
+                        env.set(s.names[i], val[i] if i < len(val) else None)
+                    star_end = len(val) - after
+                    star_val = list(val[before:star_end]) if star_end >= before else []
+                    env.set(s.names[s.star_idx], star_val)
+                    for i in range(after):
+                        idx_from_end = after - i
+                        val_idx = len(val) - idx_from_end
+                        env.set(s.names[s.star_idx + 1 + i], val[val_idx] if val_idx >= 0 and val_idx < len(val) else None)
+                else:
+                    for i, name in enumerate(s.names):
+                        env.set(name, val[i] if i < len(val) else None)
             return None
         if isinstance(s, MapDestructStmt):
             val = self._eval(s.value, env)
-            if isinstance(val, dict):
-                for name in s.names:
-                    env.set(name, val.get(name))
+            if not isinstance(val, dict):
+                raise TriadError(f'cannot destructure {type(val).__name__} as map', s.pos)
+            for name in s.names:
+                env.set(name, val.get(name))
             return None
         if isinstance(s, ConstStmt):
             env.set(s.name, self._eval(s.value, env))
+            env.set_const(s.name)
             return None
         if isinstance(s, AssignStmt):
             val = self._eval(s.value, env)
@@ -293,12 +360,12 @@ class Interpreter:
         if isinstance(s, ContinueStmt):
             raise ContinueSignal()
         if isinstance(s, IfStmt):
-            if self._truthy(self._eval(s.condition, env)):
+            if self._y(self._eval(s.condition, env)):
                 self._exec_body(s.then_body, env)
             else:
                 matched = False
                 for cond, body in s.elif_clauses:
-                    if self._truthy(self._eval(cond, env)):
+                    if self._y(self._eval(cond, env)):
                         self._exec_body(body, env)
                         matched = True
                         break
@@ -319,7 +386,7 @@ class Interpreter:
                     continue
             return None
         if isinstance(s, WhileStmt):
-            while self._truthy(self._eval(s.condition, env)):
+            while self._y(self._eval(s.condition, env)):
                 try:
                     self._exec_body(s.body, env)
                 except BreakSignal:
@@ -415,11 +482,136 @@ class Interpreter:
             return None
         if isinstance(s, ThrowStmt):
             val = self._eval(s.value, env) if s.value else 'error'
-            raise Exception(val)
+            raise TriadError(str(val), s.pos)
         if isinstance(s, AnnotationStmt):
             if s.key == 'T':
                 self._triad_T = float(s.args)
             return None
+        if isinstance(s, SequenceStmt):
+            self._ensure_runtime()
+            inputs = self._eval(s.inputs, env)
+            target_sub = self._triad_subs.get(s.target)
+            if target_sub is None:
+                raise TriadError(f"unknown substrate '{s.target}' in sequence", s.pos)
+            each_for = self._eval(s.each_for, env) if s.each_for else self._triad_T
+            from runtime.core.multi_runtime import Segment
+            for item in inputs:
+                def _seq_pot(x, _item=item):
+                    from triad import ntri as _np
+                    return _np.broadcast_to(_np.asarray(_item, dtype=float), x.shape).astype(float)
+                self._triad_rt.add_segment(Segment(
+                    t_start=self._triad_rt.global_t,
+                    t_end=self._triad_rt.global_t + each_for,
+                    v_ext_override={target_sub.id: _seq_pot}
+                ))
+                self._triad_rt.global_t += each_for
+            self._triad_ran = False
+            return None
+        if isinstance(s, WithStmt):
+            ctx = self._eval(s.expr, env)
+            enter = getattr(ctx, '__enter__', None)
+            if enter:
+                enter()
+            if s.var:
+                env.set(s.var, ctx)
+            try:
+                self._exec_body(s.body, env)
+            finally:
+                exit_fn = getattr(ctx, '__exit__', None)
+                if exit_fn:
+                    exit_fn(None, None, None)
+            return None
+        if isinstance(s, AssertStmt):
+            cond = self._eval(s.condition, env)
+            if not self._y(cond):
+                msg = self._eval(s.message, env) if s.message else 'assertion failed'
+                raise TriadError(str(msg), s.pos)
+            return None
+        if isinstance(s, PassStmt):
+            return None
+        if isinstance(s, DelStmt):
+            if isinstance(s.target, Ident):
+                if s.target.name in env.vars:
+                    del env.vars[s.target.name]
+            elif isinstance(s.target, IndexExpr):
+                obj = self._eval(s.target.obj, env)
+                idx = self._eval(s.target.index, env)
+                del obj[idx]
+            elif isinstance(s.target, FieldExpr):
+                obj = self._eval(s.target.obj, env)
+                if isinstance(obj, TriadObject):
+                    del obj.fields[s.target.field]
+                elif isinstance(obj, dict):
+                    del obj[s.target.field]
+            return None
+        if isinstance(s, AsyncForStmt):
+            import asyncio
+            iterable = self._eval(s.iter, env)
+            if not hasattr(iterable, '__aiter__'):
+                raise TriadError(f'cannot async iterate over {type(iterable).__name__}', s.pos)
+            async def _async_for_body():
+                async for item in iterable:
+                    env.set(s.var, item)
+                    try:
+                        self._exec_body(s.body, env)
+                    except BreakSignal:
+                        break
+                    except ContinueSignal:
+                        continue
+            try:
+                asyncio.get_event_loop().run_until_complete(_async_for_body())
+            except RuntimeError:
+                asyncio.run(_async_for_body())
+            return None
+        if isinstance(s, AsyncWithStmt):
+            import asyncio
+            ctx = self._eval(s.expr, env)
+            async def _async_with_body():
+                enter = getattr(ctx, '__aenter__', None)
+                if enter:
+                    await enter()
+                if s.var:
+                    env.set(s.var, ctx)
+                try:
+                    self._exec_body(s.body, env)
+                finally:
+                    exit_fn = getattr(ctx, '__aexit__', None)
+                    if exit_fn:
+                        await exit_fn(None, None, None)
+            try:
+                asyncio.get_event_loop().run_until_complete(_async_with_body())
+            except RuntimeError:
+                asyncio.run(_async_with_body())
+            return None
+        if isinstance(s, YieldStmt):
+            val = self._eval(s.value, env) if s.value else None
+            raise ReturnSignal(val)
+            return None
+        if isinstance(s, SubstrateDecl):
+            self._ensure_runtime()
+            from runtime.core.solver import TriadParams
+            props = s.properties if s.properties else {}
+            overrides = s.overrides if s.overrides else {}
+            all_props = {**props, **overrides}
+            p = TriadParams(
+                seed=all_props.get('seed', 42),
+                L=all_props.get('L', 32.0),
+                N=all_props.get('N', 128),
+                dt=all_props.get('dt', 0.005),
+                Lambda=all_props.get('Lambda', 1.0),
+                sigma=all_props.get('sigma', 0.5),
+                alpha=all_props.get('alpha', 0.3),
+                Gamma=all_props.get('Gamma', 0.1),
+                mode=all_props.get('mode', 'triad'),
+            )
+            if s.regime:
+                from stdlib.regimes import resolve_regime
+                p = resolve_regime(s.regime, **all_props)
+            sub = self._triad_rt.add_substrate(s.name, p)
+            self._triad_subs[s.name] = sub
+            env.set(s.name, sub)
+            return None
+
         raise TriadError(f'unknown statement type: {type(s).__name__}')
 
     def _ensure_runtime(self):
@@ -438,20 +630,20 @@ class Interpreter:
 
     def _exec_coupling(self, s, env):
         self._ensure_runtime()
-        from runtime.core.multi_runtime import CouplingEdge, Segment
+        from runtime.core.multi_runtime import CouplingLink, Segment
         kappa = self._eval(s.kappa, env) if s.kappa else -3.0
-        dur = self._eval(s.duration, env) if hasattr(s, 'duration') and s.duration else self._triad_T
+        dur = self._eval(s.duration, env) if s.duration else self._triad_T
         if isinstance(s, CoupleStmt):
-            edges = [CouplingEdge(src_id=self._triad_subs[s.src].id, dst_id=self._triad_subs[s.dst].id, kappa=kappa)]
+            links = [CouplingLink(src_id=self._triad_subs[s.src].id, dst_id=self._triad_subs[s.dst].id, kappa=kappa)]
         elif isinstance(s, PairStmt):
-            edges = [CouplingEdge(src_id=self._triad_subs[s.a].id, dst_id=self._triad_subs[s.b].id, kappa=kappa), CouplingEdge(src_id=self._triad_subs[s.b].id, dst_id=self._triad_subs[s.a].id, kappa=kappa)]
+            links = [CouplingLink(src_id=self._triad_subs[s.a].id, dst_id=self._triad_subs[s.b].id, kappa=kappa), CouplingLink(src_id=self._triad_subs[s.b].id, dst_id=self._triad_subs[s.a].id, kappa=kappa)]
         elif isinstance(s, RingStmt):
             members = s.members
             ids = [self._triad_subs[m].id for m in members]
-            edges = [CouplingEdge(src_id=ids[i], dst_id=ids[(i + 1) % len(ids)], kappa=kappa) for i in range(len(ids))]
+            links = [CouplingLink(src_id=ids[i], dst_id=ids[(i + 1) % len(ids)], kappa=kappa) for i in range(len(ids))]
         else:
             return
-        self._triad_rt.add_segment(Segment(t_start=self._triad_rt.global_t, t_end=self._triad_rt.global_t + dur, edges=edges))
+        self._triad_rt.add_segment(Segment(t_start=self._triad_rt.global_t, t_end=self._triad_rt.global_t + dur, links=links))
         self._triad_rt.global_t += dur
         self._triad_ran = False
 
@@ -463,8 +655,11 @@ class Interpreter:
         sub = self._triad_subs.get(s.target)
         if sub is None:
             raise TriadError(f"unknown substrate '{s.target}'", s.pos)
-        import numpy as _np
-        from runtime.physics.observables import dominant_wavenumber as _obs_kstar, crystallinity as _obs_C, ipr as _obs_ipr, fwhm as _obs_fwhm
+        from runtime.physics.observables import crystallinity as _obs_C
+        from runtime.physics.observables import dominant_wavenumber as _obs_kstar
+        from runtime.physics.observables import fwhm as _obs_fwhm
+        from runtime.physics.observables import ipr as _obs_ipr
+        from triad import ntri as _np
         L = sub.params.L
         dx = sub.dx
         kmin = 2.0 * _np.pi / L
@@ -496,7 +691,7 @@ class Interpreter:
             from runtime.core.multi_runtime import Segment
             dur = self._eval(s.duration, env)
             sid = self._triad_subs[s.target].id
-            self._triad_rt.add_segment(Segment(t_start=self._triad_rt.global_t, t_end=self._triad_rt.global_t + dur, edges=[], active_ids={sid}))
+            self._triad_rt.add_segment(Segment(t_start=self._triad_rt.global_t, t_end=self._triad_rt.global_t + dur, links=[], active_ids={sid}))
             self._triad_rt.global_t += dur
             self._triad_ran = False
         if not self._triad_ran:
@@ -525,12 +720,20 @@ class Interpreter:
                 else:
                     fields_dict[f.name] = None
             obj = TriadObject(s.name, fields_dict)
+            obj._class_meta = type_meta
             all_methods = {}
             if parent_class and isinstance(parent_class, dict) and ('methods' in parent_class):
                 all_methods.update(parent_class['methods'])
+            if parent_class and hasattr(parent_class, '_class_meta'):
+                parent_meta = parent_class._class_meta
+                if isinstance(parent_meta, dict) and 'methods' in parent_meta:
+                    all_methods.update(parent_meta['methods'])
             all_methods.update(type_meta['methods'])
             for mname, mfn in all_methods.items():
                 obj.fields[mname] = mfn
+            init_fn = obj.fields.get('init')
+            if init_fn is not None and isinstance(init_fn, TriadFunction):
+                self._method_call(obj, 'init', args, kwargs)
             return obj
         constructor._class_meta = type_meta
         env.set(s.name, constructor)
@@ -545,7 +748,7 @@ class Interpreter:
                     child.set(k, v)
                 if case.guard:
                     guard_val = self._eval(case.guard, child)
-                    if not self._truthy(guard_val):
+                    if not self._y(guard_val):
                         continue
                 try:
                     self._exec_body(case.body, child)
@@ -584,6 +787,70 @@ class Interpreter:
             return bindings
         if isinstance(pattern_expr, NoneLit):
             return {} if subject is None else None
+        if isinstance(pattern_expr, ListPattern):
+            if not isinstance(subject, list):
+                return None
+            if len(subject) < len(pattern_expr.elements):
+                return None
+            bindings = {}
+            for i, pat in enumerate(pattern_expr.elements):
+                if i >= len(subject):
+                    break
+                inner = self._match_pattern(subject[i], pat)
+                if inner is None:
+                    return None
+                bindings.update(inner)
+            return bindings
+        if isinstance(pattern_expr, DictPattern):
+            if not isinstance(subject, dict):
+                return None
+            bindings = {}
+            for key, pat in pattern_expr.pairs:
+                if key not in subject:
+                    if not pattern_expr.rest:
+                        return None
+                    continue
+                inner = self._match_pattern(subject[key], pat)
+                if inner is None:
+                    return None
+                bindings.update(inner)
+            return bindings
+        if isinstance(pattern_expr, ClassPattern):
+            if not isinstance(subject, TriadObject):
+                return None
+            if subject.type_name != pattern_expr.cls_name:
+                return None
+            bindings = {}
+            for field_name, pat in pattern_expr.fields:
+                if field_name not in subject.fields:
+                    return None
+                inner = self._match_pattern(subject.fields[field_name], pat)
+                if inner is None:
+                    return None
+                bindings.update(inner)
+            return bindings
+        if isinstance(pattern_expr, OrPattern):
+            for pat in pattern_expr.patterns:
+                bindings = self._match_pattern(subject, pat)
+                if bindings is not None:
+                    return bindings
+            return None
+        if isinstance(pattern_expr, GenericType):
+            if not isinstance(subject, TriadObject):
+                return None
+            if subject.type_name != pattern_expr.name:
+                return None
+            return {}
+        if isinstance(pattern_expr, UnionType):
+            for t in pattern_expr.types:
+                bindings = self._match_pattern(subject, t)
+                if bindings is not None:
+                    return bindings
+            return None
+        if isinstance(pattern_expr, OptionalType):
+            if subject is None:
+                return {}
+            return self._match_pattern(subject, pattern_expr.inner)
         return {} if subject == pattern_expr else None
 
     def _eval(self, e: Expr, env: Environment):
@@ -609,9 +876,9 @@ class Interpreter:
         if isinstance(e, BinOp):
             left = self._eval(e.left, env)
             if e.op == 'and':
-                return left if not self._truthy(left) else self._eval(e.right, env)
+                return left if not self._y(left) else self._eval(e.right, env)
             if e.op == 'or':
-                return left if self._truthy(left) else self._eval(e.right, env)
+                return left if self._y(left) else self._eval(e.right, env)
             right = self._eval(e.right, env)
             return self._binop(e.op, left, right, e.pos)
         if isinstance(e, UnaryOp):
@@ -619,7 +886,7 @@ class Interpreter:
             if e.op == '-':
                 return -val
             if e.op == 'not':
-                return not self._truthy(val)
+                return not self._y(val)
             raise TriadError(f"unknown unary op '{e.op}'", e.pos)
         if isinstance(e, CallExpr):
             func = self._eval(e.func, env)
@@ -644,7 +911,7 @@ class Interpreter:
         if isinstance(e, ListExpr):
             return [self._eval(el, env) for el in e.elements]
         if isinstance(e, TupleExpr):
-            return tuple((self._eval(el, env) for el in e.elements))
+            return tuple(self._eval(el, env) for el in e.elements)
         if isinstance(e, MapExpr):
             return {self._eval(k, env): self._eval(v, env) for k, v in e.pairs}
         if isinstance(e, LambdaExpr):
@@ -662,7 +929,7 @@ class Interpreter:
         if isinstance(e, YieldExpr):
             return self._eval(e.value, env) if e.value else None
         if isinstance(e, FStringExpr):
-            
+
             out = []
             for part in e.parts:
                 if part[0] == 'str':
@@ -672,6 +939,220 @@ class Interpreter:
                     fmt_spec = part[2] if len(part) > 2 and part[2] else ''
                     out.append(format(val, fmt_spec))
             return ''.join(out)
+        if isinstance(e, ComplexLit):
+            return e.value
+        if isinstance(e, BytesLit):
+            return e.value
+        if isinstance(e, SliceExpr):
+            start = self._eval(e.start, env) if e.start else None
+            end = self._eval(e.end, env) if e.end else None
+            step = self._eval(e.step, env) if e.step else None
+            return slice(start, end, step)
+        if isinstance(e, ListCompExpr):
+            result = []
+            def _eval_comp(clauses, body_expr, env):
+                if not clauses:
+                    result.append(self._eval(body_expr, env))
+                    return
+                clause = clauses[0]
+                rest = clauses[1:]
+                iterable = self._eval(clause.iter, env)
+                for item in iterable:
+                    child = Environment(env)
+                    child.set(clause.var, item)
+                    if clause.conditions:
+                        skip = False
+                        for cond in clause.conditions:
+                            if not self._y(self._eval(cond, child)):
+                                skip = True
+                                break
+                        if skip:
+                            continue
+                    _eval_comp(rest, body_expr, child)
+            _eval_comp(e.clauses if e.clauses else [CompClause(var=e.var, iter=e.iter, conditions=[e.condition] if e.condition else [])], e.expr, env)
+            return result
+        if isinstance(e, SetExpr):
+            return {self._eval(el, env) for el in e.elements}
+        if isinstance(e, DictCompExpr):
+            result = {}
+            def _eval_dcomp(clauses, key_expr, val_expr, env):
+                if not clauses:
+                    k = self._eval(key_expr, env)
+                    v = self._eval(val_expr, env)
+                    result[k] = v
+                    return
+                clause = clauses[0]
+                rest = clauses[1:]
+                iterable = self._eval(clause.iter, env)
+                for item in iterable:
+                    child = Environment(env)
+                    child.set(clause.var, item)
+                    if clause.conditions:
+                        skip = False
+                        for cond in clause.conditions:
+                            if not self._y(self._eval(cond, child)):
+                                skip = True
+                                break
+                        if skip:
+                            continue
+                    _eval_dcomp(rest, key_expr, val_expr, child)
+            _eval_dcomp(e.clauses, e.key, e.value, env)
+            return result
+        if isinstance(e, SetCompExpr):
+            result = set()
+            def _eval_scomp(clauses, body_expr, env):
+                if not clauses:
+                    result.add(self._eval(body_expr, env))
+                    return
+                clause = clauses[0]
+                rest = clauses[1:]
+                iterable = self._eval(clause.iter, env)
+                for item in iterable:
+                    child = Environment(env)
+                    child.set(clause.var, item)
+                    if clause.conditions:
+                        skip = False
+                        for cond in clause.conditions:
+                            if not self._y(self._eval(cond, child)):
+                                skip = True
+                                break
+                        if skip:
+                            continue
+                    _eval_scomp(rest, body_expr, child)
+            _eval_scomp(e.clauses, e.expr, env)
+            return result
+        if isinstance(e, GenCompExpr):
+            def _gen_comp(clauses, body_expr, env):
+                if not clauses:
+                    val = self._eval(body_expr, env)
+                    yield val
+                    return
+                clause = clauses[0]
+                rest = clauses[1:]
+                iterable = self._eval(clause.iter, env)
+                for item in iterable:
+                    child = Environment(env)
+                    child.set(clause.var, item)
+                    if clause.conditions:
+                        skip = False
+                        for cond in clause.conditions:
+                            if not self._y(self._eval(cond, child)):
+                                skip = True
+                                break
+                        if skip:
+                            continue
+                    yield from _gen_comp(rest, body_expr, child)
+            return _gen_comp(e.clauses, e.expr, env)
+        if isinstance(e, TernaryExpr):
+            cond = self._eval(e.cond, env)
+            return self._eval(e.then_val, env) if self._y(cond) else self._eval(e.else_val, env)
+        if isinstance(e, SuperExpr):
+            self_obj = env.get('self')
+            if self_obj is None:
+                raise TriadError('super() used outside of method context', e.pos)
+            if not isinstance(self_obj, TriadObject):
+                raise TriadError('super() requires a TriadObject self', e.pos)
+            class_meta = getattr(self_obj, '_class_meta', None)
+            if class_meta is None:
+                raise TriadError('no class metadata for super()', e.pos)
+            parent_constructor = class_meta.get('parent')
+            if parent_constructor is None:
+                raise TriadError('no parent class for super()', e.pos)
+            if callable(parent_constructor):
+                return parent_constructor
+            if isinstance(parent_constructor, dict):
+                return parent_constructor
+            raise TriadError('cannot resolve parent for super()', e.pos)
+        if isinstance(e, ChainCmpExpr):
+            operands = [self._eval(op, env) for op in e.operands]
+            for i, op in enumerate(e.ops):
+                left = operands[i]
+                right = operands[i + 1]
+                if op == '<':
+                    if not (left < right):
+                        return False
+                elif op == '<=':
+                    if not (left <= right):
+                        return False
+                elif op == '>':
+                    if not (left > right):
+                        return False
+                elif op == '>=':
+                    if not (left >= right):
+                        return False
+                elif op == '==':
+                    if not (left == right):
+                        return False
+                elif op == '!=':
+                    if not (left != right):
+                        return False
+                else:
+                    raise ValueError(f'unknown comparison operator: {op}')
+            return True
+        if isinstance(e, NullishCoalesceExpr):
+            left = self._eval(e.left, env)
+            return left if left is not None else self._eval(e.right, env)
+        if isinstance(e, OptChainExpr):
+            obj = self._eval(e.obj, env)
+            if obj is None:
+                return None
+            if e.attr is not None:
+                return self._field_access(obj, e.attr, e.pos) if hasattr(obj, e.attr) else None
+            if e.method is not None:
+                fn = getattr(obj, e.method, None)
+                if fn is None:
+                    return None
+                args = [self._eval(a, env) for a in (e.args or [])]
+                kwargs = {k: self._eval(v, env) for k, v in (e.kwargs or {}).items()}
+                return fn(*args, **kwargs)
+            if e.index is not None:
+                idx = self._eval(e.index, env)
+                try:
+                    return obj[idx]
+                except (KeyError, IndexError, TypeError):
+                    return None
+            return None
+        if isinstance(e, SpreadExpr):
+            val = self._eval(e.value, env)
+            if isinstance(val, (list, tuple)):
+                return list(val)
+            return [val]
+        if isinstance(e, PipelineExpr):
+            left = self._eval(e.left, env)
+            right = self._eval(e.right, env)
+            if callable(right):
+                return right(left)
+            raise TriadError(f'pipeline target not callable: {right}', e.pos)
+        if isinstance(e, RangeExpr):
+            start = self._eval(e.start, env)
+            if e.end is not None:
+                end = self._eval(e.end, env)
+                if e.inclusive:
+                    return list(range(start, end + 1))
+                return list(range(start, end))
+            return list(range(start))
+        if isinstance(e, RegexLit):
+            import re
+            flags = 0
+            for f in e.flags:
+                flags |= getattr(re, f.upper(), 0)
+            return re.compile(e.pattern, flags)
+        if isinstance(e, ElvisExpr):
+            cond = self._eval(e.cond, env)
+            return cond if cond else self._eval(e.else_val, env)
+        if isinstance(e, CompoundAssignExpr):
+            target_val = self._eval(e.target, env)
+            val = self._eval(e.value, env)
+            if e.op == '??=':
+                result = target_val if target_val is not None else val
+            elif e.op == '||=':
+                result = target_val if target_val else val
+            elif e.op == '&&=':
+                result = val if target_val else target_val
+            else:
+                raise TriadError(f'unknown compound assign op {e.op}', e.pos)
+            self._assign(e.target, result, env, e.pos)
+            return result
         raise TriadError(f'cannot eval {type(e).__name__}')
 
     def _assign(self, target, val, env, pos=None):
@@ -691,7 +1172,7 @@ class Interpreter:
             idx = self._eval(target.index, env)
             obj[idx] = val
         else:
-            raise TriadError(f'invalid assignment target', pos)
+            raise TriadError('invalid assignment target', pos)
 
     def _call(self, func, args, kwargs, pos=None):
         if func is None:
@@ -753,7 +1234,7 @@ class Interpreter:
                         except ContinueSignal:
                             continue
                 elif isinstance(s, WhileStmt):
-                    while self._truthy(self._eval(s.condition, child)):
+                    while self._y(self._eval(s.condition, child)):
                         try:
                             yield from _flatten(s.body)
                         except BreakSignal:
@@ -761,12 +1242,12 @@ class Interpreter:
                         except ContinueSignal:
                             continue
                 elif isinstance(s, IfStmt):
-                    if self._truthy(self._eval(s.condition, child)):
+                    if self._y(self._eval(s.condition, child)):
                         yield from _flatten(s.then_body)
                     else:
                         matched = False
                         for cond, body in s.elif_clauses:
-                            if self._truthy(self._eval(cond, child)):
+                            if self._y(self._eval(cond, child)):
                                 yield from _flatten(body)
                                 matched = True
                                 break
@@ -791,11 +1272,11 @@ class Interpreter:
 
     def _method_call(self, obj, method, args, kwargs, pos=None):
         if isinstance(obj, str):
-            m = {'split': lambda: obj.split(*args) if args else obj.split(), 'join': lambda: obj.join((str(x) for x in args[0])), 'replace': lambda: obj.replace(args[0], args[1]), 'lower': lambda: obj.lower(), 'upper': lambda: obj.upper(), 'strip': lambda: obj.strip(), 'starts_with': lambda: obj.startswith(args[0]), 'ends_with': lambda: obj.endswith(args[0]), 'contains': lambda: args[0] in obj, 'len': lambda: len(obj), 'find': lambda: obj.find(args[0])}.get(method)
+            m = {'split': lambda: obj.split(*args) if args else obj.split(), 'join': lambda: obj.join(str(x) for x in args[0]), 'replace': lambda: obj.replace(args[0], args[1]), 'lower': lambda: obj.lower(), 'upper': lambda: obj.upper(), 'strip': lambda: obj.strip(), 'starts_with': lambda: obj.startswith(args[0]), 'ends_with': lambda: obj.endswith(args[0]), 'contains': lambda: args[0] in obj, 'len': lambda: len(obj), 'find': lambda: obj.find(args[0])}.get(method)
             if m:
                 return m()
         if isinstance(obj, list):
-            m = {'push': lambda: obj.append(args[0]) or None, 'append': lambda: obj.append(args[0]) or None, 'pop': lambda: obj.pop(*args), 'len': lambda: len(obj), 'contains': lambda: args[0] in obj, 'map': lambda: [self._call(args[0], [x], {}, pos) for x in obj], 'filter': lambda: [x for x in obj if self._truthy(self._call(args[0], [x], {}, pos))], 'sort': lambda: (obj.sort(), obj)[-1], 'reverse': lambda: (obj.reverse(), obj)[-1], 'join': lambda: args[0].join((str(x) for x in obj)) if args else ''.join((str(x) for x in obj)), 'insert': lambda: obj.insert(int(args[0]), args[1]), 'remove': lambda: obj.remove(args[0]), 'index': lambda: obj.index(args[0]), 'slice': lambda: obj[int(args[0]):int(args[1])] if len(args) >= 2 else obj[int(args[0]):]}.get(method)
+            m = {'push': lambda: obj.append(args[0]) or None, 'append': lambda: obj.append(args[0]) or None, 'pop': lambda: obj.pop(*args), 'len': lambda: len(obj), 'contains': lambda: args[0] in obj, 'map': lambda: [self._call(args[0], [x], {}, pos) for x in obj], 'filter': lambda: [x for x in obj if self._y(self._call(args[0], [x], {}, pos))], 'sort': lambda: (obj.sort(), obj)[-1], 'reverse': lambda: (obj.reverse(), obj)[-1], 'join': lambda: args[0].join(str(x) for x in obj) if args else ''.join(str(x) for x in obj), 'insert': lambda: obj.insert(int(args[0]), args[1]), 'remove': lambda: obj.remove(args[0]), 'index': lambda: obj.index(args[0]), 'slice': lambda: obj[int(args[0]):int(args[1])] if len(args) >= 2 else obj[int(args[0]):]}.get(method)
             if m:
                 return m()
         if isinstance(obj, dict):
@@ -886,7 +1367,7 @@ class Interpreter:
             raise TriadError(f'{type(l).__name__} {op} {type(r).__name__}: {ex}', pos)
         raise TriadError(f"unknown op '{op}'", pos)
 
-    def _truthy(self, v):
+    def _y(self, v):
         if v is None:
             return False
         if isinstance(v, bool):
@@ -904,6 +1385,9 @@ class Interpreter:
         return True
 
     def _resolve_import(self, path: list[str], pos=None) -> TriadModule:
+        for component in path:
+            if '.' in component or component in ('', '..') or os.sep in component or '/' in component:
+                raise TriadError(f'invalid import path component: {component!r}', pos)
         key = '.'.join(path)
         if key in self._module_cache:
             return self._module_cache[key]
@@ -954,3 +1438,4 @@ class Interpreter:
         mod = TriadModule(key, env.vars)
         self._module_cache[key] = mod
         return mod
+

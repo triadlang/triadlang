@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import sys
-from frontend.parser_universal import parse, ParseError
-from frontend.lexer_universal import LexError
-from runtime.interpreter import Interpreter, Environment, TriadError
+
+from frontend.errors import LexError, ParseError
+from frontend.parser_universal import parse
+from runtime.interpreter import Environment, Interpreter, TriadError
+
 
 def run_repl():
     print('TriadLang REPL v1.0')
@@ -36,8 +39,6 @@ def run_repl():
             if result is not None:
                 if isinstance(result, bool):
                     print('true' if result else 'false')
-                elif result is None:
-                    pass
                 else:
                     print(result)
         except (LexError, ParseError) as e:

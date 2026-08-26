@@ -1,20 +1,3 @@
-/*
- * triad_frontend.h — Native TriadLang frontend (lexer, AST, parser).
- *
- * Mirrors frontend/lexer_universal.py + frontend/parser_universal.py +
- * frontend/ast_nodes.py. The native AST is bump-allocated from a
- * triad_arena_t supplied by the caller; freeing the arena frees the
- * whole module + every token string.
- *
- * Ownership rules:
- *   - All TriadToken / TriadAstNode / inline string and array storage
- *     returned by this API is owned by the arena passed in.
- *   - triad_tokenize, triad_parse_source, triad_parse_module return
- *     pointers into that arena. Do NOT free individual nodes.
- *   - Error messages on the TriadDiag struct are arena-owned too.
- *
- * Concurrency: not thread-safe. One arena per parse.
- */
 #ifndef TRIAD_FRONTEND_H
 #define TRIAD_FRONTEND_H
 
@@ -26,12 +9,10 @@
 extern "C" {
 #endif
 
-/* ── Arena ────────────────────────────────────────────────────────── */
-
 typedef struct TriadArenaBlock TriadArenaBlock;
 
 typedef struct TriadArena {
-    TriadArenaBlock *head;   /* singly-linked list of blocks */
+    TriadArenaBlock *head;
     size_t          block_size;
     size_t          total_bytes;
 } TriadArena;
@@ -43,23 +24,19 @@ char  *triad_arena_strdup(TriadArena *a, const char *s);
 char  *triad_arena_strndup(TriadArena *a, const char *s, size_t n);
 void   triad_arena_free(TriadArena *a);
 
-/* ── Position / Diagnostics ──────────────────────────────────────── */
-
 typedef struct {
     int          line;
     int          col;
-    const char  *file;   /* arena-owned; may be "" */
+    const char  *file;
 } TriadPos;
 
 typedef struct {
     int          line;
     int          col;
     const char  *file;
-    const char  *kind;   /* "LEX" or "PARSE" */
-    const char  *msg;    /* arena-owned */
+    const char  *kind;
+    const char  *msg;
 } TriadDiag;
-
-/* ── Tokens ──────────────────────────────────────────────────────── */
 
 typedef enum {
     TRIAD_TOK_EOF = 0,
@@ -71,18 +48,16 @@ typedef enum {
     TRIAD_TOK_SYMBOL
 } TriadTokenKind;
 
-/* FString token payload: an array of FString parts. Each part is
- * either a literal piece ("str") or an unparsed expression source
- * ("expr"). The parser later re-tokenizes the "expr" pieces. */
 typedef struct {
-    int          is_expr;     /* 0 = literal text, 1 = expression src */
-    const char  *text;        /* arena-owned, NUL-terminated          */
+    int          is_expr;
+    const char  *text;
+    const char  *fmt_spec;
 } TriadFStringPart;
 
 typedef struct {
     TriadTokenKind     kind;
-    const char        *text;  /* arena-owned NUL-terminated lexeme    */
-    /* For FSTRING tokens: text == NULL, parts/parts_len describe it. */
+    const char        *text;
+
     TriadFStringPart  *parts;
     size_t             parts_len;
     int                line;
@@ -94,18 +69,14 @@ typedef struct {
     size_t      len;
 } TriadTokenList;
 
-/* Tokenize. Returns 0 on success; on failure returns -1 and fills *diag.
- * All output lives in `arena`. */
 int triad_tokenize(TriadArena    *arena,
                    const char    *src,
                    const char    *file,
                    TriadTokenList *out,
                    TriadDiag      *diag);
 
-/* ── AST kinds ───────────────────────────────────────────────────── */
-
 typedef enum {
-    /* Expressions */
+
     TRIAD_AST_INT_LIT,
     TRIAD_AST_FLOAT_LIT,
     TRIAD_AST_BOOL_LIT,
@@ -128,8 +99,16 @@ typedef enum {
     TRIAD_AST_ASSIGN_EXPR,
     TRIAD_AST_YIELD_EXPR,
     TRIAD_AST_AWAIT_EXPR,
+    TRIAD_AST_COMPLEX_LIT,
+    TRIAD_AST_BYTES_LIT,
+    TRIAD_AST_SET_LIT,
+    TRIAD_AST_TERNARY,
+    TRIAD_AST_CHAIN_CMP,
+    TRIAD_AST_SUPER,
+    TRIAD_AST_DICT_COMP,
+    TRIAD_AST_SET_COMP,
+    TRIAD_AST_GEN_COMP,
 
-    /* Statements */
     TRIAD_AST_LET,
     TRIAD_AST_DESTRUCT_LET,
     TRIAD_AST_MAP_DESTRUCT,
@@ -151,35 +130,39 @@ typedef enum {
     TRIAD_AST_FROM_IMPORT,
     TRIAD_AST_MATCH,
     TRIAD_AST_YIELD_STMT,
+    TRIAD_AST_WITH,
+    TRIAD_AST_ASSERT,
+    TRIAD_AST_PASS,
+    TRIAD_AST_DEL,
+    TRIAD_AST_ASYNC_FOR,
+    TRIAD_AST_ASYNC_WITH,
 
-    /* Triad-native */
     TRIAD_AST_REG,
     TRIAD_AST_ENTITY,
     TRIAD_AST_WORLD,
+    TRIAD_AST_SUBSTRATE,
     TRIAD_AST_COUPLE,
     TRIAD_AST_PAIR,
     TRIAD_AST_RING,
     TRIAD_AST_OBSERVE,
     TRIAD_AST_RUN,
+    TRIAD_AST_SEQUENCE,
     TRIAD_AST_ANNOTATION,
 
-    /* Top level */
     TRIAD_AST_MODULE,
 
     TRIAD_AST_KIND_COUNT
 } TriadAstKind;
 
-/* Parameter (used by fn / lambda) */
 typedef struct {
     const char *name;
-    const char *type_ann;   /* nullable */
-    struct TriadAstNode *default_value; /* nullable */
+    const char *type_ann;
+    struct TriadAstNode *default_value;
     int         is_args;
     int         is_kwargs;
     TriadPos    pos;
 } TriadParam;
 
-/* Type field (for type / class) */
 typedef struct {
     const char *name;
     const char *type_ann;
@@ -187,121 +170,115 @@ typedef struct {
     TriadPos    pos;
 } TriadTypeField;
 
-/* If statement clause */
 typedef struct {
     struct TriadAstNode *cond;
     struct TriadAstNode **body;
     size_t                body_len;
 } TriadElifClause;
 
-/* Match case */
 typedef struct {
     struct TriadAstNode  *pattern;
-    struct TriadAstNode  *guard;   /* nullable */
+    struct TriadAstNode  *guard;
     struct TriadAstNode **body;
     size_t                body_len;
 } TriadMatchCase;
 
-/* Keyword argument */
 typedef struct {
     const char           *name;
     struct TriadAstNode  *value;
 } TriadKwArg;
 
-/* Map pair / overrides entry */
 typedef struct {
     struct TriadAstNode *key;
     struct TriadAstNode *value;
 } TriadMapPair;
 
-/* (string-key) entry, e.g. RegStmt.overrides, EntityDecl.fields */
 typedef struct {
     const char           *key;
     struct TriadAstNode  *value;
 } TriadStrEntry;
 
-/* FString part on the AST side: 0 = literal text, 1 = parsed expression */
 typedef struct {
     int                   is_expr;
-    const char           *text;     /* if !is_expr */
-    struct TriadAstNode  *expr;     /* if  is_expr */
+    const char           *text;
+    struct TriadAstNode  *expr;
+    const char           *fmt_spec;
 } TriadFStringAstPart;
+
+typedef struct {
+    const char          *var;
+    struct TriadAstNode *iter;
+    struct TriadAstNode **conditions;
+    size_t               conditions_len;
+} TriadCompClause;
 
 typedef struct TriadAstNode {
     TriadAstKind kind;
     TriadPos     pos;
 
     union {
-        /* literals & ident */
+
         long long   int_val;
         double      float_val;
         int         bool_val;
         const char *string_val;
         const char *ident_name;
 
-        /* BinOp / UnaryOp */
         struct {
             const char          *op;
-            struct TriadAstNode *left;   /* unary: NULL */
-            struct TriadAstNode *right;  /* unary: operand */
+            struct TriadAstNode *left;
+            struct TriadAstNode *right;
         } op;
 
-        /* Call / MethodCall */
         struct {
             struct TriadAstNode  *func_or_obj;
-            const char           *method;     /* method-call only */
+            const char           *method;
             struct TriadAstNode **args;
             size_t                args_len;
             TriadKwArg           *kwargs;
             size_t                kwargs_len;
         } call;
 
-        /* Index */
         struct {
             struct TriadAstNode *obj;
             struct TriadAstNode *index;
         } index;
 
-        /* Slice (start/end/step all nullable) */
         struct {
             struct TriadAstNode *start;
             struct TriadAstNode *end;
             struct TriadAstNode *step;
         } slice;
 
-        /* Field */
         struct {
             struct TriadAstNode *obj;
             const char          *field;
         } field;
 
-        /* List / Tuple */
         struct {
             struct TriadAstNode **elements;
             size_t                elements_len;
         } list;
 
-        /* ListComp */
         struct {
             struct TriadAstNode *expr;
             const char          *var;
             struct TriadAstNode *iter;
-            struct TriadAstNode *condition;   /* nullable */
+            struct TriadAstNode *condition;
+            TriadCompClause    *clauses;
+            size_t              clauses_len;
         } list_comp;
 
-        /* Map */
         struct {
             TriadMapPair *pairs;
             size_t        pairs_len;
         } map;
 
-        /* FString (AST side) */
         struct {
             TriadFStringAstPart *parts;
             size_t               parts_len;
         } fstring;
 
-        /* Lambda */
         struct {
             TriadParam           *params;
             size_t                params_len;
@@ -309,61 +286,113 @@ typedef struct TriadAstNode {
             size_t                body_len;
         } lambda;
 
-        /* AssignExpr */
         struct {
             struct TriadAstNode *target;
             struct TriadAstNode *value;
         } assign_expr;
 
-        /* YieldExpr / AwaitExpr / ReturnStmt / YieldStmt / ThrowStmt */
         struct {
-            struct TriadAstNode *value;   /* nullable for yield/return/throw */
+            struct TriadAstNode *value;
         } unary_value;
 
-        /* LetStmt */
+        struct {
+            double real_val;
+            double imag_val;
+        } complex_lit;
+
+        struct {
+            const char *bytes_val;
+            size_t      bytes_len;
+        } bytes_lit;
+
+        struct {
+            struct TriadAstNode **elements;
+            size_t                elements_len;
+        } set_lit;
+
+        struct {
+            struct TriadAstNode *condition;
+            struct TriadAstNode *then_val;
+            struct TriadAstNode *else_val;
+        } ternary;
+
+        struct {
+            struct TriadAstNode **operands;
+            size_t               operands_len;
+            const char          **ops;
+            size_t               ops_len;
+        } chain_cmp;
+
+        struct {
+            struct TriadAstNode **args;
+            size_t               args_len;
+        } super_expr;
+
+        struct {
+            struct TriadAstNode  *key_expr;
+            struct TriadAstNode  *value_expr;
+            TriadCompClause      *clauses;
+            size_t                clauses_len;
+        } dict_comp;
+
+        struct {
+            struct TriadAstNode  *expr;
+            TriadCompClause      *clauses;
+            size_t                clauses_len;
+        } set_comp;
+
+        struct {
+            struct TriadAstNode  *expr;
+            TriadCompClause      *clauses;
+            size_t                clauses_len;
+        } gen_comp;
+
+        struct {
+            struct TriadAstNode *value;
+        } yield_expr;
+
+        struct {
+            struct TriadAstNode *value;
+        } await_expr;
+
         struct {
             const char          *name;
-            const char          *type_ann;   /* nullable */
-            struct TriadAstNode *value;      /* nullable */
+            const char          *type_ann;
+            struct TriadAstNode *value;
         } let_stmt;
 
-        /* DestructLet / MapDestruct */
         struct {
             const char         **names;
             size_t               names_len;
             struct TriadAstNode *value;
+            int                  star_idx;
         } destruct;
 
-        /* ConstStmt */
         struct {
             const char          *name;
             struct TriadAstNode *value;
         } const_stmt;
 
-        /* AssignStmt */
         struct {
             struct TriadAstNode *target;
             struct TriadAstNode *value;
         } assign_stmt;
 
-        /* ExprStmt */
         struct {
             struct TriadAstNode *expr;
         } expr_stmt;
 
-        /* IfStmt */
         struct {
             struct TriadAstNode  *condition;
             struct TriadAstNode **then_body;
             size_t                then_body_len;
             TriadElifClause      *elif_clauses;
             size_t                elif_clauses_len;
-            struct TriadAstNode **else_body;   /* NULL if absent */
+            struct TriadAstNode **else_body;
             size_t                else_body_len;
             int                   has_else;
         } if_stmt;
 
-        /* ForStmt */
         struct {
             const char           *var;
             struct TriadAstNode  *iter;
@@ -371,91 +400,105 @@ typedef struct TriadAstNode {
             size_t                body_len;
         } for_stmt;
 
-        /* WhileStmt */
         struct {
             struct TriadAstNode  *condition;
             struct TriadAstNode **body;
             size_t                body_len;
         } while_stmt;
 
-        /* FnDecl */
         struct {
             const char           *name;
             TriadParam           *params;
             size_t                params_len;
-            const char           *return_type;   /* nullable */
+            const char           *return_type;
             struct TriadAstNode **body;
             size_t                body_len;
             int                   is_async;
+            struct TriadAstNode **decorators;
+            size_t                decorators_len;
         } fn_decl;
 
-        /* TryCatch */
         struct {
             struct TriadAstNode **body;
             size_t                body_len;
-            const char           *catch_var;     /* nullable */
+            const char           *catch_var;
             struct TriadAstNode **catch_body;
             size_t                catch_body_len;
             struct TriadAstNode **finally_body;
             size_t                finally_body_len;
+            const char          **exceptions;
+            size_t                exceptions_len;
+            int                   has_catch;
         } try_catch;
 
-        /* TypeDecl / ClassDecl */
+        struct {
+            struct TriadAstNode  *expr;
+            const char           *var;
+            struct TriadAstNode **body;
+            size_t                body_len;
+        } with_stmt;
+
+        struct {
+            struct TriadAstNode *condition;
+            struct TriadAstNode *message;
+        } assert_stmt;
+
+        struct {
+            struct TriadAstNode *target;
+        } del_stmt;
+
         struct {
             const char           *name;
-            const char           *parent;        /* class only; nullable */
+            const char           *parent;
             TriadTypeField       *fields;
             size_t                fields_len;
-            struct TriadAstNode **methods;       /* each is FN_DECL */
+            struct TriadAstNode **methods;
             size_t                methods_len;
+            const char          **parents;
+            size_t                parents_len;
         } type_decl;
 
-        /* ImportStmt */
         struct {
             const char **path;
             size_t       path_len;
-            const char  *alias;                  /* nullable */
+            const char  *alias;
         } import_stmt;
 
-        /* FromImportStmt */
         struct {
             const char **path;
             size_t       path_len;
             const char **names;
             size_t       names_len;
+            const char **aliases;
         } from_import;
 
-        /* MatchStmt */
         struct {
             struct TriadAstNode  *subject;
             TriadMatchCase       *cases;
             size_t                cases_len;
-            struct TriadAstNode **else_body;     /* NULL if absent */
+            struct TriadAstNode **else_body;
             size_t                else_body_len;
             int                   has_else;
         } match_stmt;
 
-        /* RegStmt */
         struct {
             const char          *name;
-            const char          *regime;       /* nullable */
-            struct TriadAstNode *value;        /* nullable */
-            TriadStrEntry       *overrides;    /* nullable */
+            const char          *regime;
+            struct TriadAstNode *value;
+            TriadStrEntry       *overrides;
             size_t               overrides_len;
             int                  has_overrides;
         } reg_stmt;
 
-        /* EntityDecl */
         struct {
             const char           *name;
-            const char           *base;          /* nullable */
+            const char           *base;
             TriadStrEntry        *fields;
             size_t                fields_len;
             struct TriadAstNode **methods;
             size_t                methods_len;
         } entity_decl;
 
-        /* WorldDecl */
         struct {
             const char           *name;
             TriadStrEntry        *fields;
@@ -466,22 +509,32 @@ typedef struct TriadAstNode {
             size_t                body_len;
         } world_decl;
 
-        /* CoupleStmt */
+        struct {
+            const char     *name;
+            const char     *regime;
+            const char    **members;
+            size_t          members_len;
+            TriadStrEntry  *properties;
+            size_t          properties_len;
+            TriadStrEntry  *overrides;
+            size_t          overrides_len;
+            int             is_composed;
+        } substrate_decl;
+
         struct {
             const char          *src;
             const char          *dst;
-            struct TriadAstNode *kappa;          /* nullable */
+            struct TriadAstNode *kappa;
+            struct TriadAstNode *duration;
         } couple_stmt;
 
-        /* PairStmt */
         struct {
             const char          *a;
             const char          *b;
-            struct TriadAstNode *kappa;          /* nullable */
-            struct TriadAstNode *duration;       /* nullable */
+            struct TriadAstNode *kappa;
+            struct TriadAstNode *duration;
         } pair_stmt;
 
-        /* RingStmt */
         struct {
             const char         **members;
             size_t               members_len;
@@ -489,7 +542,6 @@ typedef struct TriadAstNode {
             struct TriadAstNode *duration;
         } ring_stmt;
 
-        /* ObserveStmt */
         struct {
             const char  *target;
             const char **metrics;
@@ -497,18 +549,22 @@ typedef struct TriadAstNode {
             int          over_seeds;
         } observe_stmt;
 
-        /* RunStmt */
         struct {
-            struct TriadAstNode *duration;       /* nullable */
+            struct TriadAstNode *duration;
+            const char          *target;
         } run_stmt;
 
-        /* AnnotationStmt */
+        struct {
+            struct TriadAstNode *inputs;
+            const char          *target;
+            struct TriadAstNode *each_for;
+        } sequence_stmt;
+
         struct {
             const char *key;
             const char *args;
         } annotation_stmt;
 
-        /* Module */
         struct {
             const char           *name;
             const char           *file;
@@ -518,30 +574,17 @@ typedef struct TriadAstNode {
     } u;
 } TriadAstNode;
 
-/* ── Parse API ───────────────────────────────────────────────────── */
-
-/* Parse a complete module. Returns NULL on failure (fills *diag).
- * `arena` must already be initialized. */
 TriadAstNode *triad_parse_source(TriadArena *arena,
                                  const char *src,
                                  const char *file,
                                  TriadDiag  *diag);
 
-/* Lower-level: parse from a pre-tokenized stream. */
 TriadAstNode *triad_parse_tokens(TriadArena            *arena,
                                  const TriadTokenList  *tokens,
                                  const char            *file,
                                  TriadDiag             *diag);
 
-/* ── AST helpers ─────────────────────────────────────────────────── */
-
 const char *triad_ast_kind_name(TriadAstKind k);
-
-/* ════════════════════════════════════════════════════════════════════
- * Legacy frontend (v1 DSL) — port of frontend/lexer.py + parser.py.
- * Used by compiler/triadc.py and compiler/typecheck.py. Shares the same
- * arena. AST nodes are tagged with TriadLegacyKind.
- * ════════════════════════════════════════════════════════════════════ */
 
 typedef enum {
     TRIAD_LTOK_EOF = 0,
@@ -566,222 +609,12 @@ typedef struct {
     size_t            len;
 } TriadLegacyTokenList;
 
-int triad_legacy_tokenize(TriadArena *arena, const char *src,
-                          TriadLegacyTokenList *out, TriadDiag *diag);
-
-typedef enum {
-    TRIAD_LAST_NUM_LIT,
-    TRIAD_LAST_BOOL_LIT,
-    TRIAD_LAST_STR_LIT,
-    TRIAD_LAST_IDENT_REF,
-
-    TRIAD_LAST_REG_DECL,
-    TRIAD_LAST_OP,
-    TRIAD_LAST_LOOP_BLOCK,
-    TRIAD_LAST_SEGMENT_BLOCK,
-    TRIAD_LAST_IF_BLOCK,
-    TRIAD_LAST_OUT_STMT,
-    TRIAD_LAST_HALT_STMT,
-    TRIAD_LAST_ANNOTATION,
-    TRIAD_LAST_EVOLVE_STMT,
-    TRIAD_LAST_COUPLE_STMT,
-    TRIAD_LAST_PAIR_STMT,
-    TRIAD_LAST_RING_STMT,
-    TRIAD_LAST_SEQUENCE_STMT,
-    TRIAD_LAST_OBSERVE_STMT,
-    TRIAD_LAST_ASSERT_STMT,
-    TRIAD_LAST_CHECKPOINT_STMT,
-    TRIAD_LAST_SUBSTRATE_DECL,
-
-    TRIAD_LAST_PROGRAM,
-
-    TRIAD_LAST_KIND_COUNT
-} TriadLegacyKind;
-
-/* Overrides for RegDecl: a dict[str, value] where value is one of
- * (int, float, bool, str, tuple-of-primitives, ident). We represent
- * each value as a small tagged variant. */
-typedef enum {
-    TRIAD_LVAL_INT,
-    TRIAD_LVAL_FLOAT,
-    TRIAD_LVAL_BOOL,
-    TRIAD_LVAL_STR,
-    TRIAD_LVAL_IDENT,
-    TRIAD_LVAL_TUPLE
-} TriadLegacyValKind;
-
-typedef struct TriadLegacyVal {
-    TriadLegacyValKind kind;
-    long long          int_val;
-    double             float_val;
-    int                bool_val;
-    const char        *str_val;     /* used by STR and IDENT */
-    struct TriadLegacyVal *tuple_items;
-    size_t             tuple_len;
-} TriadLegacyVal;
-
-typedef struct {
-    const char       *key;
-    TriadLegacyVal    value;
-} TriadLegacyOverride;
-
-typedef struct {
-    const char     *key;
-    const char     *raw_args;       /* without parens */
-    int             line;
-} TriadLegacyAnnot;
-
-typedef struct TriadLegacyNode TriadLegacyNode;
-
-struct TriadLegacyNode {
-    TriadLegacyKind kind;
-    int             line;
-    union {
-        /* literals */
-        struct { double value; int is_int; }  num;
-        struct { int value; }                  boolean;
-        struct { const char *value; }          str;
-        struct { const char *name; }           ident;
-
-        /* RegDecl */
-        struct {
-            const char            *name;
-            int                    bit_width;
-            TriadLegacyNode       *initial;        /* nullable */
-            const char            *regime_name;    /* nullable */
-            TriadLegacyOverride   *overrides;
-            size_t                 overrides_len;
-            int                    has_overrides;
-        } reg_decl;
-
-        /* Op */
-        struct {
-            const char        *opcode;
-            TriadLegacyNode  **args;
-            size_t             args_len;
-        } op;
-
-        /* LoopBlock */
-        struct {
-            TriadLegacyNode   *target;
-            TriadLegacyNode  **body;
-            size_t             body_len;
-        } loop_block;
-
-        /* SegmentBlock */
-        struct {
-            int                segment_id;
-            double             duration;
-            TriadLegacyNode  **body;
-            size_t             body_len;
-        } segment_block;
-
-        /* IfBlock */
-        struct {
-            const char        *cond_name;
-            TriadLegacyNode  **then_body;
-            size_t             then_body_len;
-            TriadLegacyNode  **else_body;          /* NULL when absent */
-            size_t             else_body_len;
-            int                has_else;
-        } if_block;
-
-        /* OutStmt */
-        struct {
-            TriadLegacyNode  **args;
-            size_t             args_len;
-        } out_stmt;
-
-        /* HaltStmt */ /* — kind alone is enough */
-
-        /* Annotation */
-        TriadLegacyAnnot annotation;
-
-        /* EvolveStmt */
-        struct {
-            const char *target;
-            double      duration;
-        } evolve_stmt;
-
-        /* CoupleStmt / PairStmt */
-        struct {
-            const char *src_or_a;
-            const char *dst_or_b;
-            double      kappa;
-            double      duration;
-        } couple_pair;
-
-        /* RingStmt / SequenceStmt */
-        struct {
-            const char **members;       /* identifiers */
-            size_t       members_len;
-            const char  *target;         /* sequence only */
-            double       kappa;          /* ring only */
-            double       duration;       /* ring or sequence each_for */
-        } ring_seq;
-
-        /* ObserveStmt */
-        struct {
-            const char  *target;
-            const char **metrics;
-            size_t       metrics_len;
-            int          over_seeds;
-            const char  *stream_to;      /* "" when absent */
-        } observe_stmt;
-
-        /* AssertStmt */
-        struct {
-            const char *predicate;
-            const char *target;
-        } assert_stmt;
-
-        /* CheckpointStmt */
-        struct {
-            const char *target;
-            const char *path;
-        } checkpoint_stmt;
-
-        /* SubstrateDecl */
-        struct {
-            const char           *name;
-            const char          **composed_of;
-            size_t                composed_of_len;
-            TriadLegacyOverride  *properties;
-            size_t                properties_len;
-        } substrate_decl;
-
-        /* Program */
-        struct {
-            TriadLegacyNode **body;
-            size_t            body_len;
-        } program;
-    } u;
-};
-
-TriadLegacyNode *triad_legacy_parse_source(TriadArena *a, const char *src,
-                                           TriadDiag *diag);
-TriadLegacyNode *triad_legacy_parse_tokens(TriadArena *a,
-                                           const TriadLegacyTokenList *t,
-                                           TriadDiag *diag);
-
-const char *triad_legacy_kind_name(TriadLegacyKind k);
-
-/* JSON dump of the legacy AST. Schema mirrors the Python dataclasses
- * (RegDecl, Op, LoopBlock, ...) with _type/field/value layout, used by
- * parity_ast_legacy. */
-char *triad_legacy_dump_json(const TriadLegacyNode *prog, int indent);
-
-/* ── AST → JSON ──────────────────────────────────────────────────── */
-
-/* Dump the module as a JSON string in a malloc'd buffer (caller frees).
- * The schema matches scripts/ast_to_json.py on the Python side. */
 char *triad_ast_dump_json(const TriadAstNode *module, int indent);
 
-/* Same but write directly to a FILE *. Returns 0 on success. */
 int   triad_ast_dump_json_fp(const TriadAstNode *module, FILE *fp, int indent);
 
 #ifdef __cplusplus
-} /* extern "C" */
+}
 #endif
 
-#endif /* TRIAD_FRONTEND_H */
+#endif

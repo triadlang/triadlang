@@ -1,21 +1,10 @@
-"""Structured diagnostics for TriadLang compiler and runtime.
 
-Provides Elm/Rust-style error messages with source code spans,
-color-coded severity levels, and contextual hints.
-
-Usage from other modules:
-    from frontend.diagnostics import Diagnostic, Level, DiagnosticSink
-
-    sink = DiagnosticSink(source_code, filename="example.tri")
-    sink.error(10, 5, "undefined variable 'x'", hint="did you mean 'y'?")
-    sink.report()
-"""
 from __future__ import annotations
-import os
+
 import sys
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Sequence
+
 
 class Level(IntEnum):
     ERROR = 0
@@ -38,7 +27,7 @@ class Level(IntEnum):
 
 @dataclass
 class Span:
-    """Source code span: line and column range."""
+
     line_start: int
     col_start: int
     line_end: int = 0
@@ -56,16 +45,16 @@ class Span:
 
 @dataclass
 class Diagnostic:
-    """A single diagnostic message with source location."""
+
     level: Level
     span: Span
     message: str
     code: str = ''
     hint: str = ''
-    children: list['Diagnostic'] = field(default_factory=list)
+    children: list[Diagnostic] = field(default_factory=list)
 
     def format(self, source_lines: list[str], filename: str, use_color: bool = True) -> str:
-        """Format this diagnostic as a human-readable string."""
+
         parts = []
         reset = '\033[0m' if use_color else ''
         bold = '\033[1m' if use_color else ''
@@ -104,7 +93,6 @@ class Diagnostic:
         return '\n'.join(parts)
 
 class DiagnosticSink:
-    """Collects diagnostics and formats them for display."""
 
     def __init__(self, source: str = '', filename: str = '<triad>'):
         self.source = source
@@ -137,7 +125,7 @@ class DiagnosticSink:
         return self.error_count > 0
 
     def format_all(self, use_color: bool = None) -> str:
-        """Format all collected diagnostics."""
+
         if use_color is None:
             use_color = hasattr(sys.stderr, 'isatty') and sys.stderr.isatty()
         parts = []
@@ -146,7 +134,7 @@ class DiagnosticSink:
         return '\n\n'.join(parts)
 
     def report(self, file=None, use_color: bool = None):
-        """Print all diagnostics to stderr."""
+
         if file is None:
             file = sys.stderr
         output = self.format_all(use_color)
@@ -159,12 +147,11 @@ class DiagnosticSink:
                 print(f"\033[1;31m{summary}\033[0m" if (use_color if use_color is not None else hasattr(file, 'isatty') and file.isatty()) else summary, file=file)
 
     def raise_if_errors(self):
-        """Raise DiagnosticError if any errors were collected."""
+
         if self.error_count > 0:
             raise DiagnosticError(self)
 
 class DiagnosticError(Exception):
-    """Exception raised when diagnostics contain errors."""
 
     def __init__(self, sink: DiagnosticSink):
         self.sink = sink
@@ -173,7 +160,7 @@ class DiagnosticError(Exception):
         super().__init__(sink.format_all(use_color=False))
 
 def format_code_error(filename: str, source: str, line: int, col: int, message: str, hint: str = '', code: str = '') -> str:
-    """One-shot helper to format a single error without creating a sink."""
+
     sink = DiagnosticSink(source, filename)
     sink.error(line, col, message, code=code, hint=hint)
     return sink.format_all(use_color=False)

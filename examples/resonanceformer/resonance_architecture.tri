@@ -1,0 +1,167 @@
+import triad;
+import triad.tensor as T;
+import triad.calibrate as cal;
+import triad.ntri as np;
+
+const RESONANCE_VERSION = "0.1.0";
+
+const DEFAULT_D_MODEL    = 256;
+const DEFAULT_D_PSI      = 128;
+const DEFAULT_D_MEMORY   = 64;
+const DEFAULT_D_RES      = 64;
+const DEFAULT_N_HEADS    = 4;
+const DEFAULT_N_BLOCKS   = 4;
+const DEFAULT_FFN_MULT   = 2;
+const DEFAULT_SEQ_LEN    = 128;
+const DEFAULT_VOCAB      = 128;
+
+const DEFAULT_LAMBDA     = -0.5;
+const DEFAULT_SIGMA      = 1.5;
+const DEFAULT_ALPHA      = 0.15;
+const DEFAULT_GAMMA_0    = 0.05;
+const DEFAULT_HBAR       = 1.0;
+const DEFAULT_MASS       = 1.0;
+const DEFAULT_DT         = 0.05;
+
+const DEFAULT_NU_MIN     = 0.01;
+const DEFAULT_NU_MAX     = 8.0;
+
+const T_BATH_INITIAL     = 0.05;
+const T_BATH_FINAL       = 0.001;
+const T_BATH_DECAY       = 0.995;
+
+const CRYSTAL_THRESHOLD  = 0.005;
+const CRYSTAL_MIN_STEPS  = 100;
+
+const LAMBDA_NORM        = 0.001;
+const LAMBDA_CRYSTAL     = 0.0001;
+const LAMBDA_RESERVOIR   = 0.001;
+
+const OBS_CRYSTALLINITY  = "crystallinity";
+const OBS_K_STAR         = "k_star";
+const OBS_PEAK           = "peak";
+const OBS_IPR            = "ipr";
+const OBS_FWHM           = "fwhm";
+const OBS_NORM           = "norm";
+const OBS_PARTICIPATION  = "participation";
+
+const TARGET_CRYSTALLINITY_RANGE = [0.15, 0.6];
+const TARGET_IPR_RANGE          = [0.03, 0.5];
+const TARGET_K_STAR_MIN         = 0.1;
+const TARGET_NORM_RANGE         = [0.5, 1.5];
+
+fn default_field_params() {
+    return triad.regime("B0", N=DEFAULT_D_PSI, seed=42);
+}
+
+fn self_calibrate(obs_log, hyper) {
+
+    if len(obs_log) < 8 {
+        return hyper;
+    }
+
+    let recent_n = 8;
+    let start = len(obs_log) - recent_n;
+    let recent = [];
+    for i in range(start, len(obs_log)) {
+        recent.push(obs_log[i]);
+    }
+
+    let mean_crys = 0.0;
+    let mean_ipr  = 0.0;
+    let mean_kstar = 0.0;
+    let mean_norm = 0.0;
+    for obs in recent {
+        mean_crys  = mean_crys  + float(obs[OBS_CRYSTALLINITY]);
+        mean_ipr   = mean_ipr   + float(obs[OBS_IPR]);
+        mean_kstar = mean_kstar + float(obs[OBS_K_STAR]);
+        mean_norm  = mean_norm  + float(obs[OBS_NORM]);
+    }
+    mean_crys  = mean_crys  / float(recent_n);
+    mean_ipr   = mean_ipr   / float(recent_n);
+    mean_kstar = mean_kstar / float(recent_n);
+    mean_norm  = mean_norm  / float(recent_n);
+
+    if mean_crys < TARGET_CRYSTALLINITY_RANGE[0] {
+        hyper["Lambda"] = hyper["Lambda"] - 0.03;
+    } elif mean_crys > TARGET_CRYSTALLINITY_RANGE[1] {
+        hyper["Lambda"] = hyper["Lambda"] + 0.03;
+    }
+
+    if mean_ipr < TARGET_IPR_RANGE[0] {
+        hyper["gamma_0"] = hyper["gamma_0"] + 0.002;
+    } elif mean_ipr > TARGET_IPR_RANGE[1] {
+        hyper["gamma_0"] = hyper["gamma_0"] - 0.002;
+    }
+
+    if mean_kstar < TARGET_K_STAR_MIN {
+        hyper["sigma"] = hyper["sigma"] + 0.03;
+    }
+
+    if mean_norm < TARGET_NORM_RANGE[0] {
+        hyper["alpha"] = hyper["alpha"] - 0.005;
+    } elif mean_norm > TARGET_NORM_RANGE[1] {
+        hyper["alpha"] = hyper["alpha"] + 0.005;
+    }
+
+    if hyper["Lambda"] > 0.0  { hyper["Lambda"] = -0.01; }
+    if hyper["Lambda"] < -3.0 { hyper["Lambda"] = -3.0;  }
+    if hyper["gamma_0"] < 0.0  { hyper["gamma_0"] = 0.0;  }
+    if hyper["gamma_0"] > 0.2  { hyper["gamma_0"] = 0.2;  }
+    if hyper["sigma"] < 0.5    { hyper["sigma"] = 0.5;   }
+    if hyper["sigma"] > 2.0    { hyper["sigma"] = 2.0;   }
+    if hyper["alpha"] < 0.0    { hyper["alpha"] = 0.0;   }
+    if hyper["alpha"] > 0.5    { hyper["alpha"] = 0.5;   }
+
+    return hyper;
+}
+
+fn auto_config(memory_gb) {
+    if memory_gb >= 24.0 {
+        return {"d_model": DEFAULT_D_MODEL,
+                "d_psi":   DEFAULT_D_PSI,
+                "d_memory":DEFAULT_D_MEMORY,
+                "d_res":   DEFAULT_D_RES,
+                "n_heads": 8,
+                "n_blocks":6,
+                "seq_len": 256};
+    } elif memory_gb >= 12.0 {
+        return {"d_model": 192, "d_psi": 96,  "d_memory": 48, "d_res": 48,
+                "n_heads": 6,  "n_blocks": 5, "seq_len": 192};
+    } elif memory_gb >= 6.0 {
+        return {"d_model": 128, "d_psi": 64,  "d_memory": 32, "d_res": 32,
+                "n_heads": 4,  "n_blocks": 4, "seq_len": 128};
+    } else {
+        return {"d_model": 64,  "d_psi": 32,  "d_memory": 16, "d_res": 16,
+                "n_heads": 3,  "n_blocks": 2, "seq_len": 64};
+    }
+}
+
+fn default_hyper() {
+    return {
+        "Lambda":  DEFAULT_LAMBDA,
+        "sigma":   DEFAULT_SIGMA,
+        "gamma_0": DEFAULT_GAMMA_0,
+        "alpha":   DEFAULT_ALPHA,
+    };
+}
+
+fn architecture_report() {
+    print("╔══════════════════════════════════════════════════╗");
+    print("║  ResonanceFormer v" + RESONANCE_VERSION + " — Triad-Native LLM        ║");
+    print("╠══════════════════════════════════════════════════╣");
+    print("║  P1 (wave):     complex ψ field, FFT evolution   ║");
+    print("║  P2 (memory):   CausalExpConv at log-spaced rates║");
+    print("║  P3 (reservoir): AttractorMemory + WaveFFN      ║");
+    print("║  Substrates are NEVER isolated — they coevolve.  ║");
+    print("║  Training:  TriadFlow (field-based, freezes).    ║");
+    print("║  Tuning:    self-calibration from observables.   ║");
+    print("╚══════════════════════════════════════════════════╝");
+    print("");
+    print("Triad: iℏ ∂_t Ψ = [T + V_ext + Λ|Ψ|² + V_mem + α(-Δ)^(σ/2) - iΓ]Ψ + η");
+    print("Substrates: P1 (wave) + P2 (memory) + P3 (reservoir) = TRIAD");
+    print("");
+}
+
+architecture_report();
+print("ResonanceFormer spec loaded.");

@@ -1,0 +1,11 @@
+import triad.qalgo as qa;
+import triad.qubits as q;
+
+print("QFT on 3 qubits");
+let estado = q.QubitState(3);
+let frente = qa.qft_circuit(3).statevector(estado);
+print(f"QFT|000> = {frente}");
+
+let ida_e_volta = qa.qft_circuit(3, inverse=true).statevector(frente);
+print(f"IQFT(QFT|000>) = {ida_e_volta}");
+print("exact round trip — the circuit is reversible.");

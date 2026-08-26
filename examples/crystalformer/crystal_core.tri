@@ -1,0 +1,516 @@
+import triad.nn as nn;
+import triad.tensor as T;
+import triad.net as net;
+import triad.ntri as np;
+
+class CrystalProjection {
+    fn __init__(self, vocab_size, d_model, d_psi, seed=0) {
+        self.emb = nn.Embedding(vocab_size, d_model);
+        self.proj_re = nn.triad(d_model, d_psi);
+        self.proj_im = nn.triad(d_model, d_psi);
+        self.d_psi = d_psi;
+    }
+
+    fn forward(self, token_ids) {
+
+        let x = self.emb(token_ids);
+        let re = self.proj_re(x);
+        let im = self.proj_im(x);
+        return {"re": re, "im": im, "density": T.relu(re * re + im * im)};
+    }
+
+    fn parameters(self) {
+        let ps = self.emb.parameters();
+        for p in self.proj_re.parameters() { ps.push(p); }
+        for p in self.proj_im.parameters() { ps.push(p); }
+        return ps;
+    }
+}
+
+class CrystalMemory {
+    fn __init__(self, d_psi, n_heads, nu_min=0.01, nu_max=10.0,
+                dt=0.05, fast_bias=3.0, seed=0) {
+        self.d_psi = d_psi;
+        self.n_heads = n_heads;
+        self.dt = float(dt);
+
+        let nus = [];
+        if n_heads == 1 {
+            nus = [nu_max];
+        } else {
+            for j in range(n_heads) {
+                let nu = nu_max * (nu_min / nu_max) ** (float(j) / float(n_heads - 1));
+                nus.push(nu);
+            }
+        }
+        self.nus = nus;
+        self.alphas = [];
+        for nu in nus {
+            self.alphas.push(np.exp(-nu * dt));
+        }
+
+        let raw_weights = [];
+        for j in range(n_heads) {
+            let w = fast_bias ** (1.0 - float(j) / float(n_heads - 1));
+            raw_weights.push(w);
+        }
+        let total = 0.0;
+        for w in raw_weights { total = total + w; }
+        self.lambdas = [];
+        for w in raw_weights {
+            self.lambdas.push(w / total);
+        }
+
+        self.head_coupling = nn.Parameter(
+            T.tensor(np.zeros((n_heads, n_heads)) * 0.01)
+        );
+    }
+
+    fn parameters(self) {
+        return [self.head_coupling];
+    }
+
+    fn forward(self, density, y_state_in) {
+
+        let B = density.shape[0];
+        let L = density.shape[1];
+
+        let rho_heads = density;
+
+        let alpha_arr = [];
+        for a in self.alphas {
+            alpha_arr.push(float(a));
+        }
+
+        let ys = [];
+        let y_curr = [];
+        if y_state_in == none {
+            for h in range(self.n_heads) {
+                y_curr.push(np.zeros((B,)));
+            }
+        } else {
+            let y_np = y_state_in;
+            for h in range(self.n_heads) {
+                let col = [];
+                for b in range(B) {
+                    col.push(float(y_np[b, h]));
+                }
+                y_curr.push(np.array(col));
+            }
+        }
+
+        for l in range(L) {
+            let rho_l = [];
+            for b in range(B) {
+                rho_l.push(float(density.data[b, l, 0]));
+            }
+
+            let y_step = [];
+            for h in range(self.n_heads) {
+                let a = alpha_arr[h];
+                let new_y = [];
+                for b in range(B) {
+                    let val = a * y_curr[h][b] + (1.0 - a) * rho_l[b];
+                    new_y.push(val);
+                }
+                y_curr[h] = np.array(new_y);
+                y_step.push(np.array(new_y));
+            }
+            ys.push(y_step);
+        }
+
+        let y_out = np.zeros((B, self.n_heads));
+        for b in range(B) {
+            for h in range(self.n_heads) {
+                y_out[b, h] = y_curr[h][b];
+            }
+        }
+
+        let V_data = np.zeros((B, L, 1));
+        for l in range(L) {
+            for b in range(B) {
+                let v = 0.0;
+                for h in range(self.n_heads) {
+                    v = v + self.lambdas[h] * ys[l][h][b];
+                }
+                V_data[b, l, 0] = v;
+            }
+        }
+
+        let V_mem = T.tensor(V_data);
+        return {"V_mem": V_mem, "y_state": y_out, "y_trajectory": ys};
+    }
+}
+
+class CrystalEvolution {
+    fn __init__(self, d_psi, Lambda=-0.5, gamma_0=0.01,
+                hbar=1.0, mass=1.0, dt=0.05, sigma=1.2,
+                alpha_f=0.1, T_bath=0.001, seed=0) {
+        self.d_psi = d_psi;
+        self.Lambda = float(Lambda);
+        self.gamma_0 = float(gamma_0);
+        self.hbar = float(hbar);
+        self.mass = float(mass);
+        self.dt = float(dt);
+        self.sigma = float(sigma);
+        self.alpha_f = float(alpha_f);
+        self.T_bath = float(T_bath);
+        self.seed = seed;
+
+        let k_vals = np.fft.fftfreq(d_psi, d=1.0) * 2.0 * np.pi;
+        let k_abs = np.abs(k_vals);
+        let H_kin = (hbar * hbar * k_abs * k_abs) / (2.0 * mass)
+                    + alpha_f * (k_abs ** sigma);
+
+        let half_kin = np.exp(complex(0, -1) * H_kin * dt / (2.0 * hbar));
+        self.half_kin_real = np.real(half_kin);
+        self.half_kin_imag = np.imag(half_kin);
+
+        self.damp = np.exp(-gamma_0 * dt / (2.0 * hbar));
+    }
+
+    fn forward(self, psi_re, psi_im, V_mem, step_count) {
+
+        let B = psi_re.shape[0];
+        let L = psi_re.shape[1];
+        let N = self.d_psi;
+
+        let re_data = psi_re.data;
+        let im_data = psi_im.data;
+        let V_data = V_mem.data;
+
+        let re_hat = np.fft.fft(re_data, axis=-1);
+        let im_hat = np.fft.fft(im_data, axis=-1);
+
+        let hk_r = self.half_kin_real;
+        let hk_i = self.half_kin_imag;
+        let new_re_hat = re_hat * hk_r - im_hat * hk_i;
+        let new_im_hat = re_hat * hk_i + im_hat * hk_r;
+
+        let re1 = np.fft.ifft(new_re_hat, axis=-1);
+        let im1 = np.fft.ifft(new_im_hat, axis=-1);
+
+        let rho = re1 * re1 + im1 * im1;
+        let V_nl = self.Lambda * rho + V_data;
+        let angle = V_nl * self.dt / self.hbar;
+
+        let cos_a = np.cos(angle);
+        let sin_a = np.sin(angle);
+        let re2 = re1 * cos_a + im1 * sin_a;
+        let im2 = im1 * cos_a - re1 * sin_a;
+
+        let re3 = re2 * self.damp;
+        let im3 = im2 * self.damp;
+
+        if self.T_bath > 0.0 {
+            let noise_scale = np.sqrt(2.0 * self.gamma_0 * self.T_bath
+                                       * self.dt) / np.sqrt(2.0);
+            let rng = np.random.default_rng(self.seed + step_count);
+            let noise_re = rng.standard_normal(re3.shape) * noise_scale;
+            let noise_im = rng.standard_normal(im3.shape) * noise_scale;
+            re3 = re3 + noise_re;
+            im3 = im3 + noise_im;
+        }
+
+        let re_hat2 = np.fft.fft(re3, axis=-1);
+        let im_hat2 = np.fft.fft(im3, axis=-1);
+
+        let final_re_hat = re_hat2 * hk_r - im_hat2 * hk_i;
+        let final_im_hat = re_hat2 * hk_i + im_hat2 * hk_r;
+
+        let re_final = np.fft.ifft(final_re_hat, axis=-1);
+        let im_final = np.fft.ifft(final_im_hat, axis=-1);
+
+        return {
+            "re": T.tensor(re_final.astype(np.float32)),
+            "im": T.tensor(im_final.astype(np.float32)),
+            "density": np.mean(rho, axis=-1, keepdims=true)
+        };
+    }
+
+    fn set_temperature(self, T_new) {
+        self.T_bath = float(T_new);
+    }
+}
+
+class CrystalBlock {
+    fn __init__(self, d_model, d_psi, n_heads, ffn_mult=4,
+                Lambda=-0.5, gamma_0=0.01, hbar=1.0, mass=1.0,
+                dt=0.05, nu_min=0.01, nu_max=10.0, sigma=1.2,
+                alpha_f=0.1, T_bath=0.001, seed=0) {
+        self.d_model = d_model;
+        self.d_psi = d_psi;
+
+        self.proj_re = nn.triad(d_model, d_psi);
+        self.proj_im = nn.triad(d_model, d_psi);
+
+        self.memory = CrystalMemory(d_psi, n_heads, nu_min, nu_max, dt, seed=seed);
+
+        self.evolution = CrystalEvolution(
+            d_psi, Lambda, gamma_0, hbar, mass, dt, sigma, alpha_f, T_bath, seed
+        );
+
+        self.out_proj = nn.triad(2 * d_psi, d_model);
+
+        self.ffn1 = nn.triad(d_model, d_model * ffn_mult);
+        self.ffn2 = nn.triad(d_model * ffn_mult, d_model);
+
+        self.norm1 = nn.LayerNorm(d_model);
+        self.norm2 = nn.LayerNorm(d_model);
+    }
+
+    fn parameters(self) {
+        let ps = [];
+        for p in self.proj_re.parameters() { ps.push(p); }
+        for p in self.proj_im.parameters() { ps.push(p); }
+        for p in self.memory.parameters() { ps.push(p); }
+        for p in self.out_proj.parameters() { ps.push(p); }
+        for p in self.ffn1.parameters() { ps.push(p); }
+        for p in self.ffn2.parameters() { ps.push(p); }
+        for p in self.norm1.parameters() { ps.push(p); }
+        for p in self.norm2.parameters() { ps.push(p); }
+        return ps;
+    }
+
+    fn forward(self, x, y_state_in, step_count) {
+
+        let residual = x;
+
+        let x_norm = self.norm1(x);
+
+        let re = self.proj_re(x_norm);
+        let im = self.proj_im(x_norm);
+
+        let density_re = re.data;
+        let density_im = im.data;
+        let rho = density_re * density_re + density_im * density_im;
+        let rho_mean = np.mean(rho, axis=-1, keepdims=true);
+        let density_t = T.tensor(rho_mean.astype(np.float32));
+
+        let mem_result = self.memory.forward(density_t, y_state_in);
+
+        let ev_result = self.evolution.forward(re, im, mem_result["V_mem"], step_count);
+
+        let re_f = ev_result["re"];
+        let im_f = ev_result["im"];
+        let concat = T.cat([re_f, im_f], axis=-1);
+        let field_out = self.out_proj(concat);
+
+        let x1 = residual + field_out;
+
+        let x1_norm = self.norm2(x1);
+        let ffn_out = self.ffn2(T.relu(self.ffn1(x1_norm)));
+        let x2 = x1 + ffn_out;
+
+        let obs_rho = ev_result["density"];
+
+        let rho_arr = obs_rho;
+        let obs_max = float(np.max(obs_rho));
+        let obs_mean = float(np.mean(obs_rho));
+        let obs_var = float(np.var(obs_rho));
+
+        let rho_flat = obs_rho.reshape(-1);
+        let rho_sum = float(np.sum(rho_flat));
+        let rho_sq_sum = float(np.sum(rho_flat * rho_flat));
+        let obs_ipr = rho_sq_sum / (rho_sum * rho_sum + 1e-10);
+
+        let observables = {
+            "crystallinity": obs_mean / (obs_max + 1e-10),
+            "peak": obs_max,
+            "ipr": obs_ipr,
+            "norm": float(rho_sum),
+            "k_star": 0.5,
+            "fwhm": 0.0
+        };
+
+        return {
+            "output": x2,
+            "y_state": mem_result["y_state"],
+            "observables": observables
+        };
+    }
+}
+
+class CrystalLM {
+    fn __init__(self, vocab_size, d_model=256, d_psi=128, n_blocks=4,
+                n_heads=4, ffn_mult=4, seq_len=512,
+                Lambda=-0.5, gamma_0=0.01, dt=0.05,
+                nu_min=0.01, nu_max=10.0, T_bath=0.001, seed=0) {
+        self.vocab_size = vocab_size;
+        self.d_model = d_model;
+        self.n_blocks = n_blocks;
+        self.n_heads = n_heads;
+        self.seq_len = seq_len;
+
+        self.emb = nn.Embedding(vocab_size, d_model);
+
+        self.blocks = [];
+        for i in range(n_blocks) {
+            let blk = CrystalBlock(
+                d_model, d_psi, n_heads, ffn_mult,
+                Lambda=Lambda + float(i) * 0.02,
+                gamma_0=gamma_0, dt=dt,
+                nu_min=nu_min, nu_max=nu_max,
+                T_bath=T_bath, seed=seed + i
+            );
+            self.blocks.push(blk);
+        }
+
+        self.norm_f = nn.LayerNorm(d_model);
+        self.head = nn.triad(d_model, vocab_size, bias=false);
+
+        self.T_bath = T_bath;
+        self.step_count = 0;
+    }
+
+    fn parameters(self) {
+        let ps = self.emb.parameters();
+        for blk in self.blocks {
+            for p in blk.parameters() { ps.push(p); }
+        }
+        for p in self.norm_f.parameters() { ps.push(p); }
+        for p in self.head.parameters() { ps.push(p); }
+        return ps;
+    }
+
+    fn forward(self, token_ids) {
+
+        let x = self.emb(token_ids);
+
+        let all_obs = [];
+        let all_y = [];
+
+        let y_state = none;
+        let step = self.step_count;
+
+        for blk in self.blocks {
+            let result = blk.forward(x, y_state, step);
+            x = result["output"];
+            y_state = result["y_state"];
+            all_obs.push(result["observables"]);
+            all_y.push(y_state);
+        }
+
+        let x_norm = self.norm_f(x);
+        let logits = self.head(x_norm);
+
+        return {
+            "logits": logits,
+            "observables": all_obs,
+            "y_states": all_y
+        };
+    }
+
+    fn loss(self, token_ids, targets) {
+        let result = self.forward(token_ids);
+        let logits = result["logits"];
+
+        let ce_loss = T.cross_entropy(logits, targets);
+
+        let phys_loss = T.tensor(0.0);
+        for obs in result["observables"] {
+
+            let ipr = float(obs["ipr"]);
+            if ipr < 0.01 {
+                phys_loss = phys_loss + T.tensor(0.01 - ipr);
+            }
+            if ipr > 0.9 {
+                phys_loss = phys_loss + T.tensor(ipr - 0.9);
+            }
+        }
+
+        let crystal_bonus = T.tensor(0.0);
+        for obs in result["observables"] {
+            let c = float(obs["crystallinity"]);
+            let d = c - 0.3;
+            crystal_bonus = crystal_bonus + T.tensor(0.001 * d * d);
+        }
+
+        let total_loss = ce_loss + phys_loss * 0.01 + crystal_bonus;
+
+        return {
+            "loss": total_loss,
+            "ce_loss": ce_loss,
+            "phys_loss": phys_loss,
+            "results": result
+        };
+    }
+
+    fn set_temperature(self, T_new) {
+        self.T_bath = float(T_new);
+        for blk in self.blocks {
+            blk.evolution.set_temperature(T_new);
+        }
+    }
+
+    fn anneal_temperature(self) {
+        let new_T = self.T_bath * 0.995;
+        if new_T < 0.001 { new_T = 0.001; }
+        self.set_temperature(new_T);
+    }
+
+    fn generate(self, prompt_ids, max_new_tokens, temperature=0.8, top_k=50) {
+
+        let generated = [];
+        for id in prompt_ids {
+            generated.push(id);
+        }
+
+        let ctx_len = self.seq_len;
+
+        for step in range(max_new_tokens) {
+            let start = 0;
+            if len(generated) > ctx_len {
+                start = len(generated) - ctx_len;
+            }
+            let ctx = [];
+            for i in range(start, len(generated)) {
+                ctx.push(generated[i]);
+            }
+
+            let ctx_t = T.tensor(np.array(ctx).reshape(1, -1));
+
+            let result;
+            with T.no_grad() {
+                result = self.forward(ctx_t);
+            }
+
+            let logits_arr = result["logits"].data;
+            let last_logits = logits_arr[0][len(ctx) - 1];
+
+            let scaled = last_logits / float(temperature);
+
+            if top_k > 0 and top_k < len(scaled) {
+                let sorted_idx = np.argsort(-scaled);
+                let mask = np.ones(len(scaled));
+                for i in range(top_k, len(scaled)) {
+                    mask[int(sorted_idx[i])] = 0.0;
+                }
+                scaled = scaled * mask - 1e10 * (1.0 - mask);
+            }
+
+            let exp_logits = np.exp(scaled - np.max(scaled));
+            let probs = exp_logits / np.sum(exp_logits);
+
+            let cumsum = np.cumsum(probs);
+            let r = float(np.random.default_rng(step).random());
+            let next_token = 0;
+            for i in range(len(cumsum)) {
+                if r < cumsum[i] {
+                    next_token = i;
+                    break;
+                }
+            }
+            generated.push(next_token);
+        }
+
+        return generated;
+    }
+}
+
+print("CrystalFormer core layers loaded.");
+print("  CrystalProjection  — token → complex field");
+print("  CrystalMemory      — multi-scale causal exponential conv");
+print("  CrystalEvolution   — Triad Hamiltonian field step");
+print("  CrystalBlock       — one triad block (memory + evolution + FFN)");
+print("  CrystalLM          — triad language model");

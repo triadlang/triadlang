@@ -1,0 +1,41 @@
+import triad.nn as nn;
+import triad.tensor as T;
+
+let TEXTO = "o campo oscila e o campo lembra. o campo acopla e o campo cristaliza. ";
+
+print("Mini-Transformer — char-level training");
+print("=====================================");
+
+let tok = nn.CharTokenizer(TEXTO);
+let ids = tok.encode(TEXTO);
+let vocab = tok.vocab_size;
+print(f"corpus: {len(ids)} tokens, vocab={vocab}");
+
+let modelo = nn.Transformer(vocab, d_model=32, n_heads=2, n_layers=1, d_ff=64, max_len=32);
+let opt = nn.Adam(modelo.parameters(), lr=0.01);
+
+let CTX = 16;
+let primeira = 0.0;
+let ultima = 0.0;
+for passo in range(30) {
+
+    let inicio = (passo * 7) % (len(ids) - CTX - 1);
+    let x = ids[inicio : inicio + CTX];
+    let alvo = ids[inicio + 1 : inicio + CTX + 1];
+
+    let logits = modelo.forward(T.tensor(x));
+    let perda = T.cross_entropy(logits, T.tensor(alvo));
+    opt.zero_grad();
+    perda.backward();
+    opt.step();
+
+    let v = perda.item();
+    if passo == 0 { primeira = v; }
+    ultima = v;
+    if passo % 10 == 0 { print(f"step {passo}: loss {v:.4f}"); }
+}
+
+print(f"loss: {primeira:.4f} -> {ultima:.4f}");
+if ultima < primeira {
+    print("aprendeu: a perda caiu treinando atencao causal na linguagem.");
+}

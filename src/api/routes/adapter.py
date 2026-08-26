@@ -1,10 +1,12 @@
 from __future__ import annotations
+
 import asyncio
 import contextlib
 import io
 import os
 import tempfile
-from typing import Any, Optional
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -14,35 +16,35 @@ _TIMEOUT = float(os.environ.get('TRIAD_API_TIMEOUT', '120'))
 
 class AdapterRunRequest(BaseModel):
     source: str
-    adapter: Optional[str] = None  
-    vars: Optional[list[str]] = None  
+    adapter: str | None = None
+    vars: list[str] | None = None
 
 class AdapterRunResult(BaseModel):
     ok: bool
     stdout: str
     stderr: str
     vars: dict[str, Any] = Field(default_factory=dict)
-    detected_framework: Optional[str] = None
-    error: Optional[str] = None
+    detected_framework: str | None = None
+    error: str | None = None
 
 class KernelRunRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
-    observables: Optional[list[str]] = None  
+    observables: list[str] | None = None
 
 class KernelRunResult(BaseModel):
     ok: bool
     observables: dict[str, float] = Field(default_factory=dict)
-    error: Optional[str] = None
+    error: str | None = None
 
 class FrameworkDetectRequest(BaseModel):
     source: str
 
 class FrameworkDetectResult(BaseModel):
     detected: list[str]
-    adapter: str  
+    adapter: str
 
 def _json_safe(v) -> Any:
-    import numpy as np
+    from triad import ntri as np
     if isinstance(v, np.ndarray):
         return v.tolist()
     if isinstance(v, (np.integer,)):
@@ -53,13 +55,13 @@ def _json_safe(v) -> Any:
         return v
     return str(v)
 
-def _run_adapter_sync(source: str, adapter_name: Optional[str], extract_vars: list[str]) -> AdapterRunResult:
+def _run_adapter_sync(source: str, adapter_name: str | None, extract_vars: list[str]) -> AdapterRunResult:
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
     try:
-        from adapters.headless import HeadlessAdapter
+        from adapters.discovery import _FRAMEWORK_RULES, _extract_imports
         from adapters.flask import FlaskAdapter
-        from adapters.discovery import _extract_imports, _FRAMEWORK_RULES
+        from adapters.headless import HeadlessAdapter
 
         imports = _extract_imports(source)
         detected = []
@@ -76,13 +78,14 @@ def _run_adapter_sync(source: str, adapter_name: Optional[str], extract_vars: li
 
         try:
             if chosen == 'flask':
-                
+
                 adapter = FlaskAdapter(tri_file=tri_path)
                 with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
                     try:
                         adapter.start()
-                    except RuntimeError:
-                        pass  
+                    except RuntimeError as exc:
+                        import logging
+                        logging.getLogger(__name__).debug('flask adapter start stopped: %s', exc)
             else:
                 adapter = HeadlessAdapter(tri_file=tri_path)
                 with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
@@ -113,7 +116,7 @@ def _run_adapter_sync(source: str, adapter_name: Optional[str], extract_vars: li
             error=str(exc),
         )
 
-def _run_kernel_sync(params: dict, observables: Optional[list[str]]) -> KernelRunResult:
+def _run_kernel_sync(params: dict, observables: list[str] | None) -> KernelRunResult:
     try:
         source_lines = ['import triad.kernel as kernel;']
         source_lines.append(f'let _p = {_dict_to_tri_literal(params)};')
@@ -122,7 +125,9 @@ def _run_kernel_sync(params: dict, observables: Optional[list[str]]) -> KernelRu
         source_lines.append(f'let _obs = kernel.extract(_result, {_list_to_tri_literal(obs_list)});')
         source = '\n'.join(source_lines)
 
-        import tempfile, os
+        import os
+        import tempfile
+
         from adapters.headless import HeadlessAdapter
 
         with tempfile.NamedTemporaryFile(suffix='.tri', mode='w', delete=False) as f:
@@ -143,7 +148,7 @@ def _run_kernel_sync(params: dict, observables: Optional[list[str]]) -> KernelRu
     except Exception as exc:
         return KernelRunResult(ok=False, error=str(exc))
 
-def _dict_to_tri_literal(d: dict) -> str:
+def _dict_to_tri_literal(d: dict[str, object]) -> str:
     pairs = []
     for k, v in d.items():
         if isinstance(v, str):
@@ -154,7 +159,7 @@ def _dict_to_tri_literal(d: dict) -> str:
             pairs.append(f'"{k}": {v}')
     return '{' + ', '.join(pairs) + '}'
 
-def _list_to_tri_literal(lst: list) -> str:
+def _list_to_tri_literal(lst: list[str]) -> str:
     return '[' + ', '.join(f'"{x}"' for x in lst) + ']'
 
 @router.post('/run', response_model=AdapterRunResult,
@@ -168,7 +173,7 @@ async def adapter_run(req: AdapterRunRequest):
             ),
             timeout=_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(status_code=504, detail=f'adapter timed out after {_TIMEOUT}s')
     return result
 
@@ -181,14 +186,14 @@ async def kernel_run(req: KernelRunRequest):
             loop.run_in_executor(None, _run_kernel_sync, req.params, req.observables),
             timeout=_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(status_code=504, detail=f'kernel timed out after {_TIMEOUT}s')
     return result
 
 @router.post('/detect', response_model=FrameworkDetectResult,
              summary='Detect which Python framework a .tri source imports')
 async def detect_framework(req: FrameworkDetectRequest):
-    from adapters.discovery import _extract_imports, _FRAMEWORK_RULES
+    from adapters.discovery import _FRAMEWORK_RULES, _extract_imports
     imports = _extract_imports(req.source)
     detected = []
     for required, name in _FRAMEWORK_RULES:

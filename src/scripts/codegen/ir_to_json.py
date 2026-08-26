@@ -1,12 +1,15 @@
 from __future__ import annotations
+
 import sys
 from pathlib import Path
+
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from frontend.parser_universal import parse
-from compiler.lower import lower_module
 from compiler.emit_json import emit_json
+from compiler.lower import lower_module
+from frontend.parser_universal import parse
+
 
 def dump(path: str) -> str:
     src = Path(path).read_text()

@@ -1,13 +1,3 @@
-/*
- * triad_compiler.c — Native C port of runtime/compiler.py.
- *
- * Each compile_<task> is a literal port: every Λ profile, ν tuple, λ_scale,
- * topology rule comes from the Python reference. No "tidying" of numbers.
- *
- * P1+P2+P3 always live: SubstrateConfig defaults include non-zero Λ, α, Γ,
- * f_FDT, and a 3-channel memory chain — the equation's three pillars are
- * constitutive of the default, not optional.
- */
 #define _POSIX_C_SOURCE 200809L
 #include "triad_compiler.h"
 #include "triad_format.h"
@@ -18,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* portable strdup (some libcs don't expose it under -std=c11) */
 static char *_dup(const char *s) {
     if (!s) return NULL;
     size_t n = strlen(s) + 1;
@@ -34,11 +23,9 @@ static double *_dup_doubles(const double *src, int n) {
     return out;
 }
 
-/* ── ReadoutConfig ─────────────────────────────────────────────── */
-
 TriadReadoutConfig *triad_readout_config_new_default(void) {
     TriadReadoutConfig *r = (TriadReadoutConfig *)calloc(1, sizeof(*r));
-    r->what = _dup("full");
+    r->what = _dup("triad");
     static const char *defaults[] = {
         "crystallinity", "k_star", "peak", "ipr",
         "participation", "fwhm", "norm", "density_pca"
@@ -58,10 +45,6 @@ void triad_readout_config_free(TriadReadoutConfig *r) {
     free(r);
 }
 
-/* ── SubstrateConfig defaults ──────────────────────────────────── */
-
-/* Matches runtime/compiler.py:SubstrateConfig defaults BYTE-IDENTICAL.
-   P1+P2+P3 are all set non-zero — the three pillars are constitutive. */
 static void _init_substrate_defaults(TriadSubstrateConfig *s) {
     s->D = 1;
     s->N = 128;
@@ -71,6 +54,8 @@ static void _init_substrate_defaults(TriadSubstrateConfig *s) {
     s->sigma = 1.5;
     s->Gamma = 0.05;
     s->f_FDT = 0.002;
+    s->fdt_couple = 1;
+    s->kT = 1.0;
     s->omega = 0.05;
     s->V_ext = _dup("harmonic");
     s->regime = _dup("B0");
@@ -112,8 +97,6 @@ void triad_compiled_program_free(TriadCompiledProgram *prog) {
     free(prog);
 }
 
-/* ── helpers ───────────────────────────────────────────────────── */
-
 static TriadCompiledProgram *_new_program(void) {
     TriadCompiledProgram *p = (TriadCompiledProgram *)calloc(1, sizeof(*p));
     p->T = 5.0;
@@ -139,9 +122,7 @@ static void _push_meta_int(TriadCompiledProgram *p, const char *k, int v) {
 
 static void _push_meta_tuple_double(TriadCompiledProgram *p, const char *k,
                                     const double *vs, int n) {
-    /* Format identical to Python's repr() of a tuple of floats:
-     *   "(1.0, 5.0, 20.0)"  — note the parentheses, comma+space.
-     * For a single-element tuple Python prints "(1.0,)". */
+
     char buf[256]; size_t off = 0;
     off += (size_t)snprintf(buf + off, sizeof buf - off, "(");
     for (int i = 0; i < n; ++i) {
@@ -157,7 +138,6 @@ static void _push_meta_tuple_double(TriadCompiledProgram *p, const char *k,
     _push_meta(p, k, buf);
 }
 
-/* Allocate `count` substrate configs initialised to defaults. */
 static TriadSubstrateConfig *_alloc_substrates(int count) {
     TriadSubstrateConfig *arr = (TriadSubstrateConfig *)calloc(
         (size_t)count, sizeof(TriadSubstrateConfig));
@@ -169,10 +149,6 @@ static TriadCouplingConfig *_alloc_couplings(int count) {
     return (TriadCouplingConfig *)calloc((size_t)count, sizeof(TriadCouplingConfig));
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   _compile_classify — port of runtime/compiler.py:_compile_classify
-   ═══════════════════════════════════════════════════════════════════ */
-
 TriadCompiledProgram *triad_compile_classify(int n_classes,
                                              int n_features,
                                              int depth) {
@@ -180,14 +156,11 @@ TriadCompiledProgram *triad_compile_classify(int n_classes,
     if (n_features <= 0) n_features = 128;
     if (depth <= 0) depth = 4;
 
-    /* n_subs = max(depth, ceil(log2(n_classes + 1))) */
     int log_term = 0;
-    /* ceil(log2(n_classes + 1)) — Python np.ceil returns int when arg
-       is an integer-valued float. For (n_classes+1) = 1 the log is 0,
-       ceil is 0. */
+
     int v = n_classes + 1;
     while ((1 << log_term) < v) log_term++;
-    /* log_term == ceil(log2(v)) for v >= 1 */
+
     int n_subs = depth > log_term ? depth : log_term;
 
     TriadCompiledProgram *p = _new_program();
@@ -202,7 +175,7 @@ TriadCompiledProgram *triad_compile_classify(int n_classes,
         s->N = n_features;
         s->Lambda = -0.5 * (1.0 + 0.2 * (double)i);
         s->alpha = 0.15;
-        /* nu = (2.0, 0.5/(i+1), 0.1/(i+1)) */
+
         double nu_vals[3]  = { 2.0, 0.5 / (double)(i + 1), 0.1 / (double)(i + 1) };
         double lam_scale = 1.0 / (double)(i + 1);
         double lam_vals[3] = {
@@ -215,11 +188,9 @@ TriadCompiledProgram *triad_compile_classify(int n_classes,
         s->omega = 0.05 * (1.0 + 0.1 * (double)i);
     }
 
-    /* couplings: ring of cls_i -> cls_{i+1} kappa=-3.0, then close
-       cls_{N-1} -> cls_0 kappa=-1.5 */
-    int n_edges = (n_subs - 1) + 1;
-    if (n_subs == 1) n_edges = 1;  /* still emits the self-close edge */
-    p->couplings = _alloc_couplings(n_edges);
+    int n_links = (n_subs - 1) + 1;
+    if (n_subs == 1) n_links = 1;
+    p->couplings = _alloc_couplings(n_links);
     int e = 0;
     for (int i = 0; i < n_subs - 1; ++i) {
         char a[32], b[32];
@@ -243,36 +214,30 @@ TriadCompiledProgram *triad_compile_classify(int n_classes,
     }
     p->n_couplings = e;
 
-    /* readout: classify uses the full multi-field default already */
     _push_meta(p, "task", "classify");
     _push_meta_int(p, "n_classes", n_classes);
     return p;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   _compile_generate
-   ═══════════════════════════════════════════════════════════════════ */
-
 TriadCompiledProgram *triad_compile_generate(const char *pattern_type, int N) {
     if (!pattern_type) pattern_type = "crystal";
     if (N <= 0) N = 128;
 
-    /* lam_split / nu_gen by pattern_type — match Python exactly */
-    double lam_split_crystal[2]  = { 1.125, 0.375 };
-    double nu_crystal[2]         = { 10.0, 0.5 };
+    double lam_split_crystal[3]  = { 1.125, 0.375, 0.125 };
+    double nu_crystal[3]         = { 10.0, 0.5, 0.1 };
     double lam_split_filament[3] = { -0.3, -0.2, -0.1 };
     double nu_filament[3]        = { 2.0, 0.5, 0.1 };
-    double lam_split_lattice[2]  = { 0.75, 0.25 };
-    double nu_lattice[2]         = { 10.0, 0.5 };
+    double lam_split_lattice[3]  = { 0.75, 0.25, 0.075 };
+    double nu_lattice[3]         = { 10.0, 0.5, 0.1 };
 
     const double *nu_p = NULL, *lam_p = NULL;
     int M = 0;
     if (strcmp(pattern_type, "crystal") == 0) {
-        nu_p = nu_crystal; lam_p = lam_split_crystal; M = 2;
+        nu_p = nu_crystal; lam_p = lam_split_crystal; M = 3;
     } else if (strcmp(pattern_type, "filament") == 0) {
         nu_p = nu_filament; lam_p = lam_split_filament; M = 3;
     } else if (strcmp(pattern_type, "lattice") == 0) {
-        nu_p = nu_lattice; lam_p = lam_split_lattice; M = 2;
+        nu_p = nu_lattice; lam_p = lam_split_lattice; M = 3;
     } else {
         nu_p = nu_filament; lam_p = lam_split_filament; M = 3;
     }
@@ -284,12 +249,13 @@ TriadCompiledProgram *triad_compile_generate(const char *pattern_type, int N) {
     free(s->name); s->name = _dup("gen_0");
     s->N = N;
     s->Lambda = (strcmp(pattern_type, "crystal") == 0) ? -8.0 : -0.5;
-    s->alpha  = (strcmp(pattern_type, "crystal") == 0) ?  0.0 : 0.15;
+    s->alpha  = (strcmp(pattern_type, "crystal") == 0) ?  0.1 : 0.15;
+    s->sigma  = (strcmp(pattern_type, "crystal") == 0) ?  1.8 : 1.5;
     free(s->nu); free(s->lam);
     s->nu  = _dup_doubles(nu_p, M);
     s->lam = _dup_doubles(lam_p, M);
     s->M = M;
-    free(s->V_ext); s->V_ext = NULL;   /* Python sets V_ext=None */
+    free(s->V_ext); s->V_ext = NULL;
 
     p->T = (strcmp(pattern_type, "crystal") == 0) ? 15.0 : 10.0;
 
@@ -298,13 +264,9 @@ TriadCompiledProgram *triad_compile_generate(const char *pattern_type, int N) {
     return p;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   _compile_remember
-   ═══════════════════════════════════════════════════════════════════ */
-
 TriadCompiledProgram *triad_compile_remember(const double *timescales,
                                              int n_timescales, int N) {
-    /* Python default timescales = (1.0, 5.0, 20.0) */
+
     double default_ts[3] = { 1.0, 5.0, 20.0 };
     if (!timescales || n_timescales <= 0) {
         timescales = default_ts;
@@ -312,8 +274,6 @@ TriadCompiledProgram *triad_compile_remember(const double *timescales,
     }
     if (N <= 0) N = 128;
 
-    /* nu = tuple(1.0/ts for ts in timescales)
-     * lam = tuple(-0.3/(i+1) for i in range(M)) */
     double *nu  = (double *)malloc(sizeof(double) * (size_t)n_timescales);
     double *lam = (double *)malloc(sizeof(double) * (size_t)n_timescales);
     for (int i = 0; i < n_timescales; ++i) {
@@ -338,10 +298,6 @@ TriadCompiledProgram *triad_compile_remember(const double *timescales,
     return p;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   _compile_couple
-   ═══════════════════════════════════════════════════════════════════ */
-
 TriadCompiledProgram *triad_compile_couple(int n_substrates,
                                            const char *topology,
                                            double kappa) {
@@ -357,15 +313,15 @@ TriadCompiledProgram *triad_compile_couple(int n_substrates,
         free(s->name);
         char nm[32]; snprintf(nm, sizeof nm, "s%d", i);
         s->name = _dup(nm);
-        /* regime stays "B0" (already the default) */
+
     }
 
-    int max_edges = 0;
-    if (strcmp(topology, "ring") == 0)      max_edges = n_substrates;
-    else if (strcmp(topology, "full") == 0) max_edges = n_substrates * (n_substrates - 1);
-    else if (strcmp(topology, "star") == 0) max_edges = 2 * (n_substrates - 1);
+    int max_links = 0;
+    if (strcmp(topology, "ring") == 0)      max_links = n_substrates;
+    else if (strcmp(topology, "triad") == 0) max_links = n_substrates * (n_substrates - 1);
+    else if (strcmp(topology, "star") == 0) max_links = 2 * (n_substrates - 1);
 
-    p->couplings = _alloc_couplings(max_edges > 0 ? max_edges : 1);
+    p->couplings = _alloc_couplings(max_links > 0 ? max_links : 1);
     int e = 0;
     if (strcmp(topology, "ring") == 0) {
         for (int i = 0; i < n_substrates; ++i) {
@@ -378,7 +334,7 @@ TriadCompiledProgram *triad_compile_couple(int n_substrates,
             p->couplings[e].mode = _dup("density");
             e++;
         }
-    } else if (strcmp(topology, "full") == 0) {
+    } else if (strcmp(topology, "triad") == 0) {
         for (int i = 0; i < n_substrates; ++i) {
             for (int j = 0; j < n_substrates; ++j) {
                 if (i == j) continue;
@@ -418,10 +374,6 @@ TriadCompiledProgram *triad_compile_couple(int n_substrates,
     return p;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   _compile_sat
-   ═══════════════════════════════════════════════════════════════════ */
-
 TriadCompiledProgram *triad_compile_sat(int n_vars, int n_clauses) {
     if (n_vars <= 0) n_vars = 3;
     if (n_clauses <= 0) n_clauses = 9;
@@ -436,14 +388,15 @@ TriadCompiledProgram *triad_compile_sat(int n_vars, int n_clauses) {
     free(s->name); s->name = _dup("sat_0");
     s->N = N;
     s->Lambda = -5.0;
-    s->alpha = 0.0;
+    s->alpha = 0.1;
+    s->sigma = 1.7;
     free(s->V_ext); s->V_ext = NULL;
     free(s->nu); free(s->lam);
-    double sat_nu[2]  = { 2.0, 0.5 };
-    double sat_lam[2] = { -0.5, -0.2 };
-    s->nu = _dup_doubles(sat_nu, 2);
-    s->lam = _dup_doubles(sat_lam, 2);
-    s->M = 2;
+    double sat_nu[3]  = { 2.0, 0.5, 0.1 };
+    double sat_lam[3] = { -0.5, -0.3, -0.1 };
+    s->nu = _dup_doubles(sat_nu, 3);
+    s->lam = _dup_doubles(sat_lam, 3);
+    s->M = 3;
 
     p->T = 10.0;
 
@@ -453,23 +406,12 @@ TriadCompiledProgram *triad_compile_sat(int n_vars, int n_clauses) {
     return p;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   _topology_from_couplings — exact port
-   ═══════════════════════════════════════════════════════════════════ */
-
 const char *triad_topology_from_couplings(int n_couplings, int n_subs) {
     if (n_couplings == n_subs) return "ring";
-    if (n_couplings == n_subs * (n_subs - 1)) return "full";
+    if (n_couplings == n_subs * (n_subs - 1)) return "triad";
     if (n_couplings == 0) return "ring";
     return "ring";
 }
-
-/* ═══════════════════════════════════════════════════════════════════
-   Instantiation — bridge to TriadMultiRuntime.
-   Builds a runtime where every substrate runs the FULL P1+P2+P3
-   equation, and the program's couplings populate a single segment of
-   duration T.
-   ═══════════════════════════════════════════════════════════════════ */
 
 static int _find_substrate_id(TriadMultiRuntime *rt, const char *name) {
     TriadSubstrate *s = triad_mr_find(rt, name);
@@ -486,39 +428,35 @@ static TriadCouplingMode _mode_from_string(const char *mode) {
 TriadMultiRuntime *triad_compiler_instantiate(const TriadCompiledProgram *prog,
                                               uint64_t seed) {
     if (!prog) return NULL;
-    TriadMultiRuntime *rt = triad_mr_new(prog->dt, /*record_every*/4);
+    TriadMultiRuntime *rt = triad_mr_new(prog->dt, 4);
 
-    /* mode index for triad_mr_add_substrate: 2 = full (P1+P2+P3 all live).
-       This is the only sane default for the equation rules. */
-    int mode_full = 2;
+    int mode_triad = 2;
 
     for (int i = 0; i < prog->n_substrates; ++i) {
         const TriadSubstrateConfig *s = &prog->substrates[i];
-        /* Default Λ-scale guard is handled inside the solver (the
-           split-step _maybe_halve_dt halves dt when |Λ| ≥ 4.0). We do
-           not impose anything here. */
+
         triad_mr_add_substrate(rt, s->name, s->D,
                                s->N, s->L,
-                               /*hbar*/1.0, /*m*/1.0, s->omega,
+                               1.0, 1.0, s->omega,
                                s->Lambda, s->alpha, s->sigma,
                                s->Gamma, s->f_FDT,
+                               s->fdt_couple, s->kT,
                                s->M, s->nu, s->lam,
-                               mode_full,
+                               mode_triad,
                                seed + (uint64_t)i,
                                s->V_ext,
-                               /*psi_init*/NULL /* default Gaussian */);
+                               NULL );
     }
 
-    /* Single segment of duration T carrying all couplings. */
     int ne = prog->n_couplings;
-    TriadCouplingEdge *edges = NULL;
+    TriadCouplingLink *links = NULL;
     if (ne > 0) {
-        edges = (TriadCouplingEdge *)malloc(sizeof(TriadCouplingEdge) * (size_t)ne);
+        links = (TriadCouplingLink *)malloc(sizeof(TriadCouplingLink) * (size_t)ne);
         for (int e = 0; e < ne; ++e) {
             const TriadCouplingConfig *c = &prog->couplings[e];
             int sid = _find_substrate_id(rt, c->src);
             int did = _find_substrate_id(rt, c->dst);
-            edges[e] = (TriadCouplingEdge){
+            links[e] = (TriadCouplingLink){
                 .src_id = sid, .dst_id = did,
                 .kappa = c->kappa,
                 .mode = _mode_from_string(c->mode),
@@ -526,6 +464,6 @@ TriadMultiRuntime *triad_compiler_instantiate(const TriadCompiledProgram *prog,
             };
         }
     }
-    triad_mr_add_segment(rt, 0.0, prog->T, edges, ne, NULL, 0);
+    triad_mr_add_segment(rt, 0.0, prog->T, links, ne, NULL, 0);
     return rt;
 }

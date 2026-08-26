@@ -1,11 +1,10 @@
 from __future__ import annotations
+
 import json
 import os
 import shutil
 import subprocess
-import sys
-from pathlib import Path
-from typing import Optional
+
 MANIFEST_FILE = 'triad.json'
 MODULES_DIR = 'triad_modules'
 GLOBAL_REGISTRY = os.path.expanduser('~/.triad/registry')
@@ -13,7 +12,7 @@ GLOBAL_REGISTRY = os.path.expanduser('~/.triad/registry')
 class PackageManifest:
     __slots__ = ('name', 'version', 'description', 'dependencies', 'source', 'entry', 'author', 'license')
 
-    def __init__(self, name: str, version: str='0.1.0', description: str='', dependencies: Optional[dict[str, str]]=None, source: str='', entry: str='', author: str='', license: str='MIT'):
+    def __init__(self, name: str, version: str='0.1.0', description: str='', dependencies: dict[str, str] | None=None, source: str='', entry: str='', author: str='', license: str='MIT'):
         self.name = name
         self.version = version
         self.description = description
@@ -36,7 +35,7 @@ class PackageManifest:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> PackageManifest:
+    def from_dict(cls, d: dict[str, object]) -> PackageManifest:
         return cls(name=d['name'], version=d.get('version', '0.1.0'), description=d.get('description', ''), dependencies=d.get('dependencies', {}), source=d.get('source', ''), entry=d.get('entry', ''), author=d.get('author', ''), license=d.get('license', 'MIT'))
 
     def save(self, path: str):
@@ -44,7 +43,7 @@ class PackageManifest:
             json.dump(self.to_dict(), f, indent=2)
             f.write('\n')
 
-def load_manifest(project_dir: str='.') -> Optional[PackageManifest]:
+def load_manifest(project_dir: str='.') -> PackageManifest | None:
     p = os.path.join(project_dir, MANIFEST_FILE)
     if not os.path.exists(p):
         return None
@@ -81,7 +80,7 @@ def _source_kind(source: str) -> str:
         return 'local'
     return 'unknown'
 
-def install_package(source: str, project_dir: str='.', name: Optional[str]=None, registry_dir: Optional[str]=None) -> str:
+def install_package(source: str, project_dir: str='.', name: str | None=None, registry_dir: str | None=None) -> str:
     modules_dir = os.path.join(project_dir, MODULES_DIR)
     os.makedirs(modules_dir, exist_ok=True)
     kind = _source_kind(source)
@@ -96,7 +95,7 @@ def install_package(source: str, project_dir: str='.', name: Optional[str]=None,
     else:
         raise RuntimeError(f'unknown package source: {source}')
 
-def _install_git(url: str, modules_dir: str, name: Optional[str]=None) -> str:
+def _install_git(url: str, modules_dir: str, name: str | None=None) -> str:
     url = url.removeprefix('git+')
     if name is None:
         name = url.rstrip('/').split('/')[-1].removesuffix('.git')
@@ -107,7 +106,7 @@ def _install_git(url: str, modules_dir: str, name: Optional[str]=None) -> str:
     _clean_git_meta(target)
     return name
 
-def _install_path(source: str, modules_dir: str, name: Optional[str]=None) -> str:
+def _install_path(source: str, modules_dir: str, name: str | None=None) -> str:
     src = source.removeprefix('path:')
     src_abs = os.path.abspath(src)
     if not os.path.isdir(src_abs):
@@ -126,7 +125,7 @@ def _install_path(source: str, modules_dir: str, name: Optional[str]=None) -> st
     os.symlink(src_abs, target)
     return name
 
-def _install_registry(source: str, modules_dir: str, registry_dir: Optional[str]=None) -> str:
+def _install_registry(source: str, modules_dir: str, registry_dir: str | None=None) -> str:
     reg = registry_dir or GLOBAL_REGISTRY
     spec = source.removeprefix('triad://')
     if '@' in spec:
@@ -169,7 +168,7 @@ def install_dependencies(project_dir: str='.') -> list[str]:
         installed.append(dep_name)
     return installed
 
-def publish_package(project_dir: str='.', registry_dir: Optional[str]=None) -> str:
+def publish_package(project_dir: str='.', registry_dir: str | None=None) -> str:
     manifest = load_manifest(project_dir)
     if manifest is None:
         raise RuntimeError(f'no {MANIFEST_FILE} found in {project_dir}')
@@ -209,8 +208,9 @@ LOCKFILE = 'triad.lock'
 import hashlib
 import time
 
+
 def generate_lockfile(project_dir: str = '.') -> dict:
-    """Generate a lockfile with exact versions and integrity hashes."""
+
     modules_dir = os.path.join(project_dir, MODULES_DIR)
     lock = {
         'version': 1,
@@ -226,7 +226,7 @@ def generate_lockfile(project_dir: str = '.') -> dict:
         m = load_manifest(pkg_path)
         if not m:
             continue
-        
+
         h = hashlib.sha256()
         for root, dirs, files in os.walk(pkg_path):
             dirs.sort()
@@ -248,7 +248,7 @@ def generate_lockfile(project_dir: str = '.') -> dict:
     return lock
 
 def save_lockfile(project_dir: str = '.') -> str:
-    """Generate and save lockfile. Returns path."""
+
     lock = generate_lockfile(project_dir)
     path = os.path.join(project_dir, LOCKFILE)
     with open(path, 'w') as f:
@@ -257,7 +257,7 @@ def save_lockfile(project_dir: str = '.') -> str:
     return path
 
 def load_lockfile(project_dir: str = '.') -> dict | None:
-    """Load lockfile if it exists."""
+
     path = os.path.join(project_dir, LOCKFILE)
     if not os.path.exists(path):
         return None
@@ -265,7 +265,7 @@ def load_lockfile(project_dir: str = '.') -> dict | None:
         return json.load(f)
 
 def verify_lockfile(project_dir: str = '.') -> list[str]:
-    """Verify lockfile integrity. Returns list of mismatches."""
+
     lock = load_lockfile(project_dir)
     if not lock:
         return ['no lockfile found']
@@ -289,23 +289,14 @@ import re as _re
 _SEMVER_RE = _re.compile(r'^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.]+))?$')
 
 def _parse_semver(v: str) -> tuple:
-    """Parse semver string into (major, minor, patch, prerelease)."""
+
     m = _SEMVER_RE.match(v.strip())
     if not m:
         return (0, 0, 0, '')
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4) or '')
 
 def semver_satisfies(version: str, constraint: str) -> bool:
-    """Check if version satisfies a constraint like ^1.2.0, ~1.2, >=1.0.0.
-    
-    Supported constraints:
-      ^X.Y.Z  — compatible (same major, >= minor.patch)
-      ~X.Y.Z  — approximately (same major.minor, >= patch)
-      >=X.Y.Z — greater or equal
-      <=X.Y.Z — less or equal
-      X.Y.Z   — exact match
-      *       — any
-    """
+
     constraint = constraint.strip()
     if constraint == '*' or constraint == 'latest':
         return True
@@ -314,7 +305,7 @@ def semver_satisfies(version: str, constraint: str) -> bool:
 
     if constraint.startswith('^'):
         floor = _parse_semver(constraint[1:])
-        
+
         if v[0] != floor[0]:
             return False
         if v[1] > floor[1]:
@@ -349,7 +340,7 @@ def semver_satisfies(version: str, constraint: str) -> bool:
 
 def resolve_version(package_name: str, constraint: str = '*',
                      registry_dir: str | None = None) -> str | None:
-    """Find the best matching version in the registry."""
+
     reg = registry_dir or GLOBAL_REGISTRY
     pkg_dir = os.path.join(reg, package_name)
     if not os.path.isdir(pkg_dir):
@@ -362,6 +353,6 @@ def resolve_version(package_name: str, constraint: str = '*',
                 versions.append((_parse_semver(vdir), vdir))
     if not versions:
         return None
-    
+
     versions.sort(key=lambda x: x[0], reverse=True)
     return versions[0][1]

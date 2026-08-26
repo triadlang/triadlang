@@ -1,6 +1,8 @@
 from __future__ import annotations
-import sys
+
 import os
+import sys
+
 PY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(PY_ROOT) if os.path.basename(PY_ROOT) in ('python', 'src') else PY_ROOT
 if PY_ROOT not in sys.path:
@@ -9,7 +11,7 @@ if PY_ROOT not in sys.path:
 def cmd_run(args):
     sys.setrecursionlimit(50000)
     backend = 'solver'
-    safe = False
+    safe = True
     remaining = []
     i = 0
     while i < len(args):
@@ -19,20 +21,26 @@ def cmd_run(args):
         elif args[i] == '--safe':
             safe = True
             i += 1
+        elif args[i] == '--unsafe':
+            safe = False
+            i += 1
         else:
             remaining.append(args[i])
             i += 1
     args = remaining
     if not args:
-        print('usage: triad run <file.tri> [--backend solver|vm]', file=sys.stderr)
+        print('usage: triad run <file.tri> [--backend solver|vm] [--safe|--unsafe]', file=sys.stderr)
         return 1
     path = args[0]
     if not os.path.exists(path):
         print(f'error: file not found: {path}', file=sys.stderr)
         return 1
-    from frontend.parser_universal import parse, ParseError
-    from frontend.lexer_universal import LexError
-    from runtime.compiler_runtime import TriadCompiler, CompileError, set_safe_mode
+    from frontend.errors import LexError, ParseError
+    from frontend.parser_universal import parse
+    from runtime.compiler_runtime import CompileError, TriadCompiler, set_safe_mode
+    from runtime.security import default_policy, set_policy
+    project_dir = os.path.dirname(os.path.abspath(path))
+    set_policy(default_policy(project_dir))
     try:
         with open(path) as f:
             src = f.read()
@@ -40,8 +48,8 @@ def cmd_run(args):
         set_safe_mode(safe)
         compiler = TriadCompiler()
         if backend == 'vm':
-            compiler._backend = 'vm'
-        compiler.compile_and_run(mod)
+            compiler.set_backend('vm')
+        compiler.compile_and_run(mod, safe=safe)
         return 0
     except (LexError, ParseError) as e:
         print(str(e), file=sys.stderr)
@@ -66,9 +74,9 @@ def cmd_check(args):
     if not os.path.exists(path):
         print(f'error: file not found: {path}', file=sys.stderr)
         return 1
-    from frontend.parser_universal import parse, ParseError
-    from frontend.lexer_universal import LexError
-    from compiler.typecheck_universal import typecheck, TypeCheckError
+    from compiler.typecheck_universal import TypeCheckError, typecheck
+    from frontend.errors import LexError, ParseError
+    from frontend.parser_universal import parse
     try:
         with open(path) as f:
             src = f.read()
@@ -113,17 +121,17 @@ def cmd_compile(args):
     if not os.path.exists(path):
         print(f'error: file not found: {path}', file=sys.stderr)
         return 1
-    from frontend.parser_universal import parse, ParseError
-    from frontend.lexer_universal import LexError
-    from compiler.lower import lower_module
     from compiler.emit_json import emit_json, emit_json_file
+    from compiler.lower import lower_module
+    from frontend.errors import LexError, ParseError
+    from frontend.parser_universal import parse
     try:
         with open(path) as f:
             src = f.read()
         if native:
-            from compiler.c_codegen import compile_to_c
             import subprocess
-            import tempfile
+
+            from compiler.c_codegen import compile_to_c
             c_code = compile_to_c(src, path)
             base = os.path.splitext(os.path.basename(path))[0]
             c_path = output_path + '.c' if output_path else base + '.c'
@@ -133,7 +141,23 @@ def cmd_compile(args):
             rt_dir = os.path.join(REPO_ROOT, 'native', 'c')
             cc = os.environ.get('CC', 'gcc')
             cflags = ['-std=c11', '-O2', '-I', os.path.join(rt_dir, 'include')]
-            
+            py_libs = []
+            if 'triad_python.h' in c_code:
+                import sysconfig
+                src_dir = os.path.join(REPO_ROOT, 'src')
+                script_dir = os.path.dirname(os.path.abspath(path))
+                cflags.extend(['-I', sysconfig.get_paths()['include']])
+                cflags.append(f'-DTRIAD_SRC_DIR="{src_dir}"')
+                cflags.append(f'-DTRIAD_SCRIPT_DIR="{script_dir}"')
+                cflags.append(f'-DTRIAD_SITE_DIR="{sysconfig.get_paths()["purelib"]}"')
+                libdir = sysconfig.get_config_var('LIBDIR')
+                pyver = sysconfig.get_config_var('LDVERSION') or sysconfig.get_config_var('VERSION')
+                if libdir:
+                    py_libs.extend(['-L', libdir, f'-Wl,-rpath,{libdir}'])
+                py_libs.append(f'-lpython{pyver}')
+                for extra in (sysconfig.get_config_var('LIBS') or '').split():
+                    py_libs.append(extra)
+
             static_lib = os.path.join(rt_dir, 'libtriad_rt.a')
             if os.path.exists(static_lib):
                 libs = [static_lib, '-lm', '-lpthread']
@@ -153,7 +177,7 @@ def cmd_compile(args):
                 cflags.append('-DTRIAD_NO_BOEHM')
             else:
                 libs.append('-lgc')
-            cmd = [cc] + cflags + [c_path] + libs + ['-o', bin_path]
+            cmd = [cc] + cflags + [c_path] + libs + py_libs + ['-o', bin_path]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 print(f'cc error:\n{result.stderr}', file=sys.stderr)
@@ -184,11 +208,12 @@ def cmd_repl(args):
     return 0
 
 def cmd_doctor(args):
-    print('TriadLang Doctor v1.0')
+    from triad import __version__
+    print(f'TriadLang Doctor v{__version__}')
     print('=' * 40)
     checks = []
     v = sys.version_info
-    checks.append(('Python >= 3.10', v >= (3, 10)))
+    checks.append(('Python >= 3.12', v >= (3, 12)))
     for mod_name in ['frontend.lexer_universal', 'frontend.parser_universal', 'frontend.ast_nodes', 'compiler.ir', 'compiler.lower', 'compiler.emit_json', 'runtime.interpreter', 'cli.repl']:
         try:
             __import__(mod_name)
@@ -196,12 +221,14 @@ def cmd_doctor(args):
         except Exception as e:
             checks.append((f'import {mod_name}: {e}', False))
     try:
-        import numpy
+        from triad import ntri as _ntri
+
+        assert _ntri is not None
         checks.append(('numpy available', True))
     except ImportError:
         checks.append(('numpy (optional, needed for triad-native)', False))
     ex_dir = os.path.join(REPO_ROOT, 'examples', 'basic')
-    checks.append((f'examples/basic/ exists', os.path.isdir(ex_dir)))
+    checks.append(('examples/basic/ exists', os.path.isdir(ex_dir)))
     for label, ok in checks:
         status = 'OK' if ok else 'MISSING'
         print(f'  [{status:7s}] {label}')
@@ -214,7 +241,7 @@ def cmd_doctor(args):
     return 0 if all_ok else 1
 
 def cmd_jit_stats(args):
-    
+
     from runtime.jit_tiered import get_jit
     stats = get_jit().stats()
     print('triadlang hot-spot tracker')
@@ -234,9 +261,9 @@ def cmd_jit_stats(args):
 
 def cmd_test(args):
     import subprocess
-    
+
     tests_dir = os.path.join(PY_ROOT, 'tests')
-    e2e = os.path.join(REPO_ROOT, 'test_e2e_full.py')
+    e2e = os.path.join(REPO_ROOT, 'test_e2e_triad.py')
     env = {**os.environ, 'PYTHONPATH': PY_ROOT}
     overall = 0
 
@@ -246,15 +273,27 @@ def cmd_test(args):
         overall = 1
 
     if os.path.exists(e2e):
-        print('\nrunning test_e2e_full.py ...')
+        print('\nrunning test_e2e_triad.py ...')
         rc_e2e = subprocess.call([sys.executable, e2e], cwd=REPO_ROOT, env=env)
         if rc_e2e != 0:
             overall = 1
     else:
-        print('\ntest_e2e_full.py not found, skipping e2e', file=sys.stderr)
+        print('\ntest_e2e_triad.py not found, skipping e2e', file=sys.stderr)
 
     print('\nall test suites passed.' if overall == 0 else '\nsome test suites failed.')
     return overall
+
+def cmd_setup(args):
+    from cli.setup_cmd import cmd_setup as _setup
+    return _setup(args)
+
+def cmd_watch(args):
+    from cli.devtools import cmd_watch as _watch
+    return _watch(args)
+
+def cmd_bundle(args):
+    from cli.devtools import cmd_bundle as _bundle
+    return _bundle(args)
 
 def cmd_fmt(args):
     if not args:
@@ -264,9 +303,9 @@ def cmd_fmt(args):
     if not os.path.exists(path):
         print(f'error: file not found: {path}', file=sys.stderr)
         return 1
-    from frontend.parser_universal import parse, ParseError
-    from frontend.lexer_universal import LexError
     from compiler.formatter import format_universal
+    from frontend.errors import LexError, ParseError
+    from frontend.parser_universal import parse
     try:
         with open(path) as f:
             src = f.read()
@@ -278,6 +317,7 @@ def cmd_fmt(args):
         return 1
 
 def cmd_bench(args):
+    safe = False
     if not args:
         print('usage: triad bench <file.tri>', file=sys.stderr)
         return 1
@@ -290,7 +330,7 @@ def cmd_bench(args):
     mod = parse(src, path)
     start = time.perf_counter()
     compiler = TriadCompiler()
-    compiler.compile_and_run(mod)
+    compiler.compile_and_run(mod, safe=safe)
     elapsed = time.perf_counter() - start
     print(f'\nbench: {elapsed:.4f}s')
     return 0
@@ -301,18 +341,62 @@ def cmd_init(args):
         print('usage: triad init <project-name>', file=sys.stderr)
         return 1
     from stdlib.registry import init_project
-    
+
     project_dir = os.path.join('.', name)
     if os.path.exists(os.path.join(project_dir, 'triad.json')):
         print(f'triad project already exists at {project_dir}/', file=sys.stderr)
         return 1
     os.makedirs(project_dir, exist_ok=True)
     init_project(name, project_dir=project_dir)
+
+    import json
+    src_dir = os.path.join(project_dir, 'src')
+    tests_dir = os.path.join(project_dir, 'tests')
+    os.makedirs(src_dir, exist_ok=True)
+    os.makedirs(tests_dir, exist_ok=True)
+    main_tri = os.path.join(src_dir, 'main.tri')
+    if not os.path.exists(main_tri):
+        with open(main_tri, 'w') as f:
+            f.write(
+                f'// {name} — entry point\n'
+                'print("hello from ' + name + '");\n\n'
+                '// a field to get started:\n'
+                '// substrate field : B0;\n'
+                '// evolve field for T=1.0;\n'
+                '// observe field norm, crystallinity;\n')
+    smoke = os.path.join(tests_dir, 'smoke.tri')
+    if not os.path.exists(smoke):
+        with open(smoke, 'w') as f:
+            f.write('// run with: triad run tests/smoke.tri\n'
+                    'let ok = 1 + 1 == 2;\n'
+                    'print(f"smoke: {ok}");\n')
+    readme = os.path.join(project_dir, 'README.md')
+    if not os.path.exists(readme):
+        with open(readme, 'w') as f:
+            f.write(f'# {name}\n\n'
+                    'Run: `triad run src/main.tri`\n\n'
+                    'Develop with reload: `triad watch .`\n\n'
+                    'Package: `triad bundle src/main.tri -o ' + name + '.pyz`\n')
+    manifest_path = os.path.join(project_dir, 'triad.json')
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        manifest.setdefault('entry', 'src/main.tri')
+        manifest.setdefault('scripts', {'start': 'triad run src/main.tri',
+                                        'dev': 'triad watch .'})
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
+    except (OSError, json.JSONDecodeError):
+        pass
     print(f'initialized: ./{name}/')
+    print('  src/main.tri    — entry point')
+    print('  tests/smoke.tri — smoke test')
+    print('  triad.json      — manifest (entry, scripts)')
+    print(f'next steps: cd {name} && triad watch .')
     return 0
 
 def cmd_install(args):
-    from stdlib.registry import install_package, install_dependencies, load_manifest, save_manifest
+    from stdlib.registry import install_dependencies, install_package, load_manifest, save_manifest
     if not args:
         installed = install_dependencies()
         if not installed:
@@ -374,6 +458,25 @@ def cmd_lsp(args):
     lsp_main()
     return 0
 
+def cmd_play(args):
+    host = '127.0.0.1'
+    port = 8000
+    for i, a in enumerate(args):
+        if a == '--port' and i + 1 < len(args):
+            port = int(args[i + 1])
+        elif a == '--host' and i + 1 < len(args):
+            host = args[i + 1]
+    url = f'http://{host}:{port}/engine'
+    print(f'TriadLang 3D Engine: {url}')
+    print('(Ctrl+C stops it)')
+    try:
+        import threading
+        import webbrowser
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    except (ImportError, AttributeError, RuntimeError):
+        pass
+    return cmd_serve(['--host', host, '--port', str(port)])
+
 def cmd_serve(args):
     host = '127.0.0.1'
     port = 8000
@@ -381,11 +484,14 @@ def cmd_serve(args):
     i = 0
     while i < len(args):
         if args[i] == '--host' and i + 1 < len(args):
-            host = args[i + 1]; i += 2
+            host = args[i + 1]
+            i += 2
         elif args[i] == '--port' and i + 1 < len(args):
-            port = int(args[i + 1]); i += 2
+            port = int(args[i + 1])
+            i += 2
         elif args[i] == '--reload':
-            reload = True; i += 1
+            reload = True
+            i += 1
         else:
             i += 1
     try:
@@ -405,15 +511,26 @@ def cmd_solve(args):
     p.add_argument('--T', type=float, default=20.0)
     p.add_argument('--L', type=float, default=32.0)
     p.add_argument('--dt', type=float, default=0.005)
-    p.add_argument('--dim', type=int, choices=[1, 2, 3], default=1)
+    p.add_argument('--dim', type=int, default=None)
     p.add_argument('--output', choices=['json', 'npy'], default='json')
     p.add_argument('--out-file', default=None)
     ns = p.parse_args(args)
 
-    from runtime.core.solver import TriadParams, integrate, integrate_2d, integrate_3d
-    from runtime.physics.observables import crystallinity, dominant_wavenumber, peak_density, norm, ipr, fwhm
-    import numpy as np
+    from runtime.core.solver import TriadParams, integrate_nd
+    from runtime.physics.observables import (
+        crystallinity,
+        dominant_wavenumber,
+        fwhm,
+        ipr,
+        norm,
+        peak_density,
+    )
+    from triad import ntri as np
 
+    if ns.dim is None:
+        ns.dim = TriadParams().D
+    if ns.dim < 1:
+        p.error('--dim must be >= 1')
     if ns.regime:
         from stdlib.regimes import resolve_regime
         params = resolve_regime(ns.regime, N=ns.N, L=ns.L, dt=ns.dt)
@@ -422,22 +539,27 @@ def cmd_solve(args):
     else:
         params = TriadParams(N=ns.N, T=ns.T, L=ns.L, dt=ns.dt, D=ns.dim)
 
-    dispatch = {1: integrate, 2: integrate_2d, 3: integrate_3d}
-    result = dispatch[ns.dim](params)
+    result = integrate_nd(params)
 
     psi = result['psi_final']
     dx = float(result.get('dx', ns.L / ns.N))
-    psi_1d = psi.ravel()
     k_min = 2.0 * np.pi / ns.L
 
-    obs = {
-        'crystallinity': float(crystallinity(psi_1d, dx)),
-        'k_star': float(dominant_wavenumber(psi_1d, dx, k_min=k_min)),
-        'peak_density': float(peak_density(psi_1d)),
-        'norm': float(norm(psi_1d, dx)),
-        'ipr': float(ipr(psi_1d, dx)),
-        'fwhm': float(fwhm(psi_1d, dx)),
-    }
+    if psi.ndim == 1:
+        obs = {
+            'crystallinity': float(crystallinity(psi, dx)),
+            'k_star': float(dominant_wavenumber(psi, dx, k_min=k_min)),
+            'peak_density': float(peak_density(psi)),
+            'norm': float(norm(psi, dx)),
+            'ipr': float(ipr(psi, dx)),
+            'fwhm': float(fwhm(psi, dx)),
+        }
+    else:
+        rho = np.abs(psi) ** 2
+        obs = {
+            'peak_density': float(rho.max()),
+            'norm': float(rho.sum() * dx ** psi.ndim),
+        }
 
     if ns.output == 'json':
         t_arr = result.get('t', result.get('t_traj', np.array([ns.T])))
@@ -473,11 +595,16 @@ def cmd_observables(args):
     p.add_argument('--N', type=int, default=None)
     ns = p.parse_args(args)
 
-    import numpy as np
     from runtime.physics.observables import (
-        crystallinity, dominant_wavenumber, peak_density,
-        norm, ipr, fwhm, participation_ratio,
+        crystallinity,
+        dominant_wavenumber,
+        fwhm,
+        ipr,
+        norm,
+        participation_ratio,
+        peak_density,
     )
+    from triad import ntri as np
 
     psi = np.load(ns.file, allow_pickle=False)
     psi_1d = psi.ravel()
@@ -502,14 +629,64 @@ def cmd_observables(args):
     print(json.dumps(result, indent=2))
     return 0
 
+def cmd_plot(args):
+    safe = False
+    if not args:
+        print('usage: triad plot <file.tri> [--out path.png]', file=sys.stderr)
+        return 1
+    path = args[0]
+    out_path = None
+    i = 1
+    while i < len(args):
+        if args[i] == '--out' and i + 1 < len(args):
+            out_path = args[i + 1]
+            i += 2
+        else:
+            i += 1
+    if not os.path.exists(path):
+        print(f'error: file not found: {path}', file=sys.stderr)
+        return 1
+    from frontend.errors import LexError, ParseError
+    from frontend.parser_universal import parse
+    from runtime.compiler_runtime import CompileError, TriadCompiler
+    try:
+        with open(path) as f:
+            src = f.read()
+        mod = parse(src, path)
+        compiler = TriadCompiler()
+        compiler.compile_and_run(mod, safe=safe)
+        if out_path is None:
+            base = os.path.splitext(os.path.basename(path))[0]
+            out_path = os.path.join(os.path.dirname(os.path.abspath(path)),
+                                    f'{base}.png')
+        print(f'plot: {path} -> {out_path}')
+        return 0
+    except (LexError, ParseError) as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except CompileError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f'plot error: {e}', file=sys.stderr)
+        return 1
+
+def cmd_tui(args):
+    try:
+        from cli.tui import run_tui
+    except ImportError:
+        print('error: TUI dependencies not installed. run: pip install "triadlang[tui]"', file=sys.stderr)
+        return 1
+    return run_tui(args)
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
-    if not argv:
+    if not argv or argv[0] in ('-h', '--help', 'help'):
         print('TriadLang')
         print()
         print('Usage:')
-        print('  triad run <file.tri>              Run a .tri file')
+        print('  triad run <file.tri> [--unsafe]     Run a .tri file (safe by default)')
         print('  triad check <file.tri>            Type check')
         print('  triad compile <file.tri> --native [--no-boehm] [-o out]  Compile to native binary')
         print('  triad repl                        Interactive REPL')
@@ -521,22 +698,41 @@ def main(argv=None):
         print('  triad doctor                      Check installation')
         print('  triad test                        Run tests')
         print('  triad bench <file.tri>            Benchmark')
-        print('  triad debug <file.tri> [-b N]     Debug with breakpoints')
-        print('  triad docgen <file|dir> [-f md|html]  Generate docs')
+        print('  triad debug <file.tri> [-b N] [--solver]  Debug with breakpoints (source + solver-native)')
+        print('  triad docgen <file|dir> [-f markdown|md|html]  Generate docs')
         print('  triad fmt <file.tri>              Format')
         print('  triad serve [--host HOST] [--port PORT] [--reload]  Start API server')
         print('  triad solve [--regime NAME] [--N N] [--T T] [--dim 1|2|3] [--output json|npy]')
         print('  triad observables <file.npy> [--dx DX] [--L L]')
+        print('  triad tui [file.tri] [--solver|--repl]   Interactive TUI')
+        print('  triad setup [--yes] [--all] [--extras=a,b] [--native|--no-native]  Guided install')
+        print('  triad watch <file|dir> [--cmd run|check]  Re-run on save (hot reload)')
+        print('  triad bundle <app.tri> [-o out.pyz]   Package app as standalone .pyz')
+        print('  triad play [--port P]                 3D engine in the browser')
+        print('  triad plot <file.tri> [--out path.png]  Run a plotting .tri and emit a PNG')
+        print('  triad memory <start|record|recall|resonate|sleep|status>  Crystal memory')
+        print('  triad jit-stats                        JIT hot-spot tracker')
         return 0
     cmd = argv[0]
     rest = argv[1:]
     if cmd.endswith('.tri'):
         return cmd_run([cmd])
-    commands = {'run': cmd_run, 'check': cmd_check, 'compile': cmd_compile, 'repl': cmd_repl, 'lsp': cmd_lsp, 'init': cmd_init, 'install': cmd_install, 'publish': cmd_publish, 'list': cmd_list, 'doctor': cmd_doctor, 'test': cmd_test, 'fmt': cmd_fmt, 'bench': cmd_bench, 'debug': cmd_debug, 'docgen': cmd_docgen, 'serve': cmd_serve, 'solve': cmd_solve, 'observables': cmd_observables, 'jit-stats': cmd_jit_stats}
+    commands = {'run': cmd_run, 'check': cmd_check, 'compile': cmd_compile, 'repl': cmd_repl, 'lsp': cmd_lsp, 'init': cmd_init, 'install': cmd_install, 'publish': cmd_publish, 'list': cmd_list, 'doctor': cmd_doctor, 'test': cmd_test, 'fmt': cmd_fmt, 'bench': cmd_bench, 'debug': cmd_debug, 'docgen': cmd_docgen, 'serve': cmd_serve, 'solve': cmd_solve, 'observables': cmd_observables, 'jit-stats': cmd_jit_stats, 'tui': cmd_tui, 'setup': cmd_setup, 'plot': cmd_plot, 'watch': cmd_watch, 'bundle': cmd_bundle, 'play': cmd_play, 'memory': cmd_memory}
     fn = commands.get(cmd)
     if fn is None:
         print(f'unknown command: {cmd}', file=sys.stderr)
         return 1
     return fn(rest)
+def cmd_memory(args):
+    import sys
+
+    from cli.triad_memory import main as _memory_main
+    saved = sys.argv[:]
+    sys.argv = ['triad', 'memory'] + list(args)
+    try:
+        _memory_main()
+    finally:
+        sys.argv = saved
+
 if __name__ == '__main__':
     sys.exit(main())

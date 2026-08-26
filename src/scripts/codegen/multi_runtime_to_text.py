@@ -1,10 +1,12 @@
 import os
 import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import numpy as np
-from runtime.core.solver import TriadParams
-from runtime.core.multi_runtime import MultiRuntime, CouplingEdge, Segment
 from runtime.codec.codec import IntCalib, encode_int
+from runtime.core.multi_runtime import CouplingLink, MultiRuntime, Segment
+from runtime.core.solver import TriadParams
+from triad import ntri as np
+
 NUM_SAMPLES = 4
 
 def _f(x: float) -> str:
@@ -52,8 +54,8 @@ def build_program() -> tuple[MultiRuntime, list[str]]:
     int_calib = IntCalib()
 
     def make_params(seed: int) -> TriadParams:
-        
-        return TriadParams(N=N, L=L, dt=dt, T=T_settle + T_couple, hbar=1.0, m=1.0, omega=1.0, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.0, fdt_couple=False, kT=1.0, lam=np.array([0.05]), nu=np.array([0.5]), mode='full', seed=seed, V_ext='harmonic', D=1)
+
+        return TriadParams(N=N, L=L, dt=dt, T=T_settle + T_couple, hbar=1.0, m=1.0, omega=1.0, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, fdt_couple=True, kT=1.0, lam=np.array([-0.05, -0.03, -0.01]), nu=np.array([0.5, 0.1, 0.02]), mode='triad', seed=seed, V_ext='harmonic', D=1)
     rt = MultiRuntime(dt=dt, record_every=4)
     pA = make_params(seed=11)
     pB = make_params(seed=22)
@@ -61,14 +63,14 @@ def build_program() -> tuple[MultiRuntime, list[str]]:
     psiB = encode_int(5, int_calib, L, N)
     rt.add_substrate('A', pA, psi=psiA)
     rt.add_substrate('B', pB, psi=psiB)
-    seg1 = Segment(t_start=0.0, t_end=T_settle, edges=[], active_ids=None)
+    seg1 = Segment(t_start=0.0, t_end=T_settle, links=[], active_ids=None)
     rt.add_segment(seg1)
     rt.global_t = T_settle
     rt.global_t = 0.0
-    edges = [CouplingEdge(src_id=0, dst_id=1, kappa=-0.3, coupling_mode='density'), CouplingEdge(src_id=1, dst_id=0, kappa=-0.2, coupling_mode='dc_subtracted')]
-    seg2 = Segment(t_start=T_settle, t_end=T_settle + T_couple, edges=edges, active_ids=None)
+    links = [CouplingLink(src_id=0, dst_id=1, kappa=-0.3, coupling_mode='density'), CouplingLink(src_id=1, dst_id=0, kappa=-0.2, coupling_mode='dc_subtracted')]
+    seg2 = Segment(t_start=T_settle, t_end=T_settle + T_couple, links=links, active_ids=None)
     rt.add_segment(seg2)
-    rt.segments = [Segment(t_start=0.0, t_end=T_settle, edges=[], active_ids=None), seg2]
+    rt.segments = [Segment(t_start=0.0, t_end=T_settle, links=[], active_ids=None), seg2]
     return (rt, ['A', 'B'])
 
 def run() -> str:
@@ -78,7 +80,7 @@ def run() -> str:
     out.append(f"diverged {int(bool(res.get('diverged')))}")
     out.append(f'global_t {_f(rt.global_t)}')
     for n in names:
-        sub = next((s for s in rt.substrates.values() if s.name == n))
+        sub = next(s for s in rt.substrates.values() if s.name == n)
         psi = np.asarray(sub.psi)
         rho = np.abs(psi) ** 2
         norm = float(rho.sum() * sub.dx)

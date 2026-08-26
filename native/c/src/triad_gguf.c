@@ -9,17 +9,13 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-/* ═══════════════════════════════
-   F16 → F64 conversion
-   ═══════════════════════════════ */
-
 static double f16_to_f64(uint16_t h) {
     uint32_t sign = (h >> 15) & 1;
     uint32_t exp  = (h >> 10) & 0x1F;
     uint32_t mant = h & 0x3FF;
     if (exp == 0) {
         if (mant == 0) return sign ? -0.0 : 0.0;
-        /* subnormal */
+
         double v = ldexp((double)mant, -24);
         return sign ? -v : v;
     }
@@ -30,10 +26,6 @@ static double f16_to_f64(uint16_t h) {
     double v = ldexp((double)(mant + 1024), (int)exp - 25);
     return sign ? -v : v;
 }
-
-/* ═══════════════════════════════
-   GGUF parsing helpers
-   ═══════════════════════════════ */
 
 typedef struct {
     const uint8_t *data;
@@ -97,7 +89,7 @@ static GGUFKeyValue r_kv(Reader *r) {
         case GGUF_TYPE_ARRAY: {
             kv.val.arr.elem_type = (GGUFValueType)r_u32(r);
             kv.val.arr.len = r_u64(r);
-            /* Store array position, skip data */
+
             kv.val.arr.data = (void*)(r->data + r->pos);
             for (uint64_t i = 0; i < kv.val.arr.len; i++)
                 r_skip_val(r, kv.val.arr.elem_type);
@@ -107,20 +99,19 @@ static GGUFKeyValue r_kv(Reader *r) {
     return kv;
 }
 
-/* Type size in bytes (for quantized: bytes per block) */
 size_t ggml_type_size(GGMLType t) {
     switch (t) {
         case GGML_TYPE_F32:  return 4;
         case GGML_TYPE_F16:  return 2;
         case GGML_TYPE_BF16: return 2;
-        case GGML_TYPE_Q4_0: return 18;   /* 32 elem block */
+        case GGML_TYPE_Q4_0: return 18;
         case GGML_TYPE_Q4_1: return 20;
         case GGML_TYPE_Q5_0: return 22;
         case GGML_TYPE_Q5_1: return 24;
-        case GGML_TYPE_Q8_0: return 34;   /* 32 elem block */
-        case GGML_TYPE_Q2_K: return 84;   /* 256 elem superblock */
+        case GGML_TYPE_Q8_0: return 34;
+        case GGML_TYPE_Q2_K: return 84;
         case GGML_TYPE_Q3_K: return 110;
-        case GGML_TYPE_Q4_K: return 144;  /* 256 elem superblock */
+        case GGML_TYPE_Q4_K: return 144;
         case GGML_TYPE_Q5_K: return 176;
         case GGML_TYPE_Q6_K: return 210;
         case GGML_TYPE_Q8_K: return 292;
@@ -139,10 +130,6 @@ int64_t ggml_block_size(GGMLType t) {
     }
 }
 
-/* ═══════════════════════════════
-   GGUF open / close
-   ═══════════════════════════════ */
-
 GGUFFile *gguf_open(const char *path) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) { perror("gguf_open"); return NULL; }
@@ -156,9 +143,8 @@ GGUFFile *gguf_open(const char *path) {
 
     Reader r = { .data = (const uint8_t*)addr, .pos = 0, .size = file_size };
 
-    /* Magic */
     uint32_t magic = r_u32(&r);
-    if (magic != 0x46554747) { /* "GGUF" little-endian */
+    if (magic != 0x46554747) {
         fprintf(stderr, "not a GGUF file (magic: 0x%08x)\n", magic);
         munmap(addr, file_size);
         close(fd);
@@ -175,12 +161,10 @@ GGUFFile *gguf_open(const char *path) {
     f->n_tensors = (int64_t)r_u64(&r);
     f->n_kv = (int64_t)r_u64(&r);
 
-    /* Read KV pairs */
     f->kv = calloc(f->n_kv, sizeof(GGUFKeyValue));
     for (int64_t i = 0; i < f->n_kv; i++)
         f->kv[i] = r_kv(&r);
 
-    /* Read tensor infos */
     f->tensors = calloc(f->n_tensors, sizeof(GGUFTensorInfo));
     for (int64_t i = 0; i < f->n_tensors; i++) {
         GGUFTensorInfo *ti = &f->tensors[i];
@@ -194,14 +178,12 @@ GGUFFile *gguf_open(const char *path) {
         ti->type = (GGMLType)r_u32(&r);
         ti->offset = r_u64(&r);
 
-        /* Compute byte size */
         int64_t bs = ggml_block_size(ti->type);
         size_t ts = ggml_type_size(ti->type);
         ti->n_bytes = (size_t)((ti->n_elements + bs - 1) / bs) * ts;
     }
 
-    /* Data section starts at aligned position after metadata */
-    size_t align = 32;  /* GGUF default alignment */
+    size_t align = 32;
     f->data_offset = (r.pos + align - 1) & ~(align - 1);
 
     return f;
@@ -222,10 +204,6 @@ void gguf_close(GGUFFile *f) {
     free(f->path);
     free(f);
 }
-
-/* ═══════════════════════════════
-   KV lookups
-   ═══════════════════════════════ */
 
 const GGUFKeyValue *gguf_find_kv(const GGUFFile *f, const char *key) {
     for (int64_t i = 0; i < f->n_kv; i++)
@@ -291,10 +269,6 @@ char *gguf_get_array_str(const GGUFKeyValue *kv, uint64_t index) {
     return NULL;
 }
 
-/* ═══════════════════════════════
-   Tensor lookups
-   ═══════════════════════════════ */
-
 const GGUFTensorInfo *gguf_find_tensor(const GGUFFile *f, const char *name) {
     for (int64_t i = 0; i < f->n_tensors; i++)
         if (strcmp(f->tensors[i].name, name) == 0) return &f->tensors[i];
@@ -304,10 +278,6 @@ const GGUFTensorInfo *gguf_find_tensor(const GGUFFile *f, const char *name) {
 const void *gguf_tensor_data(const GGUFFile *f, const GGUFTensorInfo *t) {
     return (const uint8_t*)f->mmap_addr + f->data_offset + t->offset;
 }
-
-/* ═══════════════════════════════
-   Dequantization
-   ═══════════════════════════════ */
 
 void dequantize_f32(const void *src, double *dst, int64_t n) {
     const float *s = (const float*)src;
@@ -349,7 +319,6 @@ void dequantize_q4_K(const void *src, double *dst, int64_t n) {
         double d = f16_to_f64(blocks[b].d);
         double dmin = f16_to_f64(blocks[b].dmin);
 
-        /* Decode 6-bit scales from 12 bytes -> 8 sub-block scales + 8 mins */
         uint8_t sc[8], mn[8];
         for (int i = 0; i < 4; i++) {
             sc[i]     = blocks[b].scales[i] & 0x3F;
@@ -371,7 +340,6 @@ void dequantize_q4_K(const void *src, double *dst, int64_t n) {
     }
 }
 
-/* Same scale decoder used by Q4_K and Q5_K in llama.cpp */
 static inline void get_scale_min_k4(int j, const uint8_t *q, uint8_t *d, uint8_t *m) {
     if (j < 4) {
         *d = q[j] & 63; *m = q[j + 4] & 63;
@@ -381,11 +349,6 @@ static inline void get_scale_min_k4(int j, const uint8_t *q, uint8_t *d, uint8_t
     }
 }
 
-/* Q5_K: 256 elements per block, 176 bytes
-   Layout: d(f16) + dmin(f16) + scales[12] + qh[32] + qs[128]
-   Same scale layout as Q4_K (get_scale_min_k4).
-   qh[0..31] stores 4 pairs of bits per byte, one pair per
-   64-element group: u1=1,u2=2 for group 0, u1=4,u2=8 for group 1, etc. */
 void dequantize_q5_K(const void *src, double *dst, int64_t n) {
     const uint8_t *blocks = (const uint8_t*)src;
     int64_t nb = n / 256;
@@ -433,12 +396,6 @@ void dequantize_q5_K(const void *src, double *dst, int64_t n) {
     }
 }
 
-/* Q6_K: 256 elements per block, 210 bytes
-   Layout: ql[128] + qh[64] + scales[16] + d(f16)
-   Match llama.cpp: ql[0..63] for first 128 elements, ql[64..127] for next 128.
-   Within each 64-byte ql group: ql[l+0] interleaves elements l and l+64,
-   ql[l+32] interleaves elements l+32 and l+96.
-   qh[l] has 4 pairs of bits for elements l, l+32, l+64, l+96. */
 void dequantize_q6_K(const void *src, double *dst, int64_t n) {
     const uint8_t *blocks = (const uint8_t*)src;
     int64_t nb = n / 256;
@@ -455,7 +412,6 @@ void dequantize_q6_K(const void *src, double *dst, int64_t n) {
         const int8_t *sc = (const int8_t*)(bp + 192);
         int base = (int)(i * 256);
 
-        /* Two 128-element groups per block */
         for (int n = 0; n < 256; n += 128) {
             for (int l = 0; l < 32; l++) {
                 int is = l / 16;

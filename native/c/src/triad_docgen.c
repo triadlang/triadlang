@@ -1,9 +1,3 @@
-/* triad_docgen.c — Port of compiler/docgen.py.
- *
- * String-scanning extractor + renderer. Mirrors parse_tri_docs +
- * to_markdown + to_html line by line. Validated byte-equal vs Python
- * over .tri fixtures under examples/ via native/c/parity_docgen.
- */
 #include "triad_docgen.h"
 
 #include <ctype.h>
@@ -11,8 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ─── Buf ─────────────────────────────────────────────────────────── */
 
 typedef struct {
     char  *data;
@@ -55,10 +47,8 @@ static const char *buf_to_arena(TriadArena *a, Buf *b) {
     return o;
 }
 
-/* ─── Line scanning ───────────────────────────────────────────────── */
-
 typedef struct {
-    const char **lines;     /* arena-owned */
+    const char **lines;
     size_t       n;
 } Lines;
 
@@ -86,7 +76,6 @@ static Lines split_lines(TriadArena *a, const char *src) {
     return L;
 }
 
-/* lstrip helpers: indent = leading spaces count. */
 static int leading_spaces(const char *s) {
     int n = 0;
     while (s[n] == ' ' || s[n] == '\t') n++;
@@ -97,7 +86,6 @@ static int starts_with(const char *s, const char *p) {
     return strncmp(s, p, strlen(p)) == 0;
 }
 
-/* Strip both ends, return arena-owned copy. */
 static const char *strip_dup(TriadArena *a, const char *s) {
     while (*s == ' ' || *s == '\t') s++;
     size_t L = strlen(s);
@@ -109,8 +97,6 @@ static const char *strip_dup(TriadArena *a, const char *s) {
 
 static int is_ident_char(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
-/* Match: fn <name> ( <params> ) — captures name+params; returns 0 on
- * failure, 1 on success. Mirrors r'fn\s+(\w+)\s*\(([^)]*)\)'. */
 static int match_fn(const char *line, const char **out_name, size_t *out_name_len,
                     const char **out_params, size_t *out_params_len) {
     if (!starts_with(line, "fn")) return 0;
@@ -133,7 +119,6 @@ static int match_fn(const char *line, const char **out_name, size_t *out_name_le
     return 1;
 }
 
-/* Match: class <Name>( < <Parent> )? */
 static int match_class(const char *line, const char **out_name, size_t *out_name_len,
                        const char **out_parent, size_t *out_parent_len) {
     if (!starts_with(line, "class")) return 0;
@@ -158,7 +143,6 @@ static int match_class(const char *line, const char **out_name, size_t *out_name
     return 1;
 }
 
-/* Match: type <Name> */
 static int match_type(const char *line, const char **out_name, size_t *out_name_len) {
     if (!starts_with(line, "type")) return 0;
     const char *p = line + 4;
@@ -172,7 +156,6 @@ static int match_type(const char *line, const char **out_name, size_t *out_name_
     return 1;
 }
 
-/* Match: const <name> = <value> */
 static int match_const(const char *line, const char **out_name, size_t *out_name_len,
                        const char **out_value, size_t *out_value_len) {
     if (!starts_with(line, "const")) return 0;
@@ -190,7 +173,7 @@ static int match_const(const char *line, const char **out_name, size_t *out_name
     while (isspace((unsigned char)*p)) p++;
     *out_value = p;
     *out_value_len = strlen(p);
-    /* Trim trailing spaces from value length. */
+
     while (*out_value_len > 0) {
         char c = (*out_value)[*out_value_len - 1];
         if (c == ' ' || c == '\t' || c == '\r') (*out_value_len)--;
@@ -199,30 +182,28 @@ static int match_const(const char *line, const char **out_name, size_t *out_name
     return 1;
 }
 
-/* ─── Parsed doc model ────────────────────────────────────────────── */
-
 typedef struct {
     const char *name;
-    const char *kind;   /* "args", "kwargs", or NULL */
-    const char *deflt;  /* nullable */
+    const char *kind;
+    const char *deflt;
 } ParamInfo;
 
 typedef struct {
     const char *name;
     ParamInfo  *params;
     size_t      params_len;
-    const char *doc;     /* may be "" */
+    const char *doc;
     int         line;
 } FnInfo;
 
 typedef struct {
     const char *name;
-    const char *deflt;   /* nullable */
+    const char *deflt;
 } ClassField;
 
 typedef struct {
     const char *name;
-    const char *parent;  /* may be "" */
+    const char *parent;
     ClassField *fields;
     size_t      fields_len;
     FnInfo     *methods;
@@ -258,7 +239,6 @@ typedef struct {
     size_t       imports_len;
 } DocModel;
 
-/* Append-helpers using realloc; pointer fixups happen at finalize time. */
 typedef struct { void *items; size_t len, cap, esize; } Vec;
 static void vec_init(Vec *v, size_t es) { v->items=NULL; v->len=v->cap=0; v->esize=es; }
 static void *vec_push(Vec *v) {
@@ -280,10 +260,9 @@ static void *vec_to_arena(TriadArena *a, Vec *v) {
     return out;
 }
 
-/* Parse `params_raw` into ParamInfo[]. Mirrors _parse_params. */
 static void parse_params(TriadArena *a, const char *params_raw,
                          size_t raw_len, ParamInfo **out, size_t *out_len) {
-    /* Trim outer whitespace; check empty. */
+
     while (raw_len && (*params_raw == ' ' || *params_raw == '\t')) {
         params_raw++; raw_len--;
     }
@@ -291,7 +270,6 @@ static void parse_params(TriadArena *a, const char *params_raw,
         raw_len--;
     if (raw_len == 0) { *out = NULL; *out_len = 0; return; }
 
-    /* Split by ','. */
     Vec v; vec_init(&v, sizeof(ParamInfo));
     const char *p = params_raw;
     const char *end = params_raw + raw_len;
@@ -300,7 +278,7 @@ static void parse_params(TriadArena *a, const char *params_raw,
         while (p < end && *p != ',') p++;
         size_t L = (size_t)(p - seg);
         if (p < end && *p == ',') p++;
-        /* Trim segment. */
+
         while (L > 0 && (*seg == ' ' || *seg == '\t')) { seg++; L--; }
         while (L > 0 && (seg[L-1] == ' ' || seg[L-1] == '\t')) L--;
         if (L == 0) continue;
@@ -315,7 +293,7 @@ static void parse_params(TriadArena *a, const char *params_raw,
             memcpy(nm, seg + 1, L - 1); nm[L-1] = '\0';
             pi->name = nm; pi->kind = "args"; pi->deflt = NULL;
         } else {
-            /* Look for '=' split. */
+
             const char *eq = NULL;
             for (size_t i = 0; i < L; ++i) {
                 if (seg[i] == '=') { eq = seg + i; break; }
@@ -345,7 +323,6 @@ static void parse_params(TriadArena *a, const char *params_raw,
     *out = (ParamInfo *)vec_to_arena(a, &v);
 }
 
-/* _parse_fn equivalent: line starts at `start`. Returns 0 on no-match. */
 static int parse_fn_at(TriadArena *a, const Lines *L, size_t start, FnInfo *out) {
     const char *line = lstrip(L->lines[start]);
     const char *name; size_t nlen;
@@ -366,7 +343,6 @@ static int parse_fn_at(TriadArena *a, const Lines *L, size_t start, FnInfo *out)
     return 1;
 }
 
-/* _parse_class equivalent. */
 static int parse_class_at(TriadArena *a, const Lines *L, size_t start, ClassInfo *out) {
     const char *line = lstrip(L->lines[start]);
     const char *name; size_t nlen;
@@ -413,7 +389,7 @@ static int parse_class_at(TriadArena *a, const Lines *L, size_t start, ClassInfo
             }
             i++; continue;
         }
-        /* field: '\w+' or '\w+ = .+' */
+
         const char *q = cstr;
         const char *id_start = q;
         while (is_ident_char(*q)) q++;
@@ -449,7 +425,6 @@ static int parse_class_at(TriadArena *a, const Lines *L, size_t start, ClassInfo
     return 1;
 }
 
-/* _parse_type equivalent. */
 static int parse_type_at(TriadArena *a, const Lines *L, size_t start, TypeInfo *out) {
     const char *line = lstrip(L->lines[start]);
     const char *name; size_t nlen;
@@ -472,7 +447,7 @@ static int parse_type_at(TriadArena *a, const Lines *L, size_t start, TypeInfo *
         if (starts_with(cstr, "//") && out->doc[0] == '\0') {
             out->doc = strip_dup(a, cstr + 2);
         } else {
-            /* match r'\s+(\w+)' on the ORIGINAL line. */
+
             const char *p = cline;
             while (*p == ' ' || *p == '\t') p++;
             if (p > cline) {
@@ -493,8 +468,6 @@ static int parse_type_at(TriadArena *a, const Lines *L, size_t start, TypeInfo *
     out->fields = (const char **)vec_to_arena(a, &fields);
     return 1;
 }
-
-/* ─── parse_tri_docs ──────────────────────────────────────────────── */
 
 static DocModel parse_tri_docs(TriadArena *a, const char *source) {
     DocModel m = {0};
@@ -574,8 +547,6 @@ static DocModel parse_tri_docs(TriadArena *a, const char *source) {
     return m;
 }
 
-/* ─── Markdown renderer ──────────────────────────────────────────── */
-
 static void emit_param_str(Buf *b, const ParamInfo *p) {
     if (p->kind && strcmp(p->kind, "kwargs") == 0) {
         buf_printf(b, "**%s", p->name);
@@ -590,15 +561,11 @@ static void emit_param_str(Buf *b, const ParamInfo *p) {
 
 static const char *render_markdown(TriadArena *a, const DocModel *d, const char *filename) {
     Buf parts; buf_init(&parts);
-    Buf tmp; /* used per-section to mirror parts.append + final "\n".join */
+    Buf tmp;
 
-    /* Helper: append a "part" with the same semantics as Python's
-     * parts.append(x) followed by "\n".join. Each call adds the string
-     * then '\n' (we'll trim the trailing one at the end). */
     #define APPEND(s) do { buf_puts(&parts, (s)); buf_putc(&parts, '\n'); } while(0)
     #define APPEND_NL() buf_putc(&parts, '\n')
 
-    /* title = filename or "Module" */
     const char *title = (filename && filename[0]) ? filename : "Module";
     buf_init(&tmp);
     buf_printf(&tmp, "# %s\n", title);
@@ -715,16 +682,12 @@ static const char *render_markdown(TriadArena *a, const DocModel *d, const char 
     #undef APPEND
     #undef APPEND_NL
 
-    /* Python uses "\n".join(parts). Our buffer ended each part with
-     * '\n', so we need to strip the trailing one (last separator). */
     if (parts.len > 0 && parts.data[parts.len - 1] == '\n') {
         parts.len--;
         parts.data[parts.len] = '\0';
     }
     return buf_to_arena(a, &parts);
 }
-
-/* ─── HTML renderer ──────────────────────────────────────────────── */
 
 static void html_escape_into(Buf *b, const char *s) {
     for (; *s; ++s) {
@@ -737,17 +700,11 @@ static void html_escape_into(Buf *b, const char *s) {
     }
 }
 
-/* Mirror _inline_format: escape, then `code`→<code>, **bold**→<strong>. */
 static void inline_format_into(Buf *b, const char *s) {
-    /* Step 1: HTML-escape. */
+
     Buf escaped; buf_init(&escaped);
     html_escape_into(&escaped, s);
 
-    /* Step 2: greedy non-overlapping `...` then **...** like Python regex.
-     * Python applies the regex sub twice on the same string; the second
-     * sees backticks already gone, but the `code` replacement may have
-     * introduced new content. We mirror that. */
-    /* Apply r'`([^`]+)`' -> <code>\1</code> */
     Buf step1; buf_init(&step1);
     const char *p = escaped.data;
     while (*p) {
@@ -765,7 +722,7 @@ static void inline_format_into(Buf *b, const char *s) {
         buf_putc(&step1, *p++);
     }
     buf_free(&escaped);
-    /* Apply r'\*\*([^*]+)\*\*' -> <strong>\1</strong> */
+
     p = step1.data;
     while (*p) {
         if (*p == '*' && p[1] == '*') {
@@ -784,8 +741,6 @@ static void inline_format_into(Buf *b, const char *s) {
     buf_free(&step1);
 }
 
-/* Mirror line.strip('*') in Python: remove leading/trailing '*' chars
- * until a non-'*' is found, then escape the result. */
 static const char *strip_stars(TriadArena *a, const char *s) {
     while (*s == '*') s++;
     size_t L = strlen(s);
@@ -812,7 +767,7 @@ static const char *render_html(TriadArena *a, const DocModel *d, const char *fil
         "h3{color:#555;}</style></head><body>\n");
 
     int in_code = 0;
-    /* Split md by '\n'. */
+
     Lines L = split_lines(a, md);
     for (size_t i = 0; i < L.n; ++i) {
         const char *line = L.lines[i];
@@ -844,7 +799,7 @@ static const char *render_html(TriadArena *a, const DocModel *d, const char *fil
             inline_format_into(&out, line + 2);
             buf_puts(&out, "</li>\n");
         } else {
-            /* Python: elif line.startswith('*') and line.endswith('*'): */
+
             size_t L_ = strlen(line);
             if (L_ >= 2 && line[0] == '*' && line[L_-1] == '*') {
                 const char *stripped = strip_stars(a, line);
@@ -852,7 +807,7 @@ static const char *render_html(TriadArena *a, const DocModel *d, const char *fil
                 html_escape_into(&out, stripped);
                 buf_puts(&out, "</em></p>\n");
             } else {
-                /* elif line.strip(): */
+
                 int has = 0;
                 for (const char *p = line; *p; ++p) {
                     if (*p != ' ' && *p != '\t') { has = 1; break; }
@@ -868,14 +823,9 @@ static const char *render_html(TriadArena *a, const DocModel *d, const char *fil
         }
     }
     buf_puts(&out, "</body></html>");
-    /* Python uses "\n".join, no trailing newline. */
-    /* Our writes appended '\n' after most lines; that matches the join
-     * behavior of html_parts because each part already produced one
-     * "\n" separator. The final "</body></html>" has none. */
+
     return buf_to_arena(a, &out);
 }
-
-/* ─── Public API ─────────────────────────────────────────────────── */
 
 const char *triad_docgen_markdown(TriadArena *arena,
                                   const char *source,
@@ -892,4 +842,3 @@ const char *triad_docgen_html(TriadArena *arena,
     DocModel d = parse_tri_docs(arena, source);
     return render_html(arena, &d, filename ? filename : "");
 }
-

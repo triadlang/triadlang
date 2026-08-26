@@ -1,0 +1,89 @@
+import triad.nn as nn;
+import triad.net as net;
+import triad.tensor as tensor;
+
+print("TriadLM (TriadLayer + TriadFlow) vs TransformerLM (attn + Adam)");
+print("================================================================");
+print("");
+
+let VOCAB = 8;
+let SEQ = 24;
+let D = 32;
+let LAYERS = 2;
+let HEADS = 4;
+let FFN = 2;
+let STEPS = 200;
+let LR = 0.05;
+
+let xs_data = [];
+let ys_data = [];
+for b in range(8) {
+    let row_x = [];
+    let row_y = [];
+    for t in range(SEQ) {
+        row_x.push(t % 6);
+        row_y.push((t + 1) % 6);
+    }
+    xs_data.push(row_x);
+    ys_data.push(row_y);
+}
+
+let x = tensor.tensor(xs_data);
+let y = tensor.tensor(ys_data);
+
+fn ce(logits, targets) {
+    return tensor.cross_entropy(logits, targets);
+}
+
+print("--- TriadLM + TriadFlow ---");
+let triad_lm = net.TriadLM(VOCAB, D, LAYERS, HEADS, FFN);
+let triad_params = triad_lm.parameters();
+let triad_opt = nn.TriadFlow(triad_params, lr=LR, regime="B0", seed=3);
+print("params tensors: " + str(len(triad_params)));
+
+let first_t = 0.0;
+let last_t = 0.0;
+for step in range(STEPS) {
+    let out = triad_lm(x);
+    let logits = out[0];
+    let loss = ce(logits, y);
+    triad_opt.zero_grad();
+    loss.backward();
+    triad_opt.step();
+    let lv = float(loss);
+    if step == 0 { first_t = lv; }
+    if step == STEPS - 1 { last_t = lv; }
+    if step % 40 == 0 {
+        print("  step " + str(step) + " loss=" + str(lv) + " crystal=" + str(triad_opt.crystal_fraction()));
+    }
+}
+print("triad: " + str(first_t) + " -> " + str(last_t));
+print("crystal fraction: " + str(triad_opt.crystal_fraction()));
+print("");
+
+print("--- TransformerLM + Adam ---");
+let tx_lm = net.TransformerLM(VOCAB, D, LAYERS, HEADS, FFN);
+let tx_params = tx_lm.parameters();
+let tx_opt = nn.Adam(tx_params, LR);
+print("params tensors: " + str(len(tx_params)));
+
+let first_x = 0.0;
+let last_x = 0.0;
+for step in range(STEPS) {
+    let logits = tx_lm(x);
+    let loss = ce(logits, y);
+    tx_opt.zero_grad();
+    loss.backward();
+    tx_opt.step();
+    let lv = float(loss);
+    if step == 0 { first_x = lv; }
+    if step == STEPS - 1 { last_x = lv; }
+    if step % 40 == 0 {
+        print("  step " + str(step) + " loss=" + str(lv));
+    }
+}
+print("transformer: " + str(first_x) + " -> " + str(last_x));
+print("");
+print("summary:");
+print("  triad final       = " + str(last_t));
+print("  transformer final = " + str(last_x));

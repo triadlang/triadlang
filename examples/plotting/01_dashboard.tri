@@ -1,0 +1,116 @@
+
+import triad.plot as plt;
+import math;
+import random;
+random.seed(42);
+
+print("triad.plot dashboard — 4 pages");
+print("==============================");
+print("");
+
+let (fig1, ax1) = plt.subplots(figsize=(8, 4));
+let n = 400;
+let t = [];
+let signal = [];
+for i in range(n) {
+    let ti = i / 50.0;
+    t.push(ti);
+    let s = math.sin(ti) + 0.5 * math.cos(3.0 * ti) + 0.1 * (random.random() - 0.5);
+    signal.push(s);
+}
+let env_lo = [v - 0.5 for v in signal];
+let env_hi = [v + 0.5 for v in signal];
+ax1.fill_between(t, env_lo, env_hi, color="C0", alpha=0.2, label="envelope");
+ax1.plot(t, signal, color="C0", linewidth=1.2, label="signal");
+ax1.axhline(0.0, color="gray", linestyle="--", alpha=0.5);
+ax1.set_title("page 1 — time series with envelope");
+ax1.set_xlabel("time");
+ax1.set_ylabel("amplitude");
+ax1.legend();
+ax1.grid();
+fig1.savefig("build/dashboard_p1_timeseries.png");
+print("saved build/dashboard_p1_timeseries.png");
+
+let (fig2, ax_main) = plt.subplots(figsize=(7, 5));
+let npts = 500;
+let xs = [];
+let ys = [];
+let c = [];
+for i in range(npts) {
+    let xi = random.gauss(0, 1.5);
+    let yi = 0.6 * xi + random.gauss(0, 0.8);
+    xs.push(xi);
+    ys.push(yi);
+    c.push(xi * xi + yi * yi);
+}
+let sc = ax_main.scatter(xs, ys, c=c, cmap="plasma", s=18, alpha=0.8, colors="none");
+fig2.colorbar(sc, ax=ax_main, label="r²");
+ax_main.set_title("page 2 — scatter with density colormap");
+ax_main.set_xlabel("x");
+ax_main.set_ylabel("y");
+ax_main.set_xlim(-5, 5);
+ax_main.set_ylim(-5, 5);
+ax_main.grid();
+fig2.savefig("build/dashboard_p2_scatter.png");
+print("saved build/dashboard_p2_scatter.png");
+
+let (fig3, ax3) = plt.subplots(figsize=(7, 4));
+let labels = ["Q1", "Q2", "Q3", "Q4"];
+let revenue = [120.0, 145.0, 165.0, 190.0];
+let err = [10.0, 8.0, 12.0, 15.0];
+ax3.bar(labels, revenue, color="C2", alpha=0.7, label="revenue");
+ax3.errorbar(labels, revenue, yerr=err, fmt="none", ecolor="black",
+             elinewidth=1.5, capsize=4);
+ax3.set_ylabel("revenue ($k)");
+ax3.set_title("page 3 — bars + error bars + growth rate (twinx)");
+
+let ax3b = ax3.twinx();
+let growth = [];
+for i in range(len(revenue)) {
+    if i == 0 { growth.push(0.0); }
+    else { growth.push((revenue[i] - revenue[i - 1]) / revenue[i - 1] * 100.0); }
+}
+ax3b.plot(labels, growth, color="C3", marker="o", linewidth=2, label="growth %");
+ax3b.set_ylabel("growth (%)", color="C3");
+ax3b.set_ylim(0, 50);
+
+ax3.legend(loc="upper left");
+ax3b.legend(loc="upper right");
+fig3.savefig("build/dashboard_p3_bars.png");
+print("saved build/dashboard_p3_bars.png");
+
+let (fig4, axes4) = plt.subplots(2, 2, figsize=(8, 7));
+fig4.suptitle("page 4 — 2x2 imshow with different colormaps");
+let X = [];
+for i in range(48) { X.append(i / 47.0 * 2.0 - 1.0); }
+let Y = [];
+for j in range(48) { Y.append(j / 47.0 * 2.0 - 1.0); }
+let cmaps = ["viridis", "inferno", "plasma", "cividis"];
+let titles = ["viridis", "inferno", "plasma", "cividis"];
+let k = 0;
+for j in range(2) {
+    for i in range(2) {
+        let F = [];
+        for r in range(48) {
+            let row = [];
+            for c_ in range(48) {
+                let r2 = X[c_] * X[c_] + Y[r] * Y[r];
+                let v = math.exp(-2.0 * r2) * math.cos(6.0 * (X[c_] + Y[r]));
+                row.push(v);
+            }
+            F.append(row);
+        }
+        let im4 = axes4[j, i].imshow(F, cmap=cmaps[k], aspect="auto",
+                                      extent=[-1.0, 1.0, -1.0, 1.0],
+                                      origin="lower");
+        fig4.colorbar(im4, ax=axes4[j, i]);
+        axes4[j, i].set_title(titles[k]);
+        k = k + 1;
+    }
+}
+fig4.tight_layout();
+fig4.savefig("build/dashboard_p4_colormaps.png");
+print("saved build/dashboard_p4_colormaps.png");
+
+print("");
+print("dashboard: 4 pages, 9 figures, 6 colormaps, 1 errorbar, 1 twinx");

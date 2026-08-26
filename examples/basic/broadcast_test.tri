@@ -1,4 +1,4 @@
-import numpy as np;
+import triad.ntri as np;
 
 let a = np.array([1.0, 2.0, 3.0, 4.0]);
 let b = np.array([10.0, 20.0, 30.0, 40.0]);

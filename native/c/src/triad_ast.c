@@ -1,4 +1,3 @@
-/* triad_ast.c — AST kind names + tiny helpers. */
 #include "triad_frontend.h"
 
 const char *triad_ast_kind_name(TriadAstKind k) {
@@ -24,7 +23,16 @@ const char *triad_ast_kind_name(TriadAstKind k) {
         case TRIAD_AST_METHOD_CALL:    return "MethodCallExpr";
         case TRIAD_AST_ASSIGN_EXPR:    return "AssignExpr";
         case TRIAD_AST_YIELD_EXPR:     return "YieldExpr";
-        case TRIAD_AST_AWAIT_EXPR:     return "AwaitExpr";
+        case TRIAD_AST_AWAIT_EXPR:    return "AwaitExpr";
+        case TRIAD_AST_COMPLEX_LIT:  return "ComplexLit";
+        case TRIAD_AST_BYTES_LIT:    return "BytesLit";
+        case TRIAD_AST_SET_LIT:      return "SetLit";
+        case TRIAD_AST_TERNARY:     return "Ternary";
+        case TRIAD_AST_CHAIN_CMP:  return "ChainCmp";
+        case TRIAD_AST_SUPER:      return "Super";
+        case TRIAD_AST_DICT_COMP: return "DictComp";
+        case TRIAD_AST_SET_COMP:  return "SetComp";
+        case TRIAD_AST_GEN_COMP:  return "GenComp";
         case TRIAD_AST_LET:            return "LetStmt";
         case TRIAD_AST_DESTRUCT_LET:   return "DestructLetStmt";
         case TRIAD_AST_MAP_DESTRUCT:   return "MapDestructStmt";
@@ -46,14 +54,22 @@ const char *triad_ast_kind_name(TriadAstKind k) {
         case TRIAD_AST_FROM_IMPORT:    return "FromImportStmt";
         case TRIAD_AST_MATCH:          return "MatchStmt";
         case TRIAD_AST_YIELD_STMT:     return "YieldStmt";
+        case TRIAD_AST_WITH:           return "WithStmt";
+        case TRIAD_AST_ASSERT:         return "AssertStmt";
+        case TRIAD_AST_PASS:           return "PassStmt";
+        case TRIAD_AST_DEL:            return "DelStmt";
+        case TRIAD_AST_ASYNC_FOR:      return "AsyncForStmt";
+        case TRIAD_AST_ASYNC_WITH:     return "AsyncWithStmt";
         case TRIAD_AST_REG:            return "RegStmt";
         case TRIAD_AST_ENTITY:         return "EntityDecl";
         case TRIAD_AST_WORLD:          return "WorldDecl";
+        case TRIAD_AST_SUBSTRATE:      return "SubstrateDecl";
         case TRIAD_AST_COUPLE:         return "CoupleStmt";
         case TRIAD_AST_PAIR:           return "PairStmt";
         case TRIAD_AST_RING:           return "RingStmt";
         case TRIAD_AST_OBSERVE:        return "ObserveStmt";
         case TRIAD_AST_RUN:            return "RunStmt";
+        case TRIAD_AST_SEQUENCE:       return "SequenceStmt";
         case TRIAD_AST_ANNOTATION:     return "AnnotationStmt";
         case TRIAD_AST_MODULE:         return "Module";
         default:                       return "Unknown";

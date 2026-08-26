@@ -1,14 +1,9 @@
-/*
- * TriadLang Native Runtime — Stdlib wrappers (math, random, io, range)
- */
 #include "triad_rt.h"
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-
-/* ── Print ── */
 
 void triad_print(int32_t nargs, TriadValue *args) {
     for (int32_t i = 0; i < nargs; i++) {
@@ -33,8 +28,6 @@ TriadValue triad_input(TriadString *prompt) {
     return (TriadValue){.tag = TRIAD_STRING, .as = {.sval = s}};
 }
 
-/* ── Math ── */
-
 double triad_math_sqrt(double x)    { return sqrt(x); }
 double triad_math_sin(double x)     { return sin(x); }
 double triad_math_cos(double x)     { return cos(x); }
@@ -50,8 +43,6 @@ int64_t triad_math_clamp(int64_t x, int64_t lo, int64_t hi) { return x < lo ? lo
 double triad_math_pow(double b, double e) { return pow(b, e); }
 int64_t triad_math_min(int64_t a, int64_t b) { return a < b ? a : b; }
 int64_t triad_math_max(int64_t a, int64_t b) { return a > b ? a : b; }
-
-/* ── Random ── */
 
 static uint64_t _xorshift64(void) {
     static uint64_t state = 0;
@@ -93,8 +84,6 @@ void triad_random_shuffle(TriadList *l) {
 double triad_random_uniform(double lo, double hi) {
     return lo + triad_random_double() * (hi - lo);
 }
-
-/* ── Range ── */
 
 TriadList *triad_range(int64_t start, int64_t stop, int64_t step) {
     TriadList *l = triad_list_new();

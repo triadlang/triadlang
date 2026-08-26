@@ -1,12 +1,3 @@
-/*
- * TriadLang Native Runtime — FFTW3 wrapper
- *
- * Provides 1D FFT/IFFT, FFT frequency grid, and batched operations
- * needed by the split-step Fourier solver.
- *
- * Uses FFTW3 when available at compile time; falls back to a naive DFT
- * so the code compiles everywhere.
- */
 #include "triad_rt.h"
 
 #ifdef USE_FFTW
@@ -18,25 +9,21 @@
 #include <string.h>
 #endif
 
-/* ── Complex helpers ── */
-
 static TriadCplx cmul(TriadCplx a, TriadCplx b) {
     return (TriadCplx){ a.re*b.re - a.im*b.im, a.re*b.im + a.im*b.re };
 }
 
-static TriadCplx cadd(TriadCplx a, TriadCplx b) {
+static TriadCplx __attribute__((unused)) cadd(TriadCplx a, TriadCplx b) {
     return (TriadCplx){ a.re + b.re, a.im + b.im };
 }
 
-static TriadCplx cscale(TriadCplx a, double s) {
+static TriadCplx __attribute__((unused)) cscale(TriadCplx a, double s) {
     return (TriadCplx){ a.re * s, a.im * s };
 }
 
 static double cabs2(TriadCplx a) {
     return a.re*a.re + a.im*a.im;
 }
-
-/* ── FFT frequency grid ── */
 
 void triad_fftfreq(int32_t N, double dx, double *out) {
     for (int32_t i = 0; i < N; i++) {
@@ -49,25 +36,67 @@ void triad_fftfreq(int32_t N, double dx, double *out) {
         out[i] *= 2.0 * TRIAD_PI;
 }
 
-/* ── FFT / IFFT ── */
-
 #ifdef USE_FFTW
 
+static fftw_plan _p1d_fwd = NULL, _p1d_bwd = NULL;
+static int32_t   _p1d_N   = -1;
+
+static fftw_plan _p2d_fwd = NULL, _p2d_bwd = NULL;
+static int32_t   _p2d_N   = -1;
+
+static fftw_plan _p3d_fwd = NULL, _p3d_bwd = NULL;
+static int32_t   _p3d_N   = -1;
+
+static void _ensure_plan_1d(int32_t N) {
+    if (_p1d_N == N) return;
+    fftw_complex *a = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
+    fftw_complex *b = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
+    if (_p1d_fwd) fftw_destroy_plan(_p1d_fwd);
+    if (_p1d_bwd) fftw_destroy_plan(_p1d_bwd);
+    _p1d_fwd = fftw_plan_dft_1d(N, a, b, FFTW_FORWARD,  FFTW_ESTIMATE);
+    _p1d_bwd = fftw_plan_dft_1d(N, a, b, FFTW_BACKWARD, FFTW_ESTIMATE);
+    _p1d_N = N;
+    fftw_free(a); fftw_free(b);
+}
+
+static void _ensure_plan_2d(int32_t N) {
+    if (_p2d_N == N) return;
+    int64_t n2 = (int64_t)N * N;
+    fftw_complex *a = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n2);
+    fftw_complex *b = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n2);
+    if (_p2d_fwd) fftw_destroy_plan(_p2d_fwd);
+    if (_p2d_bwd) fftw_destroy_plan(_p2d_bwd);
+    _p2d_fwd = fftw_plan_dft_2d(N, N, a, b, FFTW_FORWARD,  FFTW_ESTIMATE);
+    _p2d_bwd = fftw_plan_dft_2d(N, N, a, b, FFTW_BACKWARD, FFTW_ESTIMATE);
+    _p2d_N = N;
+    fftw_free(a); fftw_free(b);
+}
+
+static void _ensure_plan_3d(int32_t N) {
+    if (_p3d_N == N) return;
+    int64_t n3 = (int64_t)N * N * N;
+    fftw_complex *a = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n3);
+    fftw_complex *b = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n3);
+    if (_p3d_fwd) fftw_destroy_plan(_p3d_fwd);
+    if (_p3d_bwd) fftw_destroy_plan(_p3d_bwd);
+    _p3d_fwd = fftw_plan_dft_3d(N, N, N, a, b, FFTW_FORWARD,  FFTW_ESTIMATE);
+    _p3d_bwd = fftw_plan_dft_3d(N, N, N, a, b, FFTW_BACKWARD, FFTW_ESTIMATE);
+    _p3d_N = N;
+    fftw_free(a); fftw_free(b);
+}
+
 void triad_fft_fn(int32_t N, const TriadCplx *in, TriadCplx *out) {
-    fftw_plan p = fftw_plan_dft_1d(N, (fftw_complex*)in, (fftw_complex*)out,
-                                    FFTW_FORWARD, FFTW_ESTIMATE);
-    fftw_execute(p);
-    fftw_destroy_plan(p);
+    _ensure_plan_1d(N);
+    fftw_execute_dft(_p1d_fwd, (fftw_complex*)in, (fftw_complex*)out);
 }
 
 void triad_ifft_fn(int32_t N, const TriadCplx *in, TriadCplx *out) {
-    fftw_plan p = fftw_plan_dft_1d(N, (fftw_complex*)in, (fftw_complex*)out,
-                                    FFTW_BACKWARD, FFTW_ESTIMATE);
-    fftw_execute(p);
-    fftw_destroy_plan(p);
+    _ensure_plan_1d(N);
+    fftw_execute_dft(_p1d_bwd, (fftw_complex*)in, (fftw_complex*)out);
+    double inv = 1.0 / N;
     for (int32_t i = 0; i < N; i++) {
-        out[i].re /= N;
-        out[i].im /= N;
+        out[i].re *= inv;
+        out[i].im *= inv;
     }
 }
 
@@ -96,14 +125,10 @@ void triad_ifft_fn(int32_t N, const TriadCplx *in, TriadCplx *out) {
 
 #endif
 
-/* ── In-place element-wise multiply in Fourier space ── */
-
 void triad_fft_fn_mul_inplace(int32_t N, TriadCplx *psi, const TriadCplx *factor) {
     for (int32_t i = 0; i < N; i++)
         psi[i] = cmul(psi[i], factor[i]);
 }
-
-/* ── In-place exp(i * V * dt) applied to psi ── */
 
 void triad_apply_potential(int64_t n, TriadCplx *psi,
                            const double *V, double dt_over_hbar) {
@@ -114,35 +139,26 @@ void triad_apply_potential(int64_t n, TriadCplx *psi,
     }
 }
 
-/* ── Density |psi|^2 (64-bit count) ── */
-
 void triad_density_64(int64_t n, const TriadCplx *psi, double *rho) {
     for (int64_t i = 0; i < n; i++)
         rho[i] = cabs2(psi[i]);
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   2D FFT / IFFT  (N x N row-major, stride = N)
-   ═══════════════════════════════════════════════════════════════════ */
-
 #ifdef USE_FFTW
 
 void triad_fft2_fn(int32_t N, const TriadCplx *in, TriadCplx *out) {
-    fftw_plan p = fftw_plan_dft_2d(N, N, (fftw_complex*)in, (fftw_complex*)out,
-                                   FFTW_FORWARD, FFTW_ESTIMATE);
-    fftw_execute(p);
-    fftw_destroy_plan(p);
+    _ensure_plan_2d(N);
+    fftw_execute_dft(_p2d_fwd, (fftw_complex*)in, (fftw_complex*)out);
 }
 
 void triad_ifft2_fn(int32_t N, const TriadCplx *in, TriadCplx *out) {
-    fftw_plan p = fftw_plan_dft_2d(N, N, (fftw_complex*)in, (fftw_complex*)out,
-                                   FFTW_BACKWARD, FFTW_ESTIMATE);
-    fftw_execute(p);
-    fftw_destroy_plan(p);
+    _ensure_plan_2d(N);
+    fftw_execute_dft(_p2d_bwd, (fftw_complex*)in, (fftw_complex*)out);
     int64_t total = (int64_t)N * N;
+    double inv = 1.0 / (double)total;
     for (int64_t i = 0; i < total; i++) {
-        out[i].re /= total;
-        out[i].im /= total;
+        out[i].re *= inv;
+        out[i].im *= inv;
     }
 }
 
@@ -186,28 +202,21 @@ void triad_ifft2_fn(int32_t N, const TriadCplx *in, TriadCplx *out) {
 
 #endif
 
-/* ═══════════════════════════════════════════════════════════════════
-   3D FFT / IFFT  (N x N x N row-major, stride = N*N)
-   ═══════════════════════════════════════════════════════════════════ */
-
 #ifdef USE_FFTW
 
 void triad_fft3_fn(int32_t N, const TriadCplx *in, TriadCplx *out) {
-    fftw_plan p = fftw_plan_dft_3d(N, N, N, (fftw_complex*)in, (fftw_complex*)out,
-                                   FFTW_FORWARD, FFTW_ESTIMATE);
-    fftw_execute(p);
-    fftw_destroy_plan(p);
+    _ensure_plan_3d(N);
+    fftw_execute_dft(_p3d_fwd, (fftw_complex*)in, (fftw_complex*)out);
 }
 
 void triad_ifft3_fn(int32_t N, const TriadCplx *in, TriadCplx *out) {
-    fftw_plan p = fftw_plan_dft_3d(N, N, N, (fftw_complex*)in, (fftw_complex*)out,
-                                   FFTW_BACKWARD, FFTW_ESTIMATE);
-    fftw_execute(p);
-    fftw_destroy_plan(p);
+    _ensure_plan_3d(N);
+    fftw_execute_dft(_p3d_bwd, (fftw_complex*)in, (fftw_complex*)out);
     int64_t total = (int64_t)N * N * N;
+    double inv = 1.0 / (double)total;
     for (int64_t i = 0; i < total; i++) {
-        out[i].re /= total;
-        out[i].im /= total;
+        out[i].re *= inv;
+        out[i].im *= inv;
     }
 }
 

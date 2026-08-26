@@ -1,0 +1,9 @@
+import triad.qalgo as qa;
+
+print("VQE — H2 molecule on 2 qubits");
+let r = qa.vqe_h2(seed=1);
+print(f"VQE energy  : {r["energy_vqe"]:.8f} Ha");
+print(f"exact energy: {r["energy_exact"]:.8f} Ha");
+print(f"gap         : {r["gap"]:.2e}");
+print(f"evaluations : {r["evaluations"]}");
+print(f"parameters  : {r["params"]}");

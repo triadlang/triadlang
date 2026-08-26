@@ -1,6 +1,8 @@
 from __future__ import annotations
-import numpy as np
+
 from runtime.ml.tensor import TriadTensor, _ensure_tensor
+from triad import ntri as np
+
 
 def accuracy(pred: TriadTensor, target: TriadTensor) -> float:
     pred = _ensure_tensor(pred)
@@ -20,7 +22,7 @@ def top_k_accuracy(pred: TriadTensor, target: TriadTensor, k: int=5) -> float:
     flat = pred._data.reshape(-1, pred._data.shape[-1])
     n = flat.shape[0]
     top_k_idx = np.argpartition(-flat, k, axis=-1)[:, :k]
-    correct = sum((1 for i in range(n) if tgt_idx[i] in top_k_idx[i]))
+    correct = sum(1 for i in range(n) if tgt_idx[i] in top_k_idx[i])
     return correct / n
 
 def perplexity(loss_value: float) -> float:

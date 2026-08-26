@@ -1,4 +1,4 @@
-let result = solver_solve({"N": 128, "T": 2.0, "dt": 0.005, "seed": 42})
+let result = solver_solve({"N": 128, "T": 2.0, "dt": 0.005, "seed": 42, "D": 1})
 
 print(f"N = {result["N"]}")
 print(f"norm = {result["norm"]}")

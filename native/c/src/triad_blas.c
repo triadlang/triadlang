@@ -1,9 +1,3 @@
-/*
- * TriadLang Native Runtime — BLAS wrappers
- *
- * Matrix multiply and vector operations for the nn layers.
- * Uses CBLAS when available; falls back to naive implementations.
- */
 #include "triad_rt.h"
 #include <math.h>
 #include <string.h>
@@ -11,8 +5,6 @@
 #ifdef USE_CBLAS
 #include <cblas.h>
 #endif
-
-/* ── Vector ops ── */
 
 void triad_vec_add(int64_t n, const double *a, const double *b, double *out) {
     for (int64_t i = 0; i < n; i++) out[i] = a[i] + b[i];
@@ -48,8 +40,6 @@ void triad_vec_tanh(int64_t n, const double *a, double *out) {
     for (int64_t i = 0; i < n; i++) out[i] = tanh(a[i]);
 }
 
-/* ── Matrix multiply: C(MxN) = A(MxK) * B(KxN), row-major ── */
-
 void triad_matmul(int64_t M, int64_t K, int64_t N,
                   const double *A, const double *B, double *C) {
 #ifdef USE_CBLAS
@@ -68,9 +58,7 @@ void triad_matmul(int64_t M, int64_t K, int64_t N,
 #endif
 }
 
-/* ── Matrix + bias: out = A * W + b, A is (batch x in), W is (in x out), b is (out) ── */
-
-void triad_blas_linear(int64_t batch, int64_t in_dim, int64_t out_dim,
+void triad_blas_triad(int64_t batch, int64_t in_dim, int64_t out_dim,
                        const double *input, const double *weight,
                        const double *bias, double *output) {
     triad_matmul(batch, in_dim, out_dim, input, weight, output);

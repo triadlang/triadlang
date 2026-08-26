@@ -1,9 +1,3 @@
-/* ═══════════════════════════════════════════════════════════════════
-   TriadLang Native ML — NN Layers + Optimizers
-   ═══════════════════════════════════════════════════════════════════
-   Port of runtime/nn.py. Linear, activations, Sequential, SGD, Adam.
-   ═══════════════════════════════════════════════════════════════════ */
-
 #include "triad_ml.h"
 #include <stdlib.h>
 #include <string.h>
@@ -12,10 +6,6 @@
 static void _ctx_free_plain(void *ctx) {
     free(ctx);
 }
-
-/* ══════════════════════════════════════
-   RNG for weight init (xorshift64)
-   ══════════════════════════════════════ */
 
 static uint64_t _nn_rng = 7654321ULL;
 
@@ -26,26 +16,21 @@ static double _nn_randf(void) {
     return (x >> 11) * (1.0 / 9007199254740992.0);
 }
 
-/* ══════════════════════════════════════
-   Linear backward context + function
-   ══════════════════════════════════════ */
-
 typedef struct {
     TriadTensor  *x;
     TriadTensor  *weight;
-    TriadTensor  *bias;       /* NULL if no bias */
+    TriadTensor  *bias;
     int64_t       rows;
     int32_t       in_f;
     int32_t       out_f;
-} LinearCtx;
+} triadCtx;
 
-static void _linear_backward(TriadTensor *out) {
-    LinearCtx *c = (LinearCtx*)out->_ctx;
+static void _triad_backward(TriadTensor *out) {
+    triadCtx *c = (triadCtx*)out->_ctx;
     TriadTensor *inp = c->x;
     int64_t B = c->rows;
     int32_t inf = c->in_f, outf = c->out_f;
 
-    /* grad_x = grad_out @ W */
     if (inp->requires_grad) {
         if (!inp->grad) inp->grad = calloc(inp->size, sizeof(double));
         for (int64_t i = 0; i < B; i++)
@@ -60,7 +45,6 @@ static void _linear_backward(TriadTensor *out) {
             }
     }
 
-    /* grad_W = grad_out^T @ x */
     if (c->weight->requires_grad) {
         if (!c->weight->grad) c->weight->grad = calloc(c->weight->size, sizeof(double));
         for (int32_t j = 0; j < outf; j++)
@@ -75,7 +59,6 @@ static void _linear_backward(TriadTensor *out) {
             }
     }
 
-    /* grad_b = sum(grad_out, axis=0) */
     if (c->bias && c->bias->requires_grad) {
         if (!c->bias->grad) c->bias->grad = calloc(c->bias->size, sizeof(double));
         for (int32_t j = 0; j < outf; j++) {
@@ -89,24 +72,17 @@ static void _linear_backward(TriadTensor *out) {
     }
 }
 
-/* ══════════════════════════════════════
-   Linear layer: y = x @ W^T + b
-   Kaiming uniform init for weights.
-   ══════════════════════════════════════ */
-
-TriadLinear *triad_linear_new(int32_t in_f, int32_t out_f, int use_bias) {
-    TriadLinear *l = malloc(sizeof(TriadLinear));
+Triadtriad *triad_triad_new(int32_t in_f, int32_t out_f, int use_bias) {
+    Triadtriad *l = malloc(sizeof(Triadtriad));
     l->in_features = in_f;
     l->out_features = out_f;
 
-    /* Weight: (out_f, in_f) — Kaiming uniform */
     int32_t wshape[] = {out_f, in_f};
     l->weight = triad_tensor_new(2, wshape, 1);
     double bound = sqrt(1.0 / (double)in_f);
     for (int64_t i = 0; i < (int64_t)out_f * in_f; i++)
         l->weight->data[i] = (_nn_randf() * 2.0 - 1.0) * bound;
 
-    /* Bias: (out_f,) */
     if (use_bias) {
         int32_t bshape[] = {out_f};
         l->bias = triad_tensor_new(1, bshape, 1);
@@ -118,25 +94,23 @@ TriadLinear *triad_linear_new(int32_t in_f, int32_t out_f, int use_bias) {
     return l;
 }
 
-void triad_linear_free(TriadLinear *l) {
+void triad_triad_free(Triadtriad *l) {
     if (!l) return;
     triad_tensor_free(l->weight);
     if (l->bias) triad_tensor_free(l->bias);
     free(l);
 }
 
-TriadTensor *triad_linear_forward(TriadLinear *l, TriadTensor *x) {
+TriadTensor *triad_triad_forward(Triadtriad *l, TriadTensor *x) {
     int32_t in_f = l->in_features, out_f = l->out_features;
     if (x->ndim < 1 || x->shape[x->ndim - 1] != in_f) return NULL;
     int64_t rows = x->size / in_f;
 
-    /* Allocate output */
     int32_t oshape[32];
     for (int32_t i = 0; i < x->ndim - 1; i++) oshape[i] = x->shape[i];
     oshape[x->ndim - 1] = out_f;
     TriadTensor *result = triad_tensor_new(x->ndim, oshape, 0);
 
-    /* y = x @ W^T + b */
     for (int64_t i = 0; i < rows; i++) {
         for (int32_t j = 0; j < out_f; j++) {
             double s = 0;
@@ -150,13 +124,11 @@ TriadTensor *triad_linear_forward(TriadLinear *l, TriadTensor *x) {
         }
     }
 
-    /* Autograd */
     int needs = x->requires_grad || l->weight->requires_grad ||
                 (l->bias && l->bias->requires_grad);
     if (needs) {
         result->requires_grad = 1;
 
-        /* Children: x, weight, [bias] */
         int nc = 2 + (l->bias ? 1 : 0);
         result->nchildren = nc;
         result->children = malloc(nc * sizeof(TriadTensor*));
@@ -164,7 +136,7 @@ TriadTensor *triad_linear_forward(TriadLinear *l, TriadTensor *x) {
         result->children[1] = l->weight; triad_tensor_retain(l->weight);
         if (l->bias) { result->children[2] = l->bias; triad_tensor_retain(l->bias); }
 
-        LinearCtx *ctx = malloc(sizeof(LinearCtx));
+        triadCtx *ctx = malloc(sizeof(triadCtx));
         ctx->x = x;
         ctx->weight = l->weight;
         ctx->bias = l->bias;
@@ -173,15 +145,11 @@ TriadTensor *triad_linear_forward(TriadLinear *l, TriadTensor *x) {
         ctx->out_f = out_f;
         result->_ctx = ctx;
         result->ctx_free = _ctx_free_plain;
-        result->grad_fn = _linear_backward;
+        result->grad_fn = _triad_backward;
     }
 
     return result;
 }
-
-/* ══════════════════════════════════════
-   Embedding
-   ══════════════════════════════════════ */
 
 typedef struct {
     TriadTensor *weight;
@@ -261,10 +229,6 @@ TriadTensor *triad_embedding_forward(TriadEmbedding *e, TriadTensor *idx) {
     return out;
 }
 
-/* ══════════════════════════════════════
-   LayerNorm module
-   ══════════════════════════════════════ */
-
 TriadLayerNorm *triad_layer_norm_new(int32_t normalized_shape, double eps) {
     TriadLayerNorm *ln = malloc(sizeof(TriadLayerNorm));
     ln->normalized_shape = normalized_shape;
@@ -286,10 +250,6 @@ TriadTensor *triad_layer_norm_forward(TriadLayerNorm *ln, TriadTensor *x) {
     if (x->ndim < 1 || x->shape[x->ndim - 1] != ln->normalized_shape) return NULL;
     return triad_tensor_layer_norm(x, ln->gamma, ln->beta, ln->eps);
 }
-
-/* ══════════════════════════════════════
-   BatchNorm1d module
-   ══════════════════════════════════════ */
 
 TriadBatchNorm1d *triad_batch_norm1d_new(int32_t num_features, double eps, double momentum) {
     TriadBatchNorm1d *bn = calloc(1, sizeof(TriadBatchNorm1d));
@@ -367,10 +327,6 @@ TriadTensor *triad_batch_norm1d_forward(TriadBatchNorm1d *bn, TriadTensor *x) {
     return out;
 }
 
-/* ══════════════════════════════════════
-   Sequential
-   ══════════════════════════════════════ */
-
 TriadSequential *triad_sequential_new(int32_t nlayers) {
     TriadSequential *s = malloc(sizeof(TriadSequential));
     s->nlayers = nlayers;
@@ -387,8 +343,8 @@ void triad_sequential_set(TriadSequential *s, int32_t i,
 void triad_sequential_free(TriadSequential *s) {
     if (!s) return;
     for (int32_t i = 0; i < s->nlayers; i++) {
-        if (s->layers[i].type == TRIAD_LAYER_LINEAR)
-            triad_linear_free(s->layers[i].layer);
+        if (s->layers[i].type == TRIAD_LAYER_triad)
+            triad_triad_free(s->layers[i].layer);
         else if (s->layers[i].type == TRIAD_LAYER_EMBEDDING)
             triad_embedding_free(s->layers[i].layer);
         else if (s->layers[i].type == TRIAD_LAYER_LAYER_NORM)
@@ -402,8 +358,8 @@ TriadTensor *triad_sequential_forward(TriadSequential *s, TriadTensor *x) {
     TriadTensor *h = x;
     for (int32_t i = 0; i < s->nlayers; i++) {
         switch (s->layers[i].type) {
-            case TRIAD_LAYER_LINEAR:
-                h = triad_linear_forward((TriadLinear*)s->layers[i].layer, h);
+            case TRIAD_LAYER_triad:
+                h = triad_triad_forward((Triadtriad*)s->layers[i].layer, h);
                 break;
             case TRIAD_LAYER_RELU:
                 h = triad_tensor_relu(h);
@@ -439,8 +395,8 @@ TriadTensor *triad_sequential_forward(TriadSequential *s, TriadTensor *x) {
 int32_t triad_sequential_params(TriadSequential *s, TriadTensor **out, int32_t max) {
     int32_t n = 0;
     for (int32_t i = 0; i < s->nlayers && n < max; i++) {
-        if (s->layers[i].type == TRIAD_LAYER_LINEAR) {
-            TriadLinear *l = (TriadLinear*)s->layers[i].layer;
+        if (s->layers[i].type == TRIAD_LAYER_triad) {
+            Triadtriad *l = (Triadtriad*)s->layers[i].layer;
             out[n++] = l->weight;
             if (l->bias && n < max) out[n++] = l->bias;
         } else if (s->layers[i].type == TRIAD_LAYER_EMBEDDING) {
@@ -454,10 +410,6 @@ int32_t triad_sequential_params(TriadSequential *s, TriadTensor **out, int32_t m
     }
     return n;
 }
-
-/* ══════════════════════════════════════
-   SGD Optimizer
-   ══════════════════════════════════════ */
 
 TriadSGD *triad_sgd_new(TriadTensor **params, int32_t n, double lr, double momentum) {
     TriadSGD *opt = malloc(sizeof(TriadSGD));
@@ -506,10 +458,6 @@ void triad_sgd_free(TriadSGD *opt) {
     free(opt->params);
     free(opt);
 }
-
-/* ══════════════════════════════════════
-   Adam Optimizer
-   ══════════════════════════════════════ */
 
 TriadAdam *triad_adam_new(TriadTensor **params, int32_t n,
                            double lr, double beta1, double beta2, double eps) {
@@ -566,34 +514,27 @@ void triad_adam_free(TriadAdam *opt) {
     free(opt);
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   Composite layers (item 6) — pure compositions of autograd ops.
-   No custom backward: the graph built here is differentiated by the
-   existing autograd engine.
-   ═══════════════════════════════════════════════════════════════════ */
-
-/* ── FeedForward ── */
 TriadFeedForward *triad_feedforward_new(int32_t d_model, int32_t d_ff) {
     TriadFeedForward *ff = malloc(sizeof(TriadFeedForward));
     ff->d_model = d_model;
     ff->d_ff = d_ff;
-    ff->fc1 = triad_linear_new(d_model, d_ff, 1);
-    ff->fc2 = triad_linear_new(d_ff, d_model, 1);
+    ff->fc1 = triad_triad_new(d_model, d_ff, 1);
+    ff->fc2 = triad_triad_new(d_ff, d_model, 1);
     return ff;
 }
 
 void triad_feedforward_free(TriadFeedForward *ff) {
     if (!ff) return;
-    triad_linear_free(ff->fc1);
-    triad_linear_free(ff->fc2);
+    triad_triad_free(ff->fc1);
+    triad_triad_free(ff->fc2);
     free(ff);
 }
 
 TriadTensor *triad_feedforward_forward(TriadFeedForward *ff, TriadTensor *x) {
-    TriadTensor *h = triad_linear_forward(ff->fc1, x);
+    TriadTensor *h = triad_triad_forward(ff->fc1, x);
     if (!h) return NULL;
     TriadTensor *a = triad_tensor_relu(h);
-    TriadTensor *out = triad_linear_forward(ff->fc2, a);
+    TriadTensor *out = triad_triad_forward(ff->fc2, a);
     return out;
 }
 
@@ -606,40 +547,38 @@ int32_t triad_feedforward_params(TriadFeedForward *ff, TriadTensor **out, int32_
     return n;
 }
 
-/* ── MultiHeadAttention (self-attention) ── */
 TriadMultiHeadAttention *triad_mha_new(int32_t d_model, int32_t n_heads) {
     TriadMultiHeadAttention *m = malloc(sizeof(TriadMultiHeadAttention));
     m->d_model = d_model;
     m->n_heads = n_heads;
-    m->q_proj = triad_linear_new(d_model, d_model, 1);
-    m->k_proj = triad_linear_new(d_model, d_model, 1);
-    m->v_proj = triad_linear_new(d_model, d_model, 1);
-    m->out_proj = triad_linear_new(d_model, d_model, 1);
+    m->q_proj = triad_triad_new(d_model, d_model, 1);
+    m->k_proj = triad_triad_new(d_model, d_model, 1);
+    m->v_proj = triad_triad_new(d_model, d_model, 1);
+    m->out_proj = triad_triad_new(d_model, d_model, 1);
     return m;
 }
 
 void triad_mha_free(TriadMultiHeadAttention *m) {
     if (!m) return;
-    triad_linear_free(m->q_proj);
-    triad_linear_free(m->k_proj);
-    triad_linear_free(m->v_proj);
-    triad_linear_free(m->out_proj);
+    triad_triad_free(m->q_proj);
+    triad_triad_free(m->k_proj);
+    triad_triad_free(m->v_proj);
+    triad_triad_free(m->out_proj);
     free(m);
 }
 
-/* reshape (B,T,d) -> (B,H,T,dh) */
 static TriadTensor *_split_heads(TriadTensor *x, int32_t B, int32_t T,
                                  int32_t H, int32_t dh) {
     int32_t s4[] = {B, T, H, dh};
-    TriadTensor *r = triad_tensor_reshape(x, 4, s4);   /* (B,T,H,dh) */
-    return triad_tensor_transpose(r, 1, 2);            /* (B,H,T,dh) */
+    TriadTensor *r = triad_tensor_reshape(x, 4, s4);
+    return triad_tensor_transpose(r, 1, 2);
 }
 
 TriadTensor *triad_mha_forward(TriadMultiHeadAttention *m, TriadTensor *x) {
-    /* normalize input to (B,T,d) */
+
     int wrapped = 0;
     int32_t B, T, d = m->d_model;
-    if (x->ndim == 2) {            /* (T,d) -> (1,T,d) */
+    if (x->ndim == 2) {
         B = 1; T = x->shape[0];
         int32_t s3[] = {1, T, d};
         x = triad_tensor_reshape(x, 3, s3);
@@ -652,24 +591,24 @@ TriadTensor *triad_mha_forward(TriadMultiHeadAttention *m, TriadTensor *x) {
     if (x->shape[x->ndim - 1] != d) return NULL;
     int32_t H = m->n_heads, dh = d / H;
 
-    TriadTensor *q = triad_linear_forward(m->q_proj, x);
-    TriadTensor *k = triad_linear_forward(m->k_proj, x);
-    TriadTensor *v = triad_linear_forward(m->v_proj, x);
+    TriadTensor *q = triad_triad_forward(m->q_proj, x);
+    TriadTensor *k = triad_triad_forward(m->k_proj, x);
+    TriadTensor *v = triad_triad_forward(m->v_proj, x);
 
-    TriadTensor *qh = _split_heads(q, B, T, H, dh);    /* (B,H,T,dh) */
+    TriadTensor *qh = _split_heads(q, B, T, H, dh);
     TriadTensor *kh = _split_heads(k, B, T, H, dh);
     TriadTensor *vh = _split_heads(v, B, T, H, dh);
 
-    TriadTensor *kt = triad_tensor_transpose(kh, 2, 3); /* (B,H,dh,T) */
-    TriadTensor *scores = triad_tensor_bmm(qh, kt);     /* (B,H,T,T) */
+    TriadTensor *kt = triad_tensor_transpose(kh, 2, 3);
+    TriadTensor *scores = triad_tensor_bmm(qh, kt);
     TriadTensor *scaled = triad_tensor_scale(scores, 1.0 / sqrt((double)dh));
     TriadTensor *attn = triad_tensor_softmax_axis(scaled, 3);
-    TriadTensor *ctx = triad_tensor_bmm(attn, vh);      /* (B,H,T,dh) */
+    TriadTensor *ctx = triad_tensor_bmm(attn, vh);
 
-    TriadTensor *ctxt = triad_tensor_transpose(ctx, 1, 2); /* (B,T,H,dh) */
+    TriadTensor *ctxt = triad_tensor_transpose(ctx, 1, 2);
     int32_t s3[] = {B, T, d};
     TriadTensor *merged = triad_tensor_reshape(ctxt, 3, s3);
-    TriadTensor *out = triad_linear_forward(m->out_proj, merged);
+    TriadTensor *out = triad_triad_forward(m->out_proj, merged);
 
     if (wrapped && out) {
         int32_t s2[] = {T, d};
@@ -679,7 +618,7 @@ TriadTensor *triad_mha_forward(TriadMultiHeadAttention *m, TriadTensor *x) {
 }
 
 int32_t triad_mha_params(TriadMultiHeadAttention *m, TriadTensor **out, int32_t max) {
-    TriadLinear *ls[] = {m->q_proj, m->k_proj, m->v_proj, m->out_proj};
+    Triadtriad *ls[] = {m->q_proj, m->k_proj, m->v_proj, m->out_proj};
     int32_t n = 0;
     for (int i = 0; i < 4; i++) {
         if (n < max) out[n++] = ls[i]->weight;
@@ -688,7 +627,6 @@ int32_t triad_mha_params(TriadMultiHeadAttention *m, TriadTensor **out, int32_t 
     return n;
 }
 
-/* ── TransformerBlock (pre-norm) ── */
 TriadTransformerBlock *triad_transformer_block_new(int32_t d_model, int32_t n_heads,
                                                    int32_t d_ff) {
     TriadTransformerBlock *b = malloc(sizeof(TriadTransformerBlock));
@@ -710,13 +648,13 @@ void triad_transformer_block_free(TriadTransformerBlock *b) {
 }
 
 TriadTensor *triad_transformer_block_forward(TriadTransformerBlock *b, TriadTensor *x) {
-    /* h = x + attn(ln1(x)) */
+
     TriadTensor *n1 = triad_layer_norm_forward(b->ln1, x);
     if (!n1) return NULL;
     TriadTensor *a = triad_mha_forward(b->attn, n1);
     if (!a) return NULL;
     TriadTensor *h = triad_tensor_add(x, a);
-    /* out = h + ff(ln2(h)) */
+
     TriadTensor *n2 = triad_layer_norm_forward(b->ln2, h);
     TriadTensor *f = triad_feedforward_forward(b->ff, n2);
     TriadTensor *out = triad_tensor_add(h, f);
@@ -735,7 +673,6 @@ int32_t triad_transformer_block_params(TriadTransformerBlock *b, TriadTensor **o
     return n;
 }
 
-/* ── Transformer (embedding + N blocks + final LayerNorm) ── */
 TriadTransformer *triad_transformer_new(int32_t vocab, int32_t d_model,
                                         int32_t n_blocks, int32_t n_heads, int32_t d_ff) {
     TriadTransformer *t = malloc(sizeof(TriadTransformer));
@@ -760,7 +697,7 @@ void triad_transformer_free(TriadTransformer *t) {
 }
 
 TriadTensor *triad_transformer_forward(TriadTransformer *t, TriadTensor *idx) {
-    TriadTensor *h = triad_embedding_forward(t->embed, idx);  /* (...,T,d) */
+    TriadTensor *h = triad_embedding_forward(t->embed, idx);
     if (!h) return NULL;
     for (int32_t i = 0; i < t->n_blocks; i++) {
         TriadTensor *nh = triad_transformer_block_forward(t->blocks[i], h);
@@ -777,5 +714,124 @@ int32_t triad_transformer_params(TriadTransformer *t, TriadTensor **out, int32_t
         n += triad_transformer_block_params(t->blocks[i], out + n, max - n);
     if (n < max) out[n++] = t->ln_final->gamma;
     if (n < max) out[n++] = t->ln_final->beta;
+    return n;
+}
+
+typedef struct {
+    TriadTensor *x, *wr, *wi;
+    double *a, *b;
+    int64_t rows;
+    int32_t in_f, out_f;
+} WaveCtx;
+
+static void _wave_ctx_free(void *ptr) {
+    WaveCtx *c = (WaveCtx*)ptr;
+    if (!c) return;
+    free(c->a); free(c->b); free(c);
+}
+
+static void _wave_backward(TriadTensor *out) {
+    WaveCtx *c = (WaveCtx*)out->_ctx;
+    if (!c || !out->grad) return;
+    if (c->wr->requires_grad && !c->wr->grad)
+        c->wr->grad = calloc(c->wr->size, sizeof(double));
+    if (c->wi->requires_grad && !c->wi->grad)
+        c->wi->grad = calloc(c->wi->size, sizeof(double));
+    if (c->x->requires_grad && !c->x->grad)
+        c->x->grad = calloc(c->x->size, sizeof(double));
+    int64_t rows = c->rows;
+    int32_t in_f = c->in_f, out_f = c->out_f;
+    for (int64_t i = 0; i < rows; i++) {
+        for (int32_t j = 0; j < out_f; j++) {
+            int64_t oi = i * out_f + j;
+            double y = out->data[oi];
+            if (y < 1e-12) y = 1e-12;
+            double ga = out->grad[oi] * c->a[oi] / y;
+            double gb = out->grad[oi] * c->b[oi] / y;
+            for (int32_t k = 0; k < in_f; k++) {
+                int64_t xi = i * (int64_t)in_f + k;
+                int64_t wi_ = (int64_t)k * out_f + j;
+                if (c->wr->requires_grad)
+                    c->wr->grad[wi_] += c->x->data[xi] * ga;
+                if (c->wi->requires_grad)
+                    c->wi->grad[wi_] += c->x->data[xi] * gb;
+                if (c->x->requires_grad)
+                    c->x->grad[xi] += ga * c->wr->data[wi_]
+                                    + gb * c->wi->data[wi_];
+            }
+        }
+    }
+}
+
+TriadWavetriad *triad_wave_triad_new(int32_t in_f, int32_t out_f) {
+    TriadWavetriad *w = malloc(sizeof(TriadWavetriad));
+    w->in_features = in_f;
+    w->out_features = out_f;
+    int32_t shape[] = {in_f, out_f};
+    w->wr = triad_tensor_randn(2, shape, 1);
+    w->wi = triad_tensor_randn(2, shape, 1);
+    double scale = 1.0 / sqrt((double)in_f);
+    for (int64_t i = 0; i < w->wr->size; i++) {
+        w->wr->data[i] *= scale;
+        w->wi->data[i] *= scale;
+    }
+    return w;
+}
+
+void triad_wave_triad_free(TriadWavetriad *w) {
+    if (!w) return;
+    triad_tensor_free(w->wr);
+    triad_tensor_free(w->wi);
+    free(w);
+}
+
+TriadTensor *triad_wave_triad_forward(TriadWavetriad *w, TriadTensor *x) {
+    int32_t in_f = w->in_features, out_f = w->out_features;
+    if (x->ndim < 1 || x->shape[x->ndim - 1] != in_f) return NULL;
+    int64_t rows = x->size / in_f;
+    int32_t oshape[32];
+    for (int32_t i = 0; i < x->ndim - 1; i++) oshape[i] = x->shape[i];
+    oshape[x->ndim - 1] = out_f;
+    TriadTensor *result = triad_tensor_new(x->ndim, oshape, 0);
+    double *a = malloc((size_t)(rows * out_f) * sizeof(double));
+    double *b = malloc((size_t)(rows * out_f) * sizeof(double));
+    for (int64_t i = 0; i < rows; i++) {
+        for (int32_t j = 0; j < out_f; j++) {
+            double sa = 0, sb = 0;
+            for (int32_t k = 0; k < in_f; k++) {
+                double xv = x->data[i * (int64_t)in_f + k];
+                sa += xv * w->wr->data[(int64_t)k * out_f + j];
+                sb += xv * w->wi->data[(int64_t)k * out_f + j];
+            }
+            int64_t oi = i * out_f + j;
+            a[oi] = sa; b[oi] = sb;
+            result->data[oi] = sqrt(sa * sa + sb * sb + 1e-12);
+        }
+    }
+    int needs = x->requires_grad || w->wr->requires_grad || w->wi->requires_grad;
+    if (needs) {
+        result->requires_grad = 1;
+        result->nchildren = 3;
+        result->children = malloc(3 * sizeof(TriadTensor*));
+        result->children[0] = x; triad_tensor_retain(x);
+        result->children[1] = w->wr; triad_tensor_retain(w->wr);
+        result->children[2] = w->wi; triad_tensor_retain(w->wi);
+        WaveCtx *ctx = malloc(sizeof(WaveCtx));
+        ctx->x = x; ctx->wr = w->wr; ctx->wi = w->wi;
+        ctx->a = a; ctx->b = b;
+        ctx->rows = rows; ctx->in_f = in_f; ctx->out_f = out_f;
+        result->_ctx = ctx;
+        result->ctx_free = _wave_ctx_free;
+        result->grad_fn = _wave_backward;
+    } else {
+        free(a); free(b);
+    }
+    return result;
+}
+
+int32_t triad_wave_triad_params(TriadWavetriad *w, TriadTensor **out, int32_t max) {
+    int32_t n = 0;
+    if (n < max) out[n++] = w->wr;
+    if (n < max) out[n++] = w->wi;
     return n;
 }

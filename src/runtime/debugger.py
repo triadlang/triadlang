@@ -1,27 +1,18 @@
 from __future__ import annotations
-import sys
-import os
+
 import json
-import traceback
+import os
+import sys
 import threading
-from typing import Optional
-from collections import OrderedDict
+import traceback
+
+from triad import ntri as np
+
 
 class DebugBreak(Exception):
     pass
 
 class DAPProtocol:
-    """Implements the Debug Adapter Protocol base transport (stdio).
-
-    DAP uses a header-based protocol over stdin/stdout:
-      Content-Length: <N>\\r\\n
-      \\r\\n
-      <JSON body of N bytes>
-
-    The protocol is sequential: client sends requests, adapter sends
-    responses and events. The full specification is at:
-    https://microsoft.github.io/debug-adapter-protocol/specification.html
-    """
 
     def __init__(self, infile=None, outfile=None):
         self._in = infile or sys.stdin.buffer
@@ -34,7 +25,7 @@ class DAPProtocol:
         return seq
 
     def read_message(self) -> dict | None:
-        """Read one DAP message from stdin. Returns None on EOF."""
+
         header = b''
         while True:
             byte = self._in.read(1)
@@ -53,8 +44,8 @@ class DAPProtocol:
         body = self._in.read(content_length)
         return json.loads(body.decode('utf-8'))
 
-    def send_message(self, msg: dict):
-        """Send one DAP message to stdout."""
+    def send_message(self, msg: dict[str, object]):
+
         body = json.dumps(msg).encode('utf-8')
         header = f'Content-Length: {len(body)}\r\n\r\n'.encode('ascii')
         self._out.write(header + body)
@@ -85,26 +76,22 @@ class DAPProtocol:
         self.send_message(ev)
 
 class TriadDebugger:
-    """Interactive source-level debugger for TriadLang programs.
-
-    Supports breakpoints, step-through, variable inspection, and
-    both CLI interactive mode and Debug Adapter Protocol mode.
-    """
 
     def __init__(self):
-        self._breakpoints: dict[str, set[int]] = {}  
+        self._breakpoints: dict[str, set[int]] = {}
         self._step_mode: bool = False
         self._current_frame = None
         self._filename: str = ''
         self._source_lines: list[str] = []
-        self._hit_count: dict[str, dict[int, int]] = {}  
-        self._call_stack: list[tuple[str, int, str]] = []  
+        self._hit_count: dict[str, dict[int, int]] = {}
+        self._call_stack: list[tuple[str, int, str]] = []
         self._dap: DAPProtocol | None = None
         self._dap_lock = threading.Lock()
         self._stopped = threading.Event()
         self._thread_id = 1
-        self._non_interactive: bool = False  
-        self._sourcemap = None  
+        self._non_interactive: bool = False
+        self._sourcemap = None
+        self._solver_frame: bool = False
 
     def set_breakpoints(self, lines: list[int], source_path: str = None):
         key = source_path or self._filename or '<triad>'
@@ -125,25 +112,91 @@ class TriadDebugger:
         else:
             self._breakpoints.clear()
 
-    def _bp_hook(self, line: int, locals_dict: dict):
+    def _solver_bp_hook(self, substrate_name: str, t: float, psi: np.ndarray, y: np.ndarray | None, metrics: dict):
+
+        self._solver_frame = True
+        self._current_frame = {
+            '_substrate': substrate_name,
+            '_t': t,
+            '_psi_shape': psi.shape if psi is not None else None,
+            '_psi_preview': psi[:4] if psi is not None else None,
+            '_y_shape': y.shape if y is not None else None,
+            **(metrics or {}),
+        }
+        self._call_stack.append((self._filename, 0, f'solver:{substrate_name}'))
+        if self._dap:
+            self._dap_stopped(0, reason='solver_break')
+        elif not self._non_interactive:
+            self._interact_solver(substrate_name, t, metrics)
+        self._call_stack.pop()
+        self._solver_frame = False
+
+    def _interact_solver(self, substrate_name: str, t: float, metrics: dict):
+        print(f'\n  \x1b[1;33m-- Solver break: {substrate_name} @ t={t:.3f} --\x1b[0m')
+        if metrics:
+            for k, v in metrics.items():
+                print(f'  \x1b[2m{k} = {v:.4f}\x1b[0m')
+        print("  Type 'c' to continue, 'q' to quit")
+        while True:
+            try:
+                cmd = input('\x1b[1;36mtriad-solver-dbg> \x1b[0m').strip()
+            except (EOFError, KeyboardInterrupt):
+                print('c')
+                cmd = 'c'
+            if cmd in ('c', 'continue'):
+                break
+            elif cmd in ('q', 'quit'):
+                raise SystemExit(0)
+            elif cmd in ('h', 'help'):
+                print('  c, continue   Continue solver integration')
+                print('  q, quit       Exit program')
+            else:
+                print(f'  unknown command: {cmd}')
+
+    def set_solver_breakpoint(self, substrate_name: str, metric: str | None = None, threshold: float | None = None):
+
+        key = f'__solver__:{substrate_name}'
+        self._breakpoints.setdefault(key, set()).add((metric, threshold))
+
+    def _bp_hook(self, line: int, locals_dict: dict[str, object]):
         key = self._filename
         self._hit_count.setdefault(key, {})
         self._hit_count[key][line] = self._hit_count[key].get(line, 0) + 1
-        should_break = (key in self._breakpoints and line in self._breakpoints[key]) or self._step_mode
+        bp_lines = set()
+        for k in (key, '<triad>'):
+            if k in self._breakpoints:
+                bp_lines.update(self._breakpoints[k])
+        should_break = line in bp_lines or self._step_mode
         if should_break:
+            self._solver_frame = False
             self._current_frame = locals_dict
             self._call_stack.append((self._filename, line, '<module>'))
             if self._dap:
-                self._dap_stopped(line, reason='breakpoint' if key in self._breakpoints and line in self._breakpoints[key] else 'step')
+                self._dap_stopped(line, reason='breakpoint' if line in bp_lines else 'step')
             elif not self._non_interactive:
                 self._interact(line)
             self._call_stack.pop()
+
+    def _safe_eval(self, expr: str, frame: dict) -> object:
+        allowed_builtins = {
+            'len': len, 'range': range, 'str': str, 'int': int, 'float': float,
+            'bool': bool, 'type': type, 'abs': abs, 'min': min, 'max': max,
+            'sum': sum, 'sorted': sorted, 'reversed': reversed, 'enumerate': enumerate,
+            'zip': zip, 'map': map, 'filter': filter, 'round': round, 'divmod': divmod,
+            'pow': pow, 'chr': chr, 'ord': ord, 'hash': hash, 'repr': repr,
+            'isinstance': isinstance, 'issubclass': issubclass,
+            'True': True, 'False': False, 'None': None,
+        }
+        for token in ('__import__', 'eval', 'exec', 'compile', 'open', 'globals', 'locals'):
+            if token in expr:
+                raise NameError(f'forbidden token in debugger expression: {token}')
+        return eval(expr, {'__builtins__': allowed_builtins}, frame)
 
     def _interact(self, line: int):
         src_line = self._source_lines[line - 1] if 0 < line <= len(self._source_lines) else ''
         print(f'\n  \x1b[1;33m-- Break at line {line} --\x1b[0m')
         print(f'  \x1b[2m{line}: {src_line.strip()}\x1b[0m')
-        print(f"  Type 'h' for commands, 'c' to continue, 'q' to quit")
+        print("  Type 'h' for commands, 'c' to continue, 'q' to quit")
         while True:
             try:
                 cmd = input('\x1b[1;36mtriad-dbg> \x1b[0m').strip()
@@ -174,7 +227,7 @@ class TriadDebugger:
                     print('  usage: p <expr>')
                     continue
                 try:
-                    result = eval(arg, {}, self._current_frame or {})
+                    result = self._safe_eval(arg, self._current_frame or {})
                     print(f'  {result}')
                 except Exception as e:
                     print(f'  error: {e}')
@@ -228,13 +281,13 @@ class TriadDebugger:
                 print('    q, quit         Exit program')
             else:
                 try:
-                    result = eval(cmd, {}, self._current_frame or {})
+                    result = self._safe_eval(cmd, self._current_frame or {})
                     print(f'  {result}')
                 except Exception as e:
                     print(f'  unknown command: {action} ({e})')
 
     def _dap_stopped(self, line: int, reason: str = 'breakpoint'):
-        """Send stopped event via DAP and wait for continue/step."""
+
         with self._dap_lock:
             self._dap.send_event('stopped', {
                 'reason': reason,
@@ -255,7 +308,7 @@ class TriadDebugger:
         self._stopped.set()
 
     def run_dap(self):
-        """Run as a DAP server (reads from stdin, writes to stdout)."""
+
         self._dap = DAPProtocol()
         initialized = False
         launched = False
@@ -294,14 +347,15 @@ class TriadDebugger:
                         continue
                     self._dap.send_response(seq, 'launch', True)
                     launched = True
-                    
+
                     def _run():
                         try:
                             self.run_file(program)
                         except SystemExit:
                             pass
-                        except Exception as e:
-                            pass
+                        except Exception as exc:
+                            import logging
+                            logging.getLogger(__name__).warning('debugger launch failed: %s', exc)
                         finally:
                             self._dap.send_event('terminated')
                     t = threading.Thread(target=_run, daemon=True)
@@ -434,25 +488,31 @@ class TriadDebugger:
                 else:
                     self._dap.send_response(seq, command, False, message=f'unknown command: {command}')
 
-    def inject_hooks(self, source: str, filename: str) -> str:
+    def inject_hooks(self, py_code: str, filename: str, smap=None,
+                     tri_source: str = '') -> str:
+
         self._filename = filename
-        self._source_lines = source.split('\n')
-        lines = source.split('\n')
-        result = []
-        
-        bp_lines = set()
-        for key in (filename, '<triad>'):
-            if key in self._breakpoints:
-                bp_lines.update(self._breakpoints[key])
-        for i, line in enumerate(lines):
-            line_num = i + 1
+        self._source_lines = (tri_source or py_code).split('\n')
+        lines = py_code.split('\n')
+        if smap is None or not getattr(smap, '_entries', None):
+            return py_code
+        first_py: dict[int, int] = {}
+        for pl in sorted(smap._entries):
+            tl = smap._entries[pl].line
+            if tl > 0 and tl not in first_py:
+                first_py[tl] = pl
+        _NO_HOOK_BEFORE = ('else', 'elif', 'except', 'finally', 'case ')
+        for tl, pl in sorted(first_py.items(), key=lambda kv: -kv[1]):
+            idx = pl - 1
+            if idx < 0 or idx >= len(lines):
+                continue
+            line = lines[idx]
             stripped = line.lstrip()
-            result.append(line)
-            if line_num in bp_lines:
-                indent_spaces = len(line) - len(stripped)
-                indent_str = ' ' * indent_spaces
-                result.append(f'{indent_str}_triad_dbg._bp_hook({line_num}, dict(locals()))')
-        return '\n'.join(result)
+            if not stripped or stripped.startswith(_NO_HOOK_BEFORE):
+                continue
+            indent = ' ' * (len(line) - len(stripped))
+            lines.insert(idx, f'{indent}_triad_dbg._bp_hook({tl}, dict(locals()))')
+        return '\n'.join(lines)
 
     def run_source(self, source: str, filename: str = '<triad>'):
         from frontend.parser_universal import parse
@@ -460,7 +520,8 @@ class TriadDebugger:
         mod = parse(source, filename)
         compiler = TriadCompiler()
         code = compiler.compile_to_source(mod)
-        code = self.inject_hooks(code, filename)
+        code = self.inject_hooks(code, filename, smap=compiler._sourcemap,
+                                 tri_source=source)
         env = compiler._make_globals(filename)
         env['_triad_dbg'] = self
         try:
@@ -480,11 +541,11 @@ class TriadDebugger:
         self.run_source(source, path)
 
 def cmd_debug(args):
-    from frontend.parser_universal import parse
     import argparse as _ap
     p = _ap.ArgumentParser(prog='triad debug')
     p.add_argument('file', help='.tri file to debug')
     p.add_argument('--break', '-b', dest='breaks', default='', help='comma-separated line numbers')
+    p.add_argument('--solver', action='store_true', help='Phase 3.3: enable solver-native debug mode (break on convergence/metrics)')
     p.add_argument('--dap', action='store_true', help='run as DAP server (stdio transport)')
     parsed = p.parse_args(args)
 
@@ -506,8 +567,26 @@ def cmd_debug(args):
                     dbg.add_breakpoint(int(b))
                 except ValueError:
                     print(f'invalid breakpoint line: {b}', file=sys.stderr)
+
+    if parsed.solver:
+        from runtime.core.multi_runtime import MultiRuntime
+
+        _orig_run = MultiRuntime.run
+        def _run_with_solver_dbg(self, verbose=False, **kw):
+            from runtime.observers import ConvergenceObserver
+            def _on_converge(history, last_metrics):
+
+                sub = max(self.subs, key=lambda s: s.psi.real.max() if s.psi is not None else 0, default=None)
+                if sub is not None:
+                    dbg._solver_bp_hook(sub.name, self.global_t, sub.psi, sub.y, last_metrics)
+            obs = ConvergenceObserver(on_converge=_on_converge)
+            return _orig_run(self, verbose=verbose, **kw)
+        MultiRuntime.run = _run_with_solver_dbg
     try:
         dbg.run_file(path)
     except SystemExit:
         pass
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning('debugger run failed: %s', exc)
     return 0

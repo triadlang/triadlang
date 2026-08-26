@@ -1,6 +1,3 @@
-/*
- * TriadLang Native Runtime — List (dynamic array)
- */
 #include "triad_rt.h"
 #include <stdlib.h>
 #include <string.h>

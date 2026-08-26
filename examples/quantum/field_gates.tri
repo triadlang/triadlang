@@ -1,0 +1,23 @@
+import triad.qubits as q;
+import math;
+
+print("Gates por pulso de potencial no campo");
+print("");
+
+let plus = q.Gates.apply(q.QubitState(1), q.Gates.H, 0);
+
+let z_ideal = q.Gates.apply(plus, q.Gates.Z, 0);
+let z_pulso = q.field_pulse_phase(plus, 0, math.pi);
+print(f"Z  : fidelidade {z_pulso.fidelity(z_ideal):.4f}");
+
+let s_ideal = q.Gates.apply(plus, q.Gates.S, 0);
+let s_pulso = q.field_pulse_phase(plus, 0, math.pi / 2);
+print(f"S  : fidelidade {s_pulso.fidelity(s_ideal):.4f}");
+
+let pp = q.Gates.apply(q.Gates.apply(q.QubitState(2), q.Gates.H, 0), q.Gates.H, 1);
+let cz_ideal = q.Gates.cz(pp, 0, 1);
+let cz_pulso = q.field_pulse_cz(pp, 0, 1);
+print(f"CZ : fidelidade {cz_pulso.fidelity(cz_ideal):.4f}");
+
+let errado = q.field_pulse_phase(plus, 0, math.pi / 2);
+print(f"wrong pulse vs Z: {errado.fidelity(z_ideal):.4f}  (the physics does not forgive)");

@@ -1,0 +1,11 @@
+import triad.qalgo as qa;
+
+print("QRNG — bits from superposition");
+let bits = qa.qrng(64, seed=42);
+print(f"64 bits: {bits}");
+
+let uns = 0;
+for b in bits {
+    if b == "1" { uns = uns + 1; }
+}
+print(f"ones: {uns}/64 (expected ~32)");

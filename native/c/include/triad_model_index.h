@@ -34,4 +34,4 @@ const TriadSafeTensorInfo *triad_model_find_tensor(TriadModelIndex *idx,
 int triad_model_read_row_f64(TriadModelIndex *idx, const char *tensor_name,
                              int64_t row, double *dst, int64_t dst_len);
 
-#endif /* TRIAD_MODEL_INDEX_H */
+#endif

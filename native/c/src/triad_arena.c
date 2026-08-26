@@ -1,4 +1,3 @@
-/* triad_arena.c — Bump arena for the native frontend. */
 #include "triad_frontend.h"
 
 #include <stdlib.h>
@@ -10,7 +9,7 @@ struct TriadArenaBlock {
     TriadArenaBlock *next;
     size_t           cap;
     size_t           used;
-    /* data follows in the same allocation */
+
 };
 
 static TriadArenaBlock *new_block(size_t cap) {
@@ -37,7 +36,7 @@ static void *block_data(TriadArenaBlock *b) {
 void *triad_arena_alloc(TriadArena *a, size_t n) {
     if (!a) return NULL;
     if (n == 0) n = 1;
-    /* 16-byte alignment */
+
     size_t aligned = (n + 15u) & ~(size_t)15u;
     TriadArenaBlock *b = a->head;
     if (!b || b->used + aligned > b->cap) {

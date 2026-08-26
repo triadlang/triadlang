@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 import asyncio
 import os
-import numpy as np
+
 from fastapi import APIRouter, HTTPException
+
 from api.models import CoupledRunRequest, CoupledRunResult, SubstrateResult
-from api.serialization import ndarray_to_b64, compute_standard_observables
+from api.serialization import compute_standard_observables, ndarray_to_b64
+from triad import ntri as np
 
 router = APIRouter()
 
@@ -12,16 +15,16 @@ _TIMEOUT = float(os.environ.get('TRIAD_API_TIMEOUT', '120'))
 
 _COUPLING_MAP = {
     'ring': 'ring',
-    'all2all': 'full',
+    'all2all': 'triad',
     'none': 'none',
 }
 
 def _run_coupled_sync(req: CoupledRunRequest) -> CoupledRunResult:
-    from runtime.core.equation_runtime import EquationRuntime
     from runtime.backend import asnumpy
+    from runtime.core.Triad_runtime import TriadRuntime
 
     coupling = _COUPLING_MAP.get(req.coupling, 'ring')
-    er = EquationRuntime(
+    er = TriadRuntime(
         n_substrates=req.n_substrates,
         regime=req.regime,
         N=req.N,
@@ -61,7 +64,7 @@ async def run_coupled(req: CoupledRunRequest):
             loop.run_in_executor(None, _run_coupled_sync, req),
             timeout=_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(status_code=504, detail=f'coupled solver timed out after {_TIMEOUT}s')
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

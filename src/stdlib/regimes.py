@@ -1,72 +1,71 @@
 from __future__ import annotations
-from typing import Callable
+
+from collections.abc import Callable
+
 from runtime.core.solver import TriadParams
 
+
 def regime_B0(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    return TriadParams(L=L, N=N, dt=dt, T=20.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.05, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=(2.0, 0.5, 0.1), lam=(-0.3, -0.2, -0.1), mode='full', seed=seed, record_every=4)
+    return TriadParams(L=L, N=N, dt=dt, T=20.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.05, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=(2.0, 0.5, 0.1), lam=(-0.3, -0.2, -0.1), mode='triad', seed=seed, record_every=4)
 
 def regime_dispersive(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=20.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-0.05, alpha=0.2, sigma=1.6, Gamma=0.02, f_FDT=0.001, nu=(2.0, 0.5), lam=(-0.05, -0.03), mode='full', seed=seed, record_every=4)
 
-def regime_anti_collapse(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=6.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-10.0, alpha=0.3, sigma=1.5, Gamma=0.01, f_FDT=0.001, nu=(10.0, 0.5), lam=(3.0, 1.0), mode='full', seed=seed, record_every=20)
+    return TriadParams(L=L, N=N, dt=dt, T=20.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-0.05, alpha=0.2, sigma=1.6, Gamma=0.02, f_FDT=0.001, nu=(2.0, 0.5, 0.1), lam=(-0.05, -0.03, -0.01), mode='triad', seed=seed, record_every=4)
 
-def regime_R5_crystal(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=15.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-8.0, alpha=0.12, sigma=1.8, Gamma=0.01, f_FDT=0.001, nu=(10.0, 0.5), lam=(1.125, 0.375), mode='full', seed=seed, record_every=4)
+def regime_anti_collapse(seed: int=0, L: float=20.0, N: int=128, dt: float=0.0025) -> TriadParams:
 
-def regime_thermal_pure(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=20.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.05, Lambda=-0.3, alpha=0.15, sigma=1.5, Gamma=0.08, f_FDT=0.003, nu=(1.0, 0.2), lam=(-0.1, -0.05), mode='full', seed=seed, record_every=4)
+    return TriadParams(L=L, N=N, dt=dt, T=10.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-8.0, alpha=0.0, sigma=2.0, Gamma=0.001, f_FDT=0.0001, nu=(10.0, 0.5, 0.1), lam=(3.0, 1.0, 0.3), mode='triad', seed=seed, record_every=20, init_sigma=0.5, init_k0=(0.0, 0.0, 0.0))
+
+def regime_R5_crystal(seed: int=0, L: float=20.0, N: int=128, dt: float=0.0025) -> TriadParams:
+
+    return TriadParams(L=L, N=N, dt=dt, T=15.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-8.0, alpha=0.0, sigma=2.0, Gamma=0.001, f_FDT=0.0001, nu=(10.0, 0.5, 0.1), lam=(1.125, 0.375, 0.125), mode='triad', seed=seed, record_every=4, init_sigma=0.5, init_k0=(0.0, 0.0, 0.0))
+
+def regime__pure(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
+
+    return TriadParams(L=L, N=N, dt=dt, T=20.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.05, Lambda=-0.3, alpha=0.15, sigma=1.5, Gamma=0.08, f_FDT=0.003, nu=(1.0, 0.2, 0.04), lam=(-0.1, -0.05, -0.02), mode='triad', seed=seed, record_every=4)
 
 def regime_B0_3d(seed: int=0, L: float=12.0, N: int=24, dt: float=0.005) -> TriadParams:
-    return TriadParams(L=L, N=N, dt=dt, T=2.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.3, Lambda=-0.3, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=(2.0, 0.5, 0.1), lam=(-0.2, -0.1, -0.05), mode='full', seed=seed, record_every=4)
-
-def regime_register_legacy(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005, bit_width: int=1) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=1.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.005, Lambda=-0.05, alpha=0.08, sigma=1.7, Gamma=0.01, f_FDT=0.0004, nu=(2.0, 0.2), lam=(-0.05, -0.05), mode='full', seed=seed, record_every=4)
+    return TriadParams(L=L, N=N, dt=dt, T=2.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.3, Lambda=-0.3, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=(2.0, 0.5, 0.1), lam=(-0.2, -0.1, -0.05), mode='triad', seed=seed, record_every=4)
 
 def regime_HodgkinHuxley(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=20.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.05, Lambda=-1.2, alpha=0.12, sigma=1.6, Gamma=0.04, f_FDT=0.0016, nu=(5.0, 0.3, 0.04), lam=(-0.4, -0.25, -0.1), mode='full', seed=seed, record_every=4)
+
+    return TriadParams(L=L, N=N, dt=dt, T=20.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.05, Lambda=-1.2, alpha=0.12, sigma=1.6, Gamma=0.04, f_FDT=0.0016, nu=(5.0, 0.3, 0.04), lam=(-0.4, -0.25, -0.1), mode='triad', seed=seed, record_every=4)
 
 def regime_MaxwellWiechert(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=30.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.02, Lambda=-0.1, alpha=0.1, sigma=1.4, Gamma=0.02, f_FDT=0.001, nu=(5.0, 0.5, 0.05, 0.005), lam=(-0.05, -0.08, -0.12, -0.15), mode='full', seed=seed, record_every=4)
+
+    return TriadParams(L=L, N=N, dt=dt, T=30.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.02, Lambda=-0.1, alpha=0.1, sigma=1.4, Gamma=0.02, f_FDT=0.001, nu=(5.0, 0.5, 0.05, 0.005), lam=(-0.05, -0.08, -0.12, -0.15), mode='triad', seed=seed, record_every=4)
 
 def regime_ENSO_recharge(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=50.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.03, Lambda=-0.4, alpha=0.12, sigma=1.5, Gamma=0.03, f_FDT=0.0015, nu=(0.25, 0.05), lam=(-0.5, -0.3), mode='full', seed=seed, record_every=4)
+
+    return TriadParams(L=L, N=N, dt=dt, T=50.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.03, Lambda=-0.4, alpha=0.12, sigma=1.5, Gamma=0.03, f_FDT=0.0015, nu=(0.25, 0.05, 0.01), lam=(-0.5, -0.3, -0.15), mode='triad', seed=seed, record_every=4)
 
 def regime_LSV_market(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=30.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-0.2, alpha=0.18, sigma=1.3, Gamma=0.02, f_FDT=0.004, nu=(1.0, 0.1, 0.01), lam=(-0.2, -0.3, -0.4), mode='full', seed=seed, record_every=4)
+
+    return TriadParams(L=L, N=N, dt=dt, T=30.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-0.2, alpha=0.18, sigma=1.3, Gamma=0.02, f_FDT=0.004, nu=(1.0, 0.1, 0.01), lam=(-0.2, -0.3, -0.4), mode='triad', seed=seed, record_every=4)
 
 def regime_Eigen_hypercycle(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=30.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.04, Lambda=-0.6, alpha=0.13, sigma=1.6, Gamma=0.03, f_FDT=0.0012, nu=(2.0, 0.2), lam=(-0.3, -0.15), mode='full', seed=seed, record_every=4)
+
+    return TriadParams(L=L, N=N, dt=dt, T=30.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.04, Lambda=-0.6, alpha=0.13, sigma=1.6, Gamma=0.03, f_FDT=0.0012, nu=(2.0, 0.2, 0.04), lam=(-0.3, -0.15, -0.05), mode='triad', seed=seed, record_every=4)
 
 def regime_Belousov_Zhabotinsky(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=25.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.03, Lambda=-1.5, alpha=0.12, sigma=1.7, Gamma=0.04, f_FDT=0.0016, nu=(5.0, 0.5), lam=(-0.4, -0.3), mode='full', seed=seed, record_every=4)
+
+    return TriadParams(L=L, N=N, dt=dt, T=25.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.03, Lambda=-1.5, alpha=0.12, sigma=1.7, Gamma=0.04, f_FDT=0.0016, nu=(5.0, 0.5, 0.1), lam=(-0.4, -0.3, -0.15), mode='triad', seed=seed, record_every=4)
 
 def regime_Cepheid_pulsator(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=40.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.15, Lambda=-0.05, alpha=0.1, sigma=1.85, Gamma=0.02, f_FDT=0.0008, nu=(0.5, 0.1), lam=(-0.1, -0.05), mode='full', seed=seed, record_every=4)
+
+    return TriadParams(L=L, N=N, dt=dt, T=40.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.15, Lambda=-0.05, alpha=0.1, sigma=1.85, Gamma=0.02, f_FDT=0.0008, nu=(0.5, 0.1, 0.02), lam=(-0.1, -0.05, -0.02), mode='triad', seed=seed, record_every=4)
 
 def regime_Cosmological_inflation(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=10.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-2.5, alpha=0.2, sigma=1.5, Gamma=0.02, f_FDT=0.005, nu=(8.0, 0.8), lam=(-0.6, -0.4), mode='full', seed=seed, record_every=4)
+
+    return TriadParams(L=L, N=N, dt=dt, T=10.0, hbar=1.0, m=1.0, V_ext=None, omega=0.0, Lambda=-2.5, alpha=0.2, sigma=1.5, Gamma=0.02, f_FDT=0.005, nu=(8.0, 0.8, 0.16), lam=(-0.6, -0.4, -0.2), mode='triad', seed=seed, record_every=4)
 
 def regime_DarkMatter_halo(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    
-    return TriadParams(L=L, N=N, dt=dt, T=60.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.01, Lambda=-0.15, alpha=0.1, sigma=1.4, Gamma=0.005, f_FDT=0.0001, nu=(0.05, 0.005), lam=(-0.3, -0.5), mode='full', seed=seed, record_every=4)
+
+    return TriadParams(L=L, N=N, dt=dt, T=60.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.01, Lambda=-0.15, alpha=0.1, sigma=1.4, Gamma=0.005, f_FDT=0.0001, nu=(0.05, 0.005, 0.001), lam=(-0.3, -0.5, -0.2), mode='triad', seed=seed, record_every=4)
 
 def regime_England_autopoietic(seed: int=0, L: float=32.0, N: int=128, dt: float=0.005) -> TriadParams:
-    return TriadParams(L=L, N=N, dt=dt, T=25.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.03, Lambda=-0.8, alpha=0.15, sigma=1.5, Gamma=0.08, f_FDT=0.003, nu=(3.0, 0.3, 0.03), lam=(-0.3, -0.5, -0.7), mode='full', seed=seed, record_every=4)
-_REGISTRY: dict[str, Callable[..., TriadParams]] = {'B0': regime_B0, 'B0_3d': regime_B0_3d, 'dispersive': regime_dispersive, 'anti_collapse': regime_anti_collapse, 'R5_crystal': regime_R5_crystal, 'thermal_pure': regime_thermal_pure, 'register_legacy': regime_register_legacy, 'HodgkinHuxley': regime_HodgkinHuxley, 'MaxwellWiechert': regime_MaxwellWiechert, 'ENSO_recharge': regime_ENSO_recharge, 'LSV_market': regime_LSV_market, 'England_autopoietic': regime_England_autopoietic, 'Eigen_hypercycle': regime_Eigen_hypercycle, 'Belousov_Zhabotinsky': regime_Belousov_Zhabotinsky, 'Cepheid_pulsator': regime_Cepheid_pulsator, 'Cosmological_inflation': regime_Cosmological_inflation, 'DarkMatter_halo': regime_DarkMatter_halo}
+    return TriadParams(L=L, N=N, dt=dt, T=25.0, hbar=1.0, m=1.0, V_ext='harmonic', omega=0.03, Lambda=-0.8, alpha=0.15, sigma=1.5, Gamma=0.08, f_FDT=0.003, nu=(3.0, 0.3, 0.03), lam=(-0.3, -0.5, -0.7), mode='triad', seed=seed, record_every=4)
+_REGISTRY: dict[str, Callable[..., TriadParams]] = {'B0': regime_B0, 'B0_3d': regime_B0_3d, 'dispersive': regime_dispersive, 'anti_collapse': regime_anti_collapse, 'R5_crystal': regime_R5_crystal, '_pure': regime__pure, 'HodgkinHuxley': regime_HodgkinHuxley, 'MaxwellWiechert': regime_MaxwellWiechert, 'ENSO_recharge': regime_ENSO_recharge, 'LSV_market': regime_LSV_market, 'England_autopoietic': regime_England_autopoietic, 'Eigen_hypercycle': regime_Eigen_hypercycle, 'Belousov_Zhabotinsky': regime_Belousov_Zhabotinsky, 'Cepheid_pulsator': regime_Cepheid_pulsator, 'Cosmological_inflation': regime_Cosmological_inflation, 'DarkMatter_halo': regime_DarkMatter_halo}
 
 def resolve_regime(name: str, **kwargs) -> TriadParams:
     if name not in _REGISTRY:

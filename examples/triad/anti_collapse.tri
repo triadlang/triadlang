@@ -1,5 +1,3 @@
-// Anti-collapse demonstration — real PDE solver
-// Uses the calibrated anti_collapse regime from stdlib/regimes.py
 @T(18.0)
 reg a : anti_collapse = 4;
 reg b : anti_collapse = 4;

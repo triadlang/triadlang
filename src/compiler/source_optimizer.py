@@ -1,14 +1,7 @@
-"""text-level peephole optimizer for the transpile-to-python path.
-
-this folds constants in the python source that compiler_runtime emits before it
-is exec'd. it is a string pass because that pipeline does not build the typed
-IR. the IR-consuming pipeline (triad compile, emit_json) uses compiler/ir_passes.py
-instead, which folds on node structure rather than regex and is the preferred
-place to add new optimizations.
-"""
 from __future__ import annotations
+
 import re
-from typing import Optional
+
 
 def optimize_source(source: str, level: int=2) -> str:
     lines = source.split('\n')
@@ -21,7 +14,7 @@ _CONST_ASSIGN_RE = re.compile('^(\\s*)(\\w[\\w.]*\\s*=\\s*)(.+)\\s*$')
 _NUM_LIT = re.compile('^-?\\d+\\.?\\d*(?:[eE][+-]?\\d+)?$')
 _BIN_OP_RE = re.compile('\\s*(\\*\\*|[+\\-*/%])\\s*')
 
-def _try_fold_expr(expr: str) -> Optional[str]:
+def _try_fold_expr(expr: str) -> str | None:
     expr = expr.strip().strip('()')
     for m in _BIN_OP_RE.finditer(expr):
         left_s = expr[:m.start()].strip()
@@ -202,3 +195,4 @@ def _dead_code_elimination(lines: list[str]) -> list[str]:
         result.append(line)
         i += 1
     return result
+

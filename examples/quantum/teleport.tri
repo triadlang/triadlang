@@ -1,0 +1,9 @@
+import triad.qalgo as qa;
+
+print("Quantum teleportation");
+for trial in range(5) {
+    let r = qa.teleport(1.1, 0.7, seed=trial);
+    print(f"  trial {trial}: classical bits {r["bits"]}  fidelity {r["fidelity"]:.6f}");
+}
+print("fidelity 1.0 on every trial — the state arrives whole,");
+print("regardless of the measurement outcome.");

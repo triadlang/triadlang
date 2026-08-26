@@ -1,6 +1,6 @@
 import triad.inference as inf;
 
-let model = inf.load_model("Qwen/Qwen3.5-9B", gguf_file="Qwen3.5-9B-Q4_K_M.gguf");
+let model = inf.load_model("Qwen/Qwen3-0.6B-GGUF", gguf_file="Qwen3-0.6B-Q8_0.gguf");
 
 let result = inf.chat(model, [
     {"role": "user", "content": "What is 2+2?"}

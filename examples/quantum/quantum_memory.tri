@@ -1,0 +1,17 @@
+import triad.qubits as q;
+
+print("Bell stored in the field: fidelity vs storage time");
+print("");
+
+for T in [0.01, 0.05, 0.2] {
+    let c = q.TriadCircuit(2);
+    c.h(0);
+    c.cnot(0, 1);
+    let r = c.run(none, 600, 2, true, "field", T);
+    let fid = r.raw["fidelity_vs_ideal"];
+    print(f"  store_T={T}  fidelity={fid:.4f}  counts={r.counts}");
+}
+
+print("");
+print("the longer in the field, the more the world talks to the state.");
+print("the physics is the system's own B0 regime — nothing tuned from outside.");

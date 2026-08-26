@@ -1,10 +1,10 @@
 from __future__ import annotations
-import numpy as np
-from runtime.ml import ml_device as _D
+
 from runtime.ml.ml_device import xp
-from runtime.ml.tensor import TriadTensor, tensor, softmax, _ensure_tensor, no_grad
-from runtime.ml.nn import Module, Parameter, Linear, LayerNorm, Embedding
-from runtime.ml.serialization import save_weights, load_weights
+from runtime.ml.nn import Embedding, LayerNorm, Module, Parameter, triad
+from runtime.ml.tensor import TriadTensor, no_grad, tensor
+from triad import ntri as np
+
 
 class CharTokenizer:
     def __init__(self, text: str = ''):
@@ -53,6 +53,8 @@ def _solver_step(psi_re, psi_im, params, dt, dx, rng=None):
     re1, im1 = _fft_mul(psi_re, psi_im, half_re, half_im)
     rho = re1 * re1 + im1 * im1
 
+    if M < 3:
+        raise ValueError(f'triad rule: language model substrate needs at least 3 memory scales, got {M}')
     y_list = []
     for j in range(M):
         yj_prev = params.get(f'y_{j}', _xp.zeros(N))
@@ -61,7 +63,7 @@ def _solver_step(psi_re, psi_im, params, dt, dx, rng=None):
         else:
             yj = rho
         y_list.append(yj)
-    V_mem = _xp.zeros(N) if M == 0 else sum(lam[j] * y_list[j] for j in range(M))
+    V_mem = sum(lam[j] * y_list[j] for j in range(M))
     V_tot = V_ext + Lambda * rho + V_mem
 
     phase = -V_tot * dt / hbar
@@ -78,12 +80,11 @@ def _solver_step(psi_re, psi_im, params, dt, dx, rng=None):
         y_list2.append(yj2)
 
     f_FDT = 2.0 * Gamma * dx * kT / hbar if Gamma > 0 else 0.0
-    noise_amp = float(_xp.sqrt(_xp.asarray(f_FDT * dt / dx))) if f_FDT > 0 else 0.0
-    if noise_amp > 0:
-        if rng is None:
-            rng = _xp.random.default_rng()
-        re2 = re2 + float(noise_amp) * rng.standard_normal(re2.shape) / 1.4142135623730951
-        im2 = im2 + float(noise_amp) * rng.standard_normal(im2.shape) / 1.4142135623730951
+    noise_amp = float(_xp.sqrt(_xp.asarray(max(f_FDT, 1e-12) * dt / dx)))
+    if rng is None:
+        rng = _xp.random.default_rng()
+    re2 = re2 + float(noise_amp) * rng.standard_normal(re2.shape) / 1.4142135623730951
+    im2 = im2 + float(noise_amp) * rng.standard_normal(im2.shape) / 1.4142135623730951
 
     re3, im3 = _fft_mul(re2, im2, half_re, half_im)
 
@@ -93,21 +94,25 @@ def _solver_step(psi_re, psi_im, params, dt, dx, rng=None):
 
     return re3, im3, new_params
 
-class TriadFullBlock(Module):
-    def __init__(self, d_model: int, N: int = 64, n_memory: int = 3):
+class TriadtriadBlock(Module):
+
+    def __init__(self, d_model: int, N: int = 64, n_memory: int = 3, seed: int = 0):
+        if n_memory < 3:
+            raise ValueError(
+                f"triad rule: TriadtriadBlock P2 memory field needs at least 3 "
+                f"time-scales (p1/p2/p3), got n_memory={n_memory}")
         self.d_model = d_model
         self.N = N
         self.n_memory = n_memory
-        self.n_memory = n_memory
         scale = 0.02
-        self.in_proj = Linear(d_model, 2 * N, bias=True)
-        self.out_proj = Linear(N, d_model, bias=True)
+        self.in_proj = triad(d_model, 2 * N, bias=True)
+        self.out_proj = triad(N, d_model, bias=True)
         self.ln = LayerNorm(d_model)
-        self.p_omega = Parameter(tensor(np.full(N, 0.05)))
-        self.p_Lambda = Parameter(tensor(np.full(N, -0.5)))
-        self.p_Gamma = Parameter(tensor(np.full(N, 0.05)))
-        self.p_alpha = Parameter(tensor(np.full(N, 0.15)))
-        self.p_sigma = Parameter(tensor(np.full(N, 1.5)))
+        self.p_omega = Parameter(tensor(np.triad(N, 0.05)))
+        self.p_Lambda = Parameter(tensor(np.triad(N, -0.5)))
+        self.p_Gamma = Parameter(tensor(np.triad(N, 0.05)))
+        self.p_alpha = Parameter(tensor(np.triad(N, 0.15)))
+        self.p_sigma = Parameter(tensor(np.triad(N, 1.5)))
         self.p_lam = Parameter(tensor(np.random.uniform(-0.3, -0.05, (n_memory, N)) * scale))
         self.p_nu = Parameter(tensor(np.linspace(0.5, 2.0, n_memory)))
         self.p_hbar = Parameter(tensor(np.array(1.0)))
@@ -116,88 +121,89 @@ class TriadFullBlock(Module):
         self.dt = 0.005
         self.dx = 1.0 / N
         self.training = True
-        self._y_state = None
+        self._rng = np.random.default_rng(seed)
 
-    def _get_params(self):
-        _xp = xp
-        return {
-            'omega': float(self.p_omega._data.mean()),
-            'Lambda': float(self.p_Lambda._data.mean()),
-            'Gamma': float(abs(self.p_Gamma._data.mean())),
-            'alpha': float(self.p_alpha._data.mean()),
-            'sigma': float(abs(self.p_sigma._data.mean()) + 0.5),
-            'hbar': float(abs(self.p_hbar._data) + 0.1),
-            'm': float(abs(self.p_m._data) + 0.1),
-            'kT': float(abs(self.p_kT._data)),
-            'lam': self.p_lam._data,
-            'nu': self.p_nu._data,
-            'V_ext': _xp.zeros(self.N),
-        }
+    def _build_params(self):
+
+        from runtime.core.solver import TriadParams
+        lam_proj = self.p_lam._data
+        if lam_proj.ndim == 2:
+            lam_proj = lam_proj.mean(axis=1)
+        base = TriadParams(
+            N=self.N, dt=self.dt, T=self.dt * 2, D=1, mode='triad',
+            hbar=float(abs(self.p_hbar._data.item()) + 0.1),
+            m=float(abs(self.p_m._data.item()) + 0.1),
+            Lambda=float(self.p_Lambda._data.mean()),
+            alpha=float(self.p_alpha._data.mean()),
+            sigma=float(abs(self.p_sigma._data.mean()) + 0.5),
+            Gamma=float(abs(self.p_Gamma._data.mean())),
+            kT=float(abs(self.p_kT._data.item())),
+            nu=tuple(float(v) for v in self.p_nu._data),
+            lam=tuple(float(v) for v in lam_proj),
+        )
+        return base
 
     def forward(self, x: TriadTensor) -> TriadTensor:
         residual = x
         x = self.ln(x)
-
         if x.ndim == 2:
             x = x.reshape(1, x.shape[0], x.shape[1])
         B, T, D = x.shape
 
         proj = self.in_proj(x)
-        psi_re_data = proj._data[:, :, :self.N]
-        psi_im_data = proj._data[:, :, self.N:]
+        drive_re = proj._data[:, :, :self.N]
+        drive_im = proj._data[:, :, self.N:]
 
-        params_dev = self._get_params()
+        from runtime.ml.solver_step import _build_ml_step_kernels, _solver_step_ml_batched
+        p = self._build_params()
+        kernels = _build_ml_step_kernels(p)
 
-        re_out = []
-        im_out = []
-        batch_params = [dict(params_dev) for _ in range(B)]
-        block_rng = _D.xp.random.default_rng() if self.training else _D.xp.random.default_rng(42)
+        custom_half = np.exp(-1j * self.p_omega._data * 0.5 * self.dt / p.hbar)
 
-        for b in range(B):
-            bp = batch_params[b]
-            re_seq = []
-            im_seq = []
-            for t in range(T):
-                re_t = psi_re_data[b, t]
-                im_t = psi_im_data[b, t]
-                re_new, im_new, bp = _solver_step(re_t, im_t, bp, self.dt, self.dx, block_rng)
-                re_seq.append(re_new)
-                im_seq.append(im_new)
-            re_out.append(_D.xp.stack(re_seq))
-            im_out.append(_D.xp.stack(im_seq))
-            batch_params[b] = bp
+        lam_proj = self.p_lam._data
+        if lam_proj.ndim == 2:
+            lam_proj = lam_proj.mean(axis=1)
 
-        re_arr = _D.xp.stack(re_out)
-        im_arr = _D.xp.stack(im_out)
-        rho_arr = _D.xp.sqrt(re_arr * re_arr + im_arr * im_arr + 1e-12)
+        import runtime.backend as _rb
+        xp_local = _rb.get_xp('auto')
+        kernels['lam_e'] = xp_local.asarray(lam_proj)
+
+        psi = np.zeros((B, self.N), dtype=np.complex128)
+        y = np.zeros((B, self.n_memory, self.N), dtype=np.float64)
+        rho_seq = []
+        for t in range(T):
+            psi, y = _solver_step_ml_batched(
+                psi, y, kernels,
+                drive_re=drive_re[:, t, :], drive_im=drive_im[:, t, :],
+                custom_half_lin=custom_half,
+                rng=self._rng,
+            )
+            rho_seq.append(np.abs(psi) ** 2)
+
+        rho_arr = np.stack(rho_seq, axis=1)
 
         rho_t = TriadTensor(rho_arr)
-        rho_t._requires_grad = proj._requires_grad
-        rho_t._children = [proj]
 
-        def _back(g):
-            d_re = re_arr / (rho_arr + 1e-12)
-            d_im = im_arr / (rho_arr + 1e-12)
-            g_proj = _D.xp.concatenate([g * d_re, g * d_im], axis=-1)
-            proj._grad = g_proj if proj._grad is None else proj._grad + g_proj
-        rho_t._grad_fn = _back
+        w = next(iter(self.out_proj.parameters()), None)
+        if w is not None and rho_t.device != w.device:
+            rho_t = rho_t.to(w.device)
 
         out = self.out_proj(rho_t)
         out = out + residual
         return out
 
-class TriadFullLM(Module):
+class TriadtriadLM(Module):
     def __init__(self, vocab_size: int, d_model: int = 64, N_solver: int = 64,
                  n_blocks: int = 4, n_memory: int = 3):
         self.vocab_size = vocab_size
         self.d_model = d_model
         self.tok_emb = Embedding(vocab_size, d_model)
         self.blocks = [
-            TriadFullBlock(d_model, N=N_solver, n_memory=n_memory)
+            TriadtriadBlock(d_model, N=N_solver, n_memory=n_memory)
             for _ in range(n_blocks)
         ]
         self.ln_f = LayerNorm(d_model)
-        self.lm_head = Linear(d_model, vocab_size, bias=False)
+        self.lm_head = triad(d_model, vocab_size, bias=False)
         self.training = True
 
     def forward(self, idx: TriadTensor) -> TriadTensor:
@@ -258,11 +264,11 @@ class TriadLM(Module):
         self.d_model = d_model
         self.tok_emb = Embedding(vocab_size, d_model)
         self.blocks = [
-            TriadFullBlock(d_model, N=d_state, n_memory=n_memory)
+            TriadtriadBlock(d_model, N=d_state, n_memory=n_memory)
             for _ in range(n_blocks)
         ]
         self.ln_f = LayerNorm(d_model)
-        self.lm_head = Linear(d_model, vocab_size, bias=False)
+        self.lm_head = triad(d_model, vocab_size, bias=False)
         self.training = True
 
     def forward(self, idx: TriadTensor) -> TriadTensor:

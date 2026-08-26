@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import base64
 import io
-import numpy as np
+
+from triad import ntri as np
+
 
 def ndarray_to_b64(arr: np.ndarray) -> str:
     buf = io.BytesIO()
@@ -14,8 +17,12 @@ def b64_to_ndarray(s: str) -> np.ndarray:
 
 def compute_standard_observables(psi_final: np.ndarray, dx: float, L: float) -> dict:
     from runtime.physics.observables import (
-        crystallinity, dominant_wavenumber, peak_density,
-        ipr, fwhm, norm, participation_ratio,
+        crystallinity,
+        dominant_wavenumber,
+        fwhm,
+        ipr,
+        norm,
+        peak_density,
     )
     k_min = 2.0 * np.pi / L
     psi_1d = psi_final.ravel()

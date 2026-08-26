@@ -1,9 +1,11 @@
 import os
 import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import numpy as np
+from runtime.core.multi_runtime import CouplingLink, MultiRuntime, Segment
 from runtime.core.solver import TriadParams
-from runtime.core.multi_runtime import MultiRuntime, CouplingEdge, Segment
+from triad import ntri as np
+
 NUM_SAMPLES = 4
 
 def _f(x: float) -> str:
@@ -46,11 +48,11 @@ def build_program() -> MultiRuntime:
     T_couple = 0.5
 
     def make_params(seed: int) -> TriadParams:
-        return TriadParams(N=N, L=L, dt=dt, T=T_settle + T_couple, hbar=1.0, m=1.0, omega=1.0, Lambda=-0.3, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.0, fdt_couple=False, kT=1.0, lam=np.array([0.03]), nu=np.array([0.5]), mode='full', seed=seed, V_ext='harmonic', D=2)
+        return TriadParams(N=N, L=L, dt=dt, T=T_settle + T_couple, hbar=1.0, m=1.0, omega=1.0, Lambda=-0.3, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, fdt_couple=True, kT=1.0, lam=np.array([-0.03, -0.02, -0.01]), nu=np.array([0.5, 0.1, 0.02]), mode='triad', seed=seed, V_ext='harmonic', D=2)
     rt = MultiRuntime(dt=dt, record_every=4)
     rt.add_substrate('A', make_params(seed=11), psi=None)
     rt.add_substrate('B', make_params(seed=22), psi=None)
-    rt.segments = [Segment(t_start=0.0, t_end=T_settle, edges=[], active_ids=None), Segment(t_start=T_settle, t_end=T_settle + T_couple, edges=[CouplingEdge(src_id=0, dst_id=1, kappa=-0.2, coupling_mode='density'), CouplingEdge(src_id=1, dst_id=0, kappa=-0.15, coupling_mode='density')], active_ids=None)]
+    rt.segments = [Segment(t_start=0.0, t_end=T_settle, links=[], active_ids=None), Segment(t_start=T_settle, t_end=T_settle + T_couple, links=[CouplingLink(src_id=0, dst_id=1, kappa=-0.2, coupling_mode='density'), CouplingLink(src_id=1, dst_id=0, kappa=-0.15, coupling_mode='density')], active_ids=None)]
     rt.global_t = 0.0
     return rt
 

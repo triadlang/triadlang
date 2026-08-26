@@ -1,9 +1,12 @@
 from __future__ import annotations
-import asyncio, json, os
-import numpy as np
+
+import asyncio
+import os
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel
+
+from triad import ntri as np
 
 router = APIRouter()
 
@@ -19,13 +22,13 @@ class PlotRequest(BaseModel):
     sigma: float = 1.5
     alpha: float = 0.15
     f_FDT: float = 0.002
-    regime: Optional[str] = None
-    V_ext: Optional[str] = 'harmonic'
+    regime: str | None = None
+    V_ext: str | None = 'harmonic'
     seed: int = 0
     record_every: int = 20
 
 def _build_plot_response(raw, p, record_every):
-    """Extract density field, coordinates, and power spectrum as JSON arrays."""
+
     psi = raw['psi_final']
     x = raw.get('x', np.linspace(-p.L / 2, p.L / 2, p.N, endpoint=False))
     dx = float(raw.get('dx', p.L / p.N))
@@ -98,7 +101,7 @@ async def plot(req: PlotRequest):
             loop.run_in_executor(None, _run_plot_sync, req),
             timeout=_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(status_code=504, detail=f'solver timed out after {_TIMEOUT}s')
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

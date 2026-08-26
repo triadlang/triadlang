@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional
-import numpy as np
+
+from triad import ntri as np
+
 
 @dataclass
 class SATInstance:
@@ -51,18 +53,8 @@ def _clause_wave(x: np.ndarray, clause: list[int], k_var: np.ndarray) -> np.ndar
             wave += np.exp(-1j * k * x)
     return wave
 
-def encode_sat_interference(sat: SATInstance, N_grid: Optional[int]=None, L: Optional[float]=None):
-    """Encode a SAT instance as an interference pattern.
+def encode_sat_interference(sat: SATInstance, N_grid: int | None=None, L: float | None=None):
 
-    Returns a dict with named keys so callers do not depend on tuple order:
-        'V_ext'  : callable(x) -> external potential array
-        'psi'    : complex initial wavefunction
-        'N_grid' : grid size
-        'L'      : box length
-        'extra'  : encoding-specific payload (None here; the direct encoding
-                   returns the assignment-window center)
-    all encode_sat_* functions share this contract.
-    """
     n = sat.n_vars
     m = len(sat.clauses)
     if N_grid is None:
@@ -84,7 +76,7 @@ def encode_sat_interference(sat: SATInstance, N_grid: Optional[int]=None, L: Opt
         return V_ext
     return {'V_ext': V_ext_fn, 'psi': psi, 'N_grid': N_grid, 'L': L, 'extra': None}
 
-def encode_sat_spectral(sat: SATInstance, N_grid: Optional[int]=None, L: Optional[float]=None):
+def encode_sat_spectral(sat: SATInstance, N_grid: int | None=None, L: float | None=None):
     n = sat.n_vars
     m = len(sat.clauses)
     if N_grid is None:
@@ -127,7 +119,7 @@ def _clause_satisfying_phases(clause: list[int], n_vars: int):
                 phases[var] = np.pi if signs[bit_idx] > 0 else 0.0
         yield phases
 
-def encode_sat_resonance(sat: SATInstance, N_grid: Optional[int]=None, L: Optional[float]=None):
+def encode_sat_resonance(sat: SATInstance, N_grid: int | None=None, L: float | None=None):
     n = sat.n_vars
     m = len(sat.clauses)
     if N_grid is None:
@@ -266,7 +258,7 @@ def _build_penalty_potential(sat: SATInstance, N_grid: int, center: int) -> np.n
             V[idx] = scale * violations
     return V
 
-def encode_sat_direct(sat: SATInstance, N_grid: Optional[int]=None, L: Optional[float]=None):
+def encode_sat_direct(sat: SATInstance, N_grid: int | None=None, L: float | None=None):
     n_assign = 2 ** sat.n_vars
     if N_grid is None:
         N_grid = max(128, n_assign * 4)
@@ -300,7 +292,7 @@ def solve_sat(sat: SATInstance, encoding: str='interference', T: float=10.0, dt:
     else:
         raise ValueError(f'Unknown encoding: {encoding}')
     V_ext_fn, psi0, N, L, center = enc['V_ext'], enc['psi'], enc['N_grid'], enc['L'], enc['extra']
-    p = TriadParams(N=N, L=L, T=T, dt=dt, Lambda=Lambda, Gamma=Gamma, f_FDT=f_FDT, alpha=alpha, sigma=sigma, V_ext=V_ext_fn, nu=(2.0, 0.5, 0.1), lam=(-0.5, -0.3, -0.1), seed=seed)
+    p = TriadParams(N=N, L=L, T=T, dt=dt, D=1, Lambda=Lambda, Gamma=Gamma, f_FDT=f_FDT, alpha=alpha, sigma=sigma, V_ext=V_ext_fn, nu=(2.0, 0.5, 0.1), lam=(-0.5, -0.3, -0.1), seed=seed)
     out = integrate(p, psi0=psi0, auto_halve_dt=False)
     psi_final = out['psi_final']
     rho = np.abs(psi_final) ** 2
@@ -331,6 +323,7 @@ def solve_sat_iterative(sat: SATInstance, max_rounds: int=4, seed: int=42) -> di
     from runtime.core.solver import TriadParams, integrate
     frozen = {}
     n = sat.n_vars
+    rnd = 0
     for rnd in range(max_rounds):
         unfrozen = [i for i in range(n) if i not in frozen]
         if not unfrozen:
@@ -364,7 +357,7 @@ def solve_sat_iterative(sat: SATInstance, max_rounds: int=4, seed: int=42) -> di
             V_ext_fn, psi0, Ng, L = enc['V_ext'], enc['psi'], enc['N_grid'], enc['L']
             for T in [20, 40]:
                 for Lam in [-5, -10, -15]:
-                    p = TriadParams(N=Ng, L=L, T=T, dt=0.005, Lambda=Lam, Gamma=0.02, f_FDT=0.001, alpha=0.1, sigma=1.5, V_ext=V_ext_fn, nu=(2.0, 0.5, 0.1), lam=(-0.5, -0.3, -0.1), seed=s)
+                    p = TriadParams(N=Ng, L=L, T=T, dt=0.005, D=1, Lambda=Lam, Gamma=0.02, f_FDT=0.001, alpha=0.1, sigma=1.5, V_ext=V_ext_fn, nu=(2.0, 0.5, 0.1), lam=(-0.5, -0.3, -0.1), seed=s)
                     out = integrate(p, psi0=psi0, auto_halve_dt=False)
                     a, v = _decode_with_confidence(out['psi_final'], rem_sat, L)
                     if v < best_v:
@@ -386,15 +379,21 @@ def solve_sat_iterative(sat: SATInstance, max_rounds: int=4, seed: int=42) -> di
     return {'assignment': assignment, 'violations': violations, 'is_satisfiable': len(solutions) > 0, 'is_correct': violations == 0, 'n_solutions': len(solutions), 'encoding': 'iterative', 'rounds_used': rnd + 1}
 
 def _decode_with_confidence(psi_final, sat, L, n_peaks=32, max_flips=2):
-    from scipy.signal import find_peaks as _find_peaks
+    try:
+        from scipy.signal import find_peaks as _find_peaks
+    except ImportError:
+        _find_peaks = None
     n = sat.n_vars
     N_grid = len(psi_final)
     x = np.linspace(-L / 2, L / 2, N_grid, endpoint=False)
     k_var = 2 * np.pi * np.arange(1, n + 1) / L
     rho = np.abs(psi_final) ** 2
     try:
-        peaks, _ = _find_peaks(rho, height=rho.max() * 0.05)
-    except Exception:
+        if _find_peaks is not None:
+            peaks, _ = _find_peaks(rho, height=rho.max() * 0.05)
+        else:
+            peaks = np.argsort(-rho)[:n_peaks]
+    except (ValueError, IndexError):
         peaks = np.argsort(-rho)[:n_peaks]
     if len(peaks) == 0:
         peaks = np.array([np.argmax(rho)])

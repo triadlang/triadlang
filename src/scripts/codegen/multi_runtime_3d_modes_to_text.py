@@ -1,8 +1,11 @@
-import os, sys
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import numpy as np
+from runtime.core.multi_runtime import CouplingLink, MultiRuntime, Segment
 from runtime.core.solver import TriadParams
-from runtime.core.multi_runtime import MultiRuntime, CouplingEdge, Segment
+from triad import ntri as np
+
 NUM_SAMPLES = 4
 
 def _f(x):
@@ -39,11 +42,11 @@ def build_program():
     L, N, dt = (8.0, 8, 0.01)
 
     def mk(seed):
-        return TriadParams(N=N, L=L, dt=dt, T=0.4, hbar=1.0, m=1.0, omega=1.0, Lambda=-0.2, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.0, fdt_couple=False, kT=1.0, lam=np.array([0.02]), nu=np.array([0.4]), mode='full', seed=seed, V_ext='harmonic', D=3)
+        return TriadParams(N=N, L=L, dt=dt, T=0.4, hbar=1.0, m=1.0, omega=1.0, Lambda=-0.2, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, fdt_couple=True, kT=1.0, lam=np.array([-0.02, -0.015, -0.01]), nu=np.array([0.4, 0.08, 0.016]), mode='triad', seed=seed, V_ext='harmonic', D=3)
     rt = MultiRuntime(dt=dt, record_every=4)
     rt.add_substrate('A', mk(11), psi=None)
     rt.add_substrate('B', mk(22), psi=None)
-    rt.segments = [Segment(0.0, 0.1, [], None), Segment(0.1, 0.25, [CouplingEdge(0, 1, kappa=-0.15, coupling_mode='dc_subtracted')], None), Segment(0.25, 0.4, [CouplingEdge(0, 1, kappa=-0.1, coupling_mode='phase_coherent', k_target=0.3), CouplingEdge(1, 0, kappa=-0.08, coupling_mode='density')], None)]
+    rt.segments = [Segment(0.0, 0.1, [], None), Segment(0.1, 0.25, [CouplingLink(0, 1, kappa=-0.15, coupling_mode='dc_subtracted')], None), Segment(0.25, 0.4, [CouplingLink(0, 1, kappa=-0.1, coupling_mode='phase_coherent', k_target=0.3), CouplingLink(1, 0, kappa=-0.08, coupling_mode='density')], None)]
     rt.global_t = 0.0
     return rt
 

@@ -1,22 +1,16 @@
 import triad.tensor as T;
 import triad.nn as nn;
 
-// Baseline causal transformer — next-token prediction on a fixed sequence.
-// Task: learn to predict the next token in a repeating pattern.
-// vocab = 6 tokens, sequence is a deterministic cycle the model must memorize.
-
 let vocab_size = 6;
 let seq_len = 16;
 
-// Repeating pattern: 0 1 2 3 4 5 0 1 2 3 ... (period 6)
-// Input  = pattern[0:seq_len], target = pattern[1:seq_len+1]
 let pattern = [];
 for i in range(seq_len + 1) {
     pattern.push(i % vocab_size);
 }
 
-let inputs = T.tensor([pattern[0:seq_len]]);        // (1, seq_len)
-let targets = T.tensor(pattern[1:seq_len + 1]);     // (seq_len,)
+let inputs = T.tensor([pattern[0:seq_len]]);
+let targets = T.tensor(pattern[1:seq_len + 1]);
 
 let model = nn.Transformer(
     vocab_size,
@@ -35,7 +29,7 @@ print(f"  task: predict next token in period-{vocab_size} cycle");
 print("");
 
 for epoch in range(150) {
-    let logits = model(inputs);              // (1, seq_len, vocab)
+    let logits = model(inputs);
     let flat = logits.reshape(seq_len, vocab_size);
     let loss = T.cross_entropy(flat, targets);
     optimizer.zero_grad();

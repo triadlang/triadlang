@@ -1,0 +1,342 @@
+import triad.nn as nn;
+import triad.tensor as T;
+import triad.atoms as atoms;
+import triad.ntri as np;
+
+class CrystalLattice {
+    fn __init__(self, dim, lattice_size=8, seed=42) {
+        self.dim = dim;
+        self.lattice_size = lattice_size;
+        self.total_sites = lattice_size * lattice_size * lattice_size;
+
+        self.lattice = atoms.CrystalMemory(
+            N=self.total_sites,
+            L=float(lattice_size) * 4.62,
+            D=3,
+            lattice_const=4.62,
+            seed=seed
+        );
+
+        self.proj_matrix = np.random.default_rng(seed).standard_normal(
+            (dim, 3)) / np.sqrt(float(dim));
+
+        self.is_crystallized = false;
+    }
+
+    fn crystallize(self, T=5.0) {
+        let found = self.lattice.crystallize(T);
+        self.is_crystallized = true;
+        print("CrystalLattice: " + str(len(found)) + " sites crystallized");
+        return found;
+    }
+
+    fn _hash_to_coords(self, pattern) {
+        let p = np.array(pattern);
+        let coords_cont = p @ self.proj_matrix;
+        let x = int(float(coords_cont[0] * float(self.lattice_size)
+                        + float(self.lattice_size) / 2.0));
+        let y = int(float(coords_cont[1] * float(self.lattice_size)
+                        + float(self.lattice_size) / 2.0));
+        let z = int(float(coords_cont[2] * float(self.lattice_size)
+                        + float(self.lattice_size) / 2.0));
+
+        let sz = self.lattice_size;
+        if x < 0 { x = 0; } if x >= sz { x = sz - 1; }
+        if y < 0 { y = 0; } if y >= sz { y = sz - 1; }
+        if z < 0 { z = 0; } if z >= sz { z = sz - 1; }
+
+        return x * sz * sz + y * sz + z;
+    }
+
+    fn write(self, pattern, phase=0.0) {
+        if not self.is_crystallized {
+            self.crystallize(2.0);
+        }
+
+        let site = self._hash_to_coords(pattern);
+        self.lattice.write(site, phase=float(phase));
+        self.lattice.settle(0.3);
+    }
+
+    fn read(self, query_pattern) {
+        if not self.is_crystallized {
+            return none;
+        }
+
+        let site = self._hash_to_coords(query_pattern);
+        let lattice_state = self.lattice.read();
+        if site < len(lattice_state) {
+            return lattice_state[site];
+        }
+        return none;
+    }
+
+    fn recall_score(self, query_pattern) {
+        let result = self.read(query_pattern);
+        if result == none {
+            return 0.0;
+        }
+
+        if not result["occupied"] {
+            return 0.0;
+        }
+
+        let stored_phase = result["phase"];
+        let query_mean = float(np.mean(np.array(query_pattern)));
+        let phase_diff = abs(stored_phase - query_mean);
+        if phase_diff > np.pi { phase_diff = 2.0 * np.pi - phase_diff; }
+
+        return 1.0 - phase_diff / np.pi;
+    }
+}
+
+class TemporalHologram {
+    fn __init__(self, dim, max_len=128) {
+        self.dim = dim;
+        self.max_len = max_len;
+
+        self.omegas = [];
+        for t in range(max_len) {
+            self.omegas.push(2.0 * np.pi * float(t) / float(max_len));
+        }
+
+        self.hologram_re = np.zeros(dim);
+        self.hologram_im = np.zeros(dim);
+
+        self.num_stored = 0;
+    }
+
+    fn store_sequence(self, sequence_re, sequence_im) {
+        let L = sequence_re.shape[0];
+        if L > self.max_len { L = self.max_len; }
+
+        self.hologram_re = np.zeros(self.dim);
+        self.hologram_im = np.zeros(self.dim);
+
+        for t in range(L) {
+            let omega = self.omegas[t];
+            let cos_w = np.cos(omega);
+            let sin_w = np.sin(omega);
+
+            let re_contrib = sequence_re[t] * cos_w - sequence_im[t] * sin_w;
+            let im_contrib = sequence_re[t] * sin_w + sequence_im[t] * cos_w;
+
+            self.hologram_re = self.hologram_re + re_contrib;
+            self.hologram_im = self.hologram_im + im_contrib;
+        }
+
+        let norm = np.sqrt(np.sum(self.hologram_re * self.hologram_re
+                                  + self.hologram_im * self.hologram_im));
+        if norm > 1e-10 {
+            self.hologram_re = self.hologram_re / norm;
+            self.hologram_im = self.hologram_im / norm;
+        }
+
+        self.num_stored = L;
+    }
+
+    fn recall_position(self, t) {
+        if t >= self.num_stored { t = self.num_stored - 1; }
+        if t < 0 { t = 0; }
+
+        let omega = self.omegas[t];
+        let cos_w = np.cos(-omega);
+        let sin_w = np.sin(-omega);
+
+        let re_recall = self.hologram_re * cos_w - self.hologram_im * sin_w;
+        let im_recall = self.hologram_re * sin_w + self.hologram_im * cos_w;
+
+        return {"re": re_recall, "im": im_recall, "position": t};
+    }
+
+    fn recall_all(self) {
+        let sequence_re = [];
+        let sequence_im = [];
+        for t in range(self.num_stored) {
+            let r = self.recall_position(t);
+            sequence_re.push(r["re"]);
+            sequence_im.push(r["im"]);
+        }
+        return {
+            "re": np.array(sequence_re),
+            "im": np.array(sequence_im)
+        };
+    }
+}
+
+class MemoryConsolidator {
+    fn __init__(self, dim, crystal_size=8, hologram_len=128,
+                consolidate_every=100, min_frequency=3, seed=42) {
+        self.dim = dim;
+
+        self.crystal = CrystalLattice(dim, crystal_size, seed);
+
+        self.hologram = TemporalHologram(dim, hologram_len);
+
+        self.recent_patterns = [];
+        self.max_recent = 256;
+
+        self.consolidate_every = consolidate_every;
+        self.min_frequency = min_frequency;
+        self.step_count = 0;
+    }
+
+    fn observe(self, re_pattern, im_pattern) {
+
+        let re_p = np.array(re_pattern).reshape(-1);
+        let im_p = np.array(im_pattern).reshape(-1);
+
+        let found = false;
+        for entry in self.recent_patterns {
+            let dot_r = np.sum(re_p * entry["re"] + im_p * entry["im"]);
+            let dot_i = np.sum(im_p * entry["re"] - re_p * entry["im"]);
+            let sim = dot_r * dot_r + dot_i * dot_i;
+
+            if sim > 0.5 {
+                entry["freq"] = entry["freq"] + 1;
+                found = true;
+                break;
+            }
+        }
+
+        if not found {
+            self.recent_patterns.push({
+                "re": re_p.copy(),
+                "im": im_p.copy(),
+                "freq": 1
+            });
+        }
+
+        while len(self.recent_patterns) > self.max_recent {
+            let min_f = 1000000;
+            let min_idx = 0;
+            for i in range(len(self.recent_patterns)) {
+                if self.recent_patterns[i]["freq"] < min_f {
+                    min_f = self.recent_patterns[i]["freq"];
+                    min_idx = i;
+                }
+            }
+            self.recent_patterns = self.recent_patterns[:min_idx]
+                                   + self.recent_patterns[min_idx+1:];
+        }
+
+        self.step_count = self.step_count + 1;
+    }
+
+    fn consolidate(self) {
+
+        if self.step_count % self.consolidate_every != 0 {
+            return 0;
+        }
+
+        let consolidated = 0;
+        for entry in self.recent_patterns {
+            if entry["freq"] >= self.min_frequency {
+                self.crystal.write(entry["re"],
+                                   float(np.mean(entry["re"])));
+                consolidated = consolidated + 1;
+            }
+        }
+
+        self.recent_patterns = [];
+
+        if consolidated > 0 {
+            self.crystal.crystallize(1.0);
+        }
+
+        return consolidated;
+    }
+
+    fn recall_from_crystal(self, query_re, query_im) {
+        let q_re = np.array(query_re).reshape(-1);
+        let q_im = np.array(query_im).reshape(-1);
+        return self.crystal.recall_score(q_re);
+    }
+
+    fn stats(self) {
+        let rf = 0;
+        for entry in self.recent_patterns {
+            rf = rf + entry["freq"];
+        }
+        print("MemoryConsolidator: " + str(len(self.recent_patterns))
+              + " recent patterns, " + str(rf) + " total observations, "
+              + str(self.step_count) + " steps");
+    }
+}
+
+class CrystalMemoryBank {
+    fn __init__(self, d_psi, lattice_size=8, hologram_len=128,
+                consolidate_every=100, seed=42) {
+        self.d_psi = d_psi;
+
+        self.consolidator = MemoryConsolidator(
+            d_psi, lattice_size, hologram_len, consolidate_every,
+            min_frequency=3, seed=seed
+        );
+
+        self.working_re = np.zeros(d_psi);
+        self.working_im = np.zeros(d_psi);
+    }
+
+    fn update_working(self, re, im) {
+        self.working_re = np.array(re).reshape(-1);
+        self.working_im = np.array(im).reshape(-1);
+
+        self.consolidator.observe(self.working_re, self.working_im);
+    }
+
+    fn query(self, query_re, query_im) {
+
+        let q_re = np.array(query_re).reshape(-1);
+        let q_im = np.array(query_im).reshape(-1);
+
+        let work_sim = float(np.sum(q_re * self.working_re
+                                    + q_im * self.working_im));
+
+        let crystal_score = self.consolidator.recall_from_crystal(q_re, q_im);
+
+        let blend = crystal_score * 0.3;
+
+        let out_re = q_re * (1.0 - blend) + self.working_re * blend;
+        let out_im = q_im * (1.0 - blend) + self.working_im * blend;
+
+        return {
+            "re": out_re,
+            "im": out_im,
+            "working_similarity": work_sim,
+            "crystal_score": crystal_score
+        };
+    }
+
+    fn step(self) {
+        self.consolidator.consolidate();
+    }
+
+    fn stats(self) {
+        self.consolidator.stats();
+    }
+}
+
+print("Crystal memory bank loaded.");
+print("  CrystalLattice      — 3D field lattice (long-term)");
+print("  TemporalHologram    — interference-based sequence storage");
+print("  MemoryConsolidator  — short → long-term consolidation");
+print("  CrystalMemoryBank   — unified three-tier memory");
+
+let test_dim = 16;
+let test_bank = CrystalMemoryBank(test_dim, lattice_size=4,
+                                  hologram_len=32, seed=123);
+
+let rng = np.random.default_rng(42);
+for i in range(50) {
+    let re_pat = rng.standard_normal(test_dim) * 0.1;
+    let im_pat = rng.standard_normal(test_dim) * 0.1;
+    test_bank.update_working(re_pat, im_pat);
+    test_bank.step();
+}
+
+test_bank.stats();
+let query = test_bank.query(rng.standard_normal(test_dim) * 0.1,
+                             rng.standard_normal(test_dim) * 0.1);
+print("query: working_sim=" + str(query["working_similarity"])
+      + " crystal=" + str(query["crystal_score"]));

@@ -1,0 +1,81 @@
+import triad.nn as nn;
+import triad.tensor as T;
+import triad.ntri as np;
+
+print("Field LM — attention + interference + field + wells");
+print("===================================================");
+
+let TEXT = "the field oscillates and remembers. the field couples and crystallizes. ";
+let tok = nn.CharTokenizer(TEXT);
+let ids = np.array(tok.encode(TEXT), dtype=np.float64);
+let vocab = tok.vocab_size;
+
+class FieldLM {
+    fn __init__(self) {
+        self.emb = nn.Embedding(vocab, 16);
+        self.blk = nn.WaveTransformerBlock(16, 2, 32, seed=2);
+        self.ln = nn.LayerNorm(16);
+        self.head = nn.triad(16, vocab, bias=false);
+    }
+    fn forward(self, x) {
+        let h = self.emb(x);
+        let h2 = self.blk.forward(h);
+        return self.head(self.ln(h2));
+    }
+    fn parameters(self) {
+        let ps = self.emb.parameters();
+        for p in self.blk.parameters() { ps.append(p); }
+        for p in self.ln.parameters() { ps.append(p); }
+        for p in self.head.parameters() { ps.append(p); }
+        return ps;
+    }
+}
+
+let model = FieldLM();
+let opt = nn.TriadFlow(model.parameters(), lr=0.01, seed=3);
+
+let CTX = 12;
+let first = 0.0;
+let last = 0.0;
+for step in range(40) {
+    let st = (step * 7) % (len(ids) - CTX - 1);
+    let x = ids[st : st + CTX].reshape(1, -1);
+    let y = ids[st + 1 : st + CTX + 1];
+    let loss = T.cross_entropy(model.forward(T.tensor(x)), T.tensor(y));
+    opt.zero_grad();
+    loss.backward();
+    opt.step();
+    let v = loss.item();
+    if step == 0 { first = v; }
+    last = v;
+}
+print(f"training (TriadFlow + wave): loss {first:.4f} -> {last:.4f}");
+
+print("");
+print("long-term memory (bank of wells):");
+let bank = nn.FieldMemoryBank(16, slots=4, seed=2);
+let facts = [];
+for k in range(4) {
+    let rng = np.random.default_rng(10 + k);
+    facts.append(np.sign(rng.standard_normal(16)));
+}
+for f in facts {
+    bank.store(f);
+}
+let recovered = 0;
+for k in range(4) {
+    let cue = facts[k].copy();
+    let hide = np.random.default_rng(30 + k).random(16) < 0.4;
+    cue[hide] = 0.0;
+    let output = bank.recall(cue);
+    let rec = output["pattern"];
+    let correct = 1;
+    for j in range(16) {
+        if hide[j] and rec[j] != facts[k][j] { correct = 0; }
+    }
+    recovered = recovered + correct;
+    print(f"  fact {k}: slot {output["slot"]}, intact: {correct == 1}");
+}
+print(f"perfect recoveries: {recovered}/4 (40% erased)");
+print("");
+print("an LM where training, weights and memory are physics of one engine.");

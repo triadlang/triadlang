@@ -1,0 +1,48 @@
+let VOCAB = 16;
+let DM = 32;
+let BLOCOS = 1;
+let CABECAS = 2;
+let DFF = 64;
+let CTX = 12;
+
+print("Native transformer — training in pure C");
+
+let modelo = ml_transformer(VOCAB, DM, BLOCOS, CABECAS, DFF);
+let opt = ml_transformer_adam(modelo, 0.01);
+
+let ids = [];
+for i in range(64) {
+    ids.append((i * 5 + 3) % VOCAB);
+}
+
+let primeira = 0.0;
+let ultima = 0.0;
+for passo in range(40) {
+    let inicio = (passo * 7) % (64 - CTX - 1);
+    let x = [];
+    let alvo = [];
+    for k in range(CTX) {
+        x.append(ids[inicio + k]);
+        alvo.append(ids[inicio + k + 1]);
+    }
+    let xt = ml_tensor(x, false);
+    let yt = ml_tensor(alvo, false);
+    let logits = ml_transformer_forward(modelo, xt);
+    let perda = ml_cross_entropy(logits, yt);
+    ml_adam_zero(opt);
+    ml_backward(perda);
+    ml_adam_step(opt);
+    let v = ml_item(perda);
+    if passo == 0 {
+        primeira = v;
+    }
+    ultima = v;
+    if passo % 10 == 0 {
+        print(f"step {passo}: loss {v}");
+    }
+}
+
+print(f"loss {primeira} -> {ultima}");
+if ultima < primeira {
+    print("native transformer learned: loss dropped in pure C");
+}

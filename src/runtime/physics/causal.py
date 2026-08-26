@@ -1,6 +1,7 @@
 from __future__ import annotations
-from typing import Optional
-import numpy as np
+
+from triad import ntri as np
+
 
 def memory_causal_strength(y_traj: np.ndarray, n_regions: int=4) -> np.ndarray:
     M, N_grid, n_t = y_traj.shape
@@ -103,7 +104,7 @@ def detect_causal_channels(y_traj: np.ndarray, threshold: float=0.5) -> list[dic
         channels.append({'start': int(start), 'end': int(N_grid - 1), 'width': int(N_grid - start), 'energy': float(total_memory_energy[start:].mean())})
     return channels
 
-def causal_report(density: np.ndarray, y_traj: Optional[np.ndarray]=None, nu: tuple=(2.0, 0.5, 0.1), n_regions: int=4) -> dict:
+def causal_report(density: np.ndarray, y_traj: np.ndarray | None=None, nu: tuple=(2.0, 0.5, 0.1), n_regions: int=4) -> dict:
     N_grid, n_t = density.shape
     M = len(nu)
     if y_traj is None:
@@ -129,8 +130,8 @@ def _compute_memory(density: np.ndarray, nu: tuple=(2.0, 0.5, 0.1), dt: float=0.
 def _discretise(x: np.ndarray, n_bins: int) -> np.ndarray:
     if n_bins <= 1 or len(x) < 2:
         return np.zeros(len(x), dtype=int)
-    edges = np.linspace(x.min() - 1e-10, x.max() + 1e-10, n_bins + 1)
-    return np.digitize(x, edges[1:-1])
+    links = np.linspace(x.min() - 1e-10, x.max() + 1e-10, n_bins + 1)
+    return np.digitize(x, links[1:-1])
 
 def _conditional_entropy(future: np.ndarray, past: np.ndarray) -> float:
     n = len(future)

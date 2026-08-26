@@ -1,6 +1,6 @@
 from adapters.base import BaseAdapter
-from adapters.headless import HeadlessAdapter
 from adapters.flask import FlaskAdapter
+from adapters.headless import HeadlessAdapter
 
 ADAPTERS = {
     'headless': HeadlessAdapter,

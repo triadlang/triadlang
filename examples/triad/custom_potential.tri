@@ -1,5 +1,5 @@
 import triad;
-import numpy as np;
+import triad.ntri as np;
 
 fn my_potential(x) {
     return -0.5 * x * x + 0.1 * np.sin(x);

@@ -1,0 +1,9 @@
+import triad.qalgo as qa;
+import math;
+
+print("Quantum phase estimation (6 bits)");
+let theta = 2.0 * math.pi * 0.328125;
+let r = qa.qpe_phase_gate(theta, t_bits=6, shots=2048, seed=4);
+print(f"fase real    : {r["phase_true"]:.6f}");
+print(f"fase estimada: {r["phase_est"]:.6f}  (bits {r["bits"]})");
+print(f"erro         : {r["error"]:.6f}");

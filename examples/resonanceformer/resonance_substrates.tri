@@ -1,0 +1,409 @@
+import triad.nn as nn;
+import triad.tensor as T;
+import triad.net as net;
+import triad.ntri as np;
+
+class WaveSubstrate {
+    fn __init__(self, d_psi, Lambda, gamma_0, sigma, alpha, hbar, mass,
+                dt, T_bath, seed) {
+        self.d_psi = d_psi;
+        self.Lambda = float(Lambda);
+        self.gamma_0 = float(gamma_0);
+        self.sigma = float(sigma);
+        self.alpha = float(alpha);
+        self.hbar = float(hbar);
+        self.mass = float(mass);
+        self.dt = float(dt);
+        self.T_bath = float(T_bath);
+
+        let k_vals = np.fft.fftfreq(d_psi, d=1.0) * 2.0 * np.pi;
+        let k_abs = np.abs(k_vals);
+        let H_kin = (hbar * hbar * k_abs * k_abs) / (2.0 * mass)
+                    + alpha * (k_abs ** sigma);
+
+        let angle = H_kin * dt / (2.0 * hbar);
+        self.half_kin_re = np.cos(angle);
+        self.half_kin_imag = -np.sin(angle);
+
+        self.damp = np.exp(-gamma_0 * dt / (2.0 * hbar));
+
+        let s = int(seed);
+        self.seed = s;
+    }
+
+    fn set_temperature(self, T_new) {
+        self.T_bath = float(T_new);
+    }
+
+    fn set_Lambda(self, L_new) {
+        self.Lambda = float(L_new);
+    }
+
+    fn evolve(self, psi_re, psi_im, V_mem, step_count) {
+
+        let re_data = psi_re.data;
+        let im_data = psi_im.data;
+        let V_data  = V_mem.data;
+
+        let re_hat = np.fft.fft(re_data, axis=-1);
+        let im_hat = np.fft.fft(im_data, axis=-1);
+        let new_re_hat = re_hat * self.half_kin_re - im_hat * self.half_kin_imag;
+        let new_im_hat = re_hat * self.half_kin_imag + im_hat * self.half_kin_re;
+        let re1 = np.fft.ifft(new_re_hat, axis=-1).real;
+        let im1 = np.fft.ifft(new_im_hat, axis=-1).real;
+
+        let rho = re1 * re1 + im1 * im1;
+        let V_nl = self.Lambda * rho + V_data;
+        let angle = V_nl * self.dt / self.hbar;
+        let cos_a = np.cos(angle);
+        let sin_a = np.sin(angle);
+        let re2 = re1 * cos_a + im1 * sin_a;
+        let im2 = im1 * cos_a - re1 * sin_a;
+
+        let re3 = re2 * self.damp;
+        let im3 = im2 * self.damp;
+
+        if self.T_bath > 0.0 and self.gamma_0 > 0.0 {
+            let noise_scale = np.sqrt(2.0 * self.gamma_0 * self.T_bath * self.dt
+                                       / 2.0);
+            let rng = np.random.default_rng(self.seed * 1000003 + step_count);
+            let noise_re = rng.standard_normal(re3.shape) * noise_scale;
+            let noise_im = rng.standard_normal(im3.shape) * noise_scale;
+            re3 = re3 + noise_re;
+            im3 = im3 + noise_im;
+        }
+
+        let re_hat2 = np.fft.fft(re3, axis=-1);
+        let im_hat2 = np.fft.fft(im3, axis=-1);
+        let final_re_hat = re_hat2 * self.half_kin_re - im_hat2 * self.half_kin_imag;
+        let final_im_hat = re_hat2 * self.half_kin_imag + im_hat2 * self.half_kin_re;
+        let re_final = np.fft.ifft(final_re_hat, axis=-1).real;
+        let im_final = np.fft.ifft(final_im_hat, axis=-1).real;
+
+        return {
+            "re": T.tensor(re_final.astype(np.float32)),
+            "im": T.tensor(im_final.astype(np.float32)),
+            "density": rho
+        };
+    }
+}
+
+class MemorySubstrate {
+    fn __init__(self, d_psi, n_heads, nu_min, nu_max, dt, seed) {
+        self.d_psi = d_psi;
+        self.n_heads = n_heads;
+        self.dt = float(dt);
+
+        let nus = [];
+        if n_heads == 1 {
+            nus.push(nu_max);
+        } else {
+            for j in range(n_heads) {
+                let nu = nu_max * (nu_min / nu_max)
+                          ** (float(j) / float(n_heads - 1));
+                nus.push(nu);
+            }
+        }
+        self.nus = nus;
+        self.alphas = [];
+        for nu in nus {
+            self.alphas.push(np.exp(-nu * dt));
+        }
+
+        let raw = [];
+        for j in range(n_heads) {
+            let w = 3.0 ** (1.0 - float(j) / float(max(1, n_heads - 1)));
+            raw.push(w);
+        }
+        let total = 0.0;
+        for w in raw { total = total + w; }
+        self.lambdas = [];
+        for w in raw { self.lambdas.push(w / total); }
+
+        self.head_mix = nn.Parameter(
+            T.tensor(np.zeros((n_heads, n_heads)) * 0.01)
+        );
+
+        self.seed = int(seed);
+    }
+
+    fn parameters(self) {
+        return [self.head_mix];
+    }
+
+    fn forward(self, density, y_state_in) {
+
+        let B = density.shape[0];
+        let L = density.shape[1];
+
+        let alpha_arr = [];
+        for a in self.alphas { alpha_arr.push(float(a)); }
+
+        let y_curr = [];
+        if y_state_in == none {
+            for h in range(self.n_heads) {
+                y_curr.push(np.zeros((B,)));
+            }
+        } else {
+            for h in range(self.n_heads) {
+                let col = [];
+                for b in range(B) {
+                    col.push(float(y_state_in[b, h]));
+                }
+                y_curr.push(np.array(col));
+            }
+        }
+
+        let y_traj = np.zeros((B, L, self.n_heads));
+        for l in range(L) {
+            let rho_l = [];
+            for b in range(B) {
+                rho_l.push(float(density.data[b, l, 0]));
+            }
+            for h in range(self.n_heads) {
+                let a = alpha_arr[h];
+                for b in range(B) {
+                    y_curr[h][b] = a * y_curr[h][b] + (1.0 - a) * rho_l[b];
+                    y_traj[b, l, h] = y_curr[h][b];
+                }
+            }
+        }
+
+        let V_data = np.zeros((B, L, 1));
+        for l in range(L) {
+            for b in range(B) {
+                let v = 0.0;
+                for h in range(self.n_heads) {
+                    v = v + self.lambdas[h] * y_traj[b, l, h];
+                }
+                V_data[b, l, 0] = v;
+            }
+        }
+
+        let y_out = np.zeros((B, self.n_heads));
+        for b in range(B) {
+            for h in range(self.n_heads) {
+                y_out[b, h] = y_curr[h][b];
+            }
+        }
+
+        return {
+            "V_mem": T.tensor(V_data),
+            "y_state": y_out
+        };
+    }
+}
+
+class ReservoirSubstrate {
+    fn __init__(self, d_model, d_psi, d_res, seed) {
+        self.d_model = d_model;
+        self.d_psi   = d_psi;
+        self.d_res   = d_res;
+
+        self.wave = nn.Wavetriad(d_model, d_psi, seed=seed);
+        self.wave_im = nn.triad(d_model, d_psi);
+
+        self.attractor = nn.AttractorMemory(d_psi, seed=seed + 1);
+
+        self.read_re = nn.triad(d_psi, d_model);
+        self.read_im = nn.triad(d_psi, d_model);
+
+        self.step_count = 0;
+    }
+
+    fn parameters(self) {
+        let ps = [];
+        for p in self.wave.parameters() { ps.append(p); }
+        for p in self.wave_im.parameters() { ps.append(p); }
+        for p in self.read_re.parameters() { ps.append(p); }
+        for p in self.read_im.parameters() { ps.append(p); }
+        return ps;
+    }
+
+    fn drive(self, x) {
+        let amp = self.wave.forward(x);
+        let lin = self.wave_im(x);
+        return {"re": amp, "im": lin};
+    }
+
+    fn remember(self, psi_re, psi_im) {
+        let re_data = psi_re.data;
+        let im_data = psi_im.data;
+        let B = re_data.shape[0];
+        let L = re_data.shape[1];
+
+        for b in range(B) {
+            let idx = int(self.step_count + b) % L;
+            let re_pat = re_data[b, idx].reshape(-1);
+            let im_pat = im_data[b, idx].reshape(-1);
+            let pat = np.sign(re_pat * 0.5 + im_pat * 0.5 + 1e-6);
+            self.attractor.store(pat);
+        }
+        self.step_count = self.step_count + 1;
+    }
+
+    fn recall(self, psi_re, psi_im, blend=0.3) {
+        let re_data = psi_re.data;
+        let im_data = psi_im.data;
+        let B = re_data.shape[0];
+        let L = re_data.shape[1];
+        let D = re_data.shape[2];
+
+        let out_re = np.zeros_like(re_data);
+        let out_im = np.zeros_like(im_data);
+
+        for b in range(B) {
+            for l in range(L) {
+                let re_vec = re_data[b, l].reshape(-1);
+                let im_vec = im_data[b, l].reshape(-1);
+                let cue = np.sign(re_vec * 0.5 + im_vec * 0.5 + 1e-6);
+                let rec = self.attractor.recall(cue);
+                let re_pat = rec["pattern"];
+                let im_pat = rec["pattern"];
+                out_re[b, l] = re_vec * (1.0 - blend) + re_pat * blend;
+                out_im[b, l] = im_vec * (1.0 - blend) + im_pat * blend;
+            }
+        }
+
+        return {
+            "re": T.tensor(out_re.astype(np.float32)),
+            "im": T.tensor(out_im.astype(np.float32))
+        };
+    }
+
+    fn read_out(self, psi_re, psi_im) {
+        return {
+            "re_proj": self.read_re(psi_re),
+            "im_proj": self.read_im(psi_im)
+        };
+    }
+}
+
+class CoupledSubstrate {
+    fn __init__(self, d_model, d_psi, d_res, n_heads,
+                Lambda, gamma_0, sigma, alpha, hbar, mass, dt, T_bath,
+                nu_min, nu_max, seed) {
+        self.d_model = d_model;
+        self.d_psi   = d_psi;
+        self.d_res   = d_res;
+
+        self.wave     = WaveSubstrate(d_psi, Lambda, gamma_0, sigma, alpha,
+                                       hbar, mass, dt, T_bath, seed);
+        self.memory   = MemorySubstrate(d_psi, n_heads, nu_min, nu_max, dt,
+                                         seed + 7);
+        self.reservoir = ReservoirSubstrate(d_model, d_psi, d_res, seed + 13);
+
+        self.norm_in   = nn.LayerNorm(d_model);
+        self.proj_re   = nn.triad(d_model, d_psi);
+        self.proj_im   = nn.triad(d_model, d_psi);
+        self.out_proj  = nn.triad(2 * d_psi, d_model);
+    }
+
+    fn parameters(self) {
+        let ps = [];
+        for p in self.memory.parameters() { ps.append(p); }
+        for p in self.reservoir.parameters() { ps.append(p); }
+        for p in self.norm_in.parameters() { ps.append(p); }
+        for p in self.proj_re.parameters() { ps.append(p); }
+        for p in self.proj_im.parameters() { ps.append(p); }
+        for p in self.out_proj.parameters() { ps.append(p); }
+        return ps;
+    }
+
+    fn step(self, x, y_state_in, step_count) {
+
+        let x_norm = self.norm_in(x);
+
+        let drive = self.reservoir.drive(x_norm);
+        let psi_re_drive = drive["re"];
+        let psi_im_drive = drive["im"];
+        let proj_re = self.proj_re(x_norm);
+        let proj_im = self.proj_im(x_norm);
+        let psi_re = T.tensor((psi_re_drive.data + proj_re.data).astype(np.float32));
+        let psi_im = T.tensor((psi_im_drive.data + proj_im.data).astype(np.float32));
+        let rho = psi_re.data * psi_re.data + psi_im.data * psi_im.data;
+        let rho_mean = np.mean(rho, axis=-1, keepdims=true);
+        let density_t = T.tensor(rho_mean.astype(np.float32));
+        let mem = self.memory.forward(density_t, y_state_in);
+        let V_mem = mem["V_mem"];
+
+        let drive = self.reservoir.drive(x_norm);
+        let psi_re_drive = drive["re"];
+        let psi_im_drive = drive["im"];
+
+        let proj_re = self.proj_re(x_norm);
+        let proj_im = self.proj_im(x_norm);
+        let psi_re = T.tensor((psi_re_drive.data + proj_re.data)
+                               .astype(np.float32));
+        let psi_im = T.tensor((psi_im_drive.data + proj_im.data)
+                               .astype(np.float32));
+
+        let rho = psi_re.data * psi_re.data + psi_im.data * psi_im.data;
+        let rho_mean = np.mean(rho, axis=-1, keepdims=True);
+        let density_t = T.tensor(rho_mean.astype(np.float32));
+
+        let mem = self.memory.forward(density_t, y_state_in);
+        let V_mem = mem["V_mem"];
+
+        let evo = self.wave.evolve(psi_re, psi_im, V_mem, step_count);
+        let psi_re_new = evo["re"];
+        let psi_im_new = evo["im"];
+
+        let recall = self.reservoir.recall(psi_re_new, psi_im_new, blend=0.2);
+        let psi_re_blend = T.tensor(
+            (psi_re_new.data * 0.7 + recall["re"].data * 0.3).astype(np.float32));
+        let psi_im_blend = T.tensor(
+            (psi_im_new.data * 0.7 + recall["im"].data * 0.3).astype(np.float32));
+
+        self.reservoir.remember(psi_re_blend, psi_im_blend);
+
+        let concat = T.cat([psi_re_blend, psi_im_blend], axis=-1);
+        let out = self.out_proj(concat);
+
+        let rho_arr = evo["density"];
+        let rho_flat = rho_arr.reshape(-1);
+        let rho_sum = float(np.sum(rho_flat));
+        let rho_sq  = float(np.sum(rho_flat * rho_flat));
+        let ipr = rho_sq / (rho_sum * rho_sum + 1e-10);
+        let crys = float(np.mean(rho_flat)) / (float(np.max(rho_flat)) + 1e-10);
+        let rho_per = rho_arr.mean(axis=0).mean(axis=0);
+        let rho_fft = np.abs(np.fft.fft(rho_per));
+        let k_idx = int(np.argmax(rho_fft[1:])) + 1;
+        let k_star = float(2.0 * np.pi * float(k_idx) / float(len(rho_fft)));
+        let observables = {
+            "crystallinity": crys,
+            "ipr": ipr,
+            "k_star": k_star,
+            "peak": float(np.max(rho_flat)),
+            "norm": rho_sum,
+            "fwhm": 0.0,
+            "participation": float(1.0 / (ipr * len(rho_flat) + 1e-10))
+        };
+
+        return {
+            "output": x + out,
+            "y_state": mem["y_state"],
+            "observables": observables
+        };
+    }
+}
+
+print("ResonanceFormer substrates loaded.");
+print("  P1 WaveSubstrate       — complex ψ, FFT spectral evolution");
+print("  P2 MemorySubstrate     — multi-scale causal exponential memory");
+print("  P3 ReservoirSubstrate  — attractor bank + WaveFFN drive/readout");
+print("  CoupledSubstrate       — one triad triad step (P1+P2+P3 together)");
+print("");
+
+let tiny = CoupledSubstrate(
+    16, 8, 8, 2,
+    Lambda=-0.5, gamma_0=0.05, sigma=1.5, alpha=0.15,
+    hbar=1.0, mass=1.0, dt=0.05, T_bath=0.01,
+    nu_min=0.01, nu_max=4.0, seed=42
+);
+let x_test = T.tensor(np.random.default_rng(0).standard_normal((1, 4, 16))
+                       .astype(np.float32));
+let res = tiny.step(x_test, none, 0);
+print("smoke test: forward ok, output shape = " + str(res["output"].shape));
+print("observables: crys=" + str(res["observables"]["crystallinity"])
+      + " ipr=" + str(res["observables"]["ipr"]));

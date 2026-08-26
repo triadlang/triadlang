@@ -1,0 +1,21 @@
+import triad.atoms as atoms;
+
+let mem = atoms.CrystalMemory(N=32, L=20.0, D=3, lattice_const=4.62, seed=42);
+
+print("crystallizing from chaos...");
+let found = mem.crystallize(5.0);
+print("atoms after crystallization: " + str(len(found)));
+
+let lattice = mem.read();
+let occupied = 0;
+for s in lattice {
+    if s["occupied"] {
+        occupied = occupied + 1;
+    }
+}
+print("lattice sites: " + str(len(lattice)) + "  occupied: " + str(occupied));
+
+mem.write(0, phase=1.0);
+mem.settle(0.5);
+let after = mem.read();
+print("site 0 after write: occupied=" + str(after[0]["occupied"]) + " phase=" + str(after[0]["phase"]));

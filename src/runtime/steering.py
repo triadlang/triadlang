@@ -1,42 +1,29 @@
-"""Phase B4: V_ext steering via bounded PID controller.
 
-Steers the field toward a target observable (e.g. crystallinity=0.8) by
-modulating the external potential V_ext(x).  Uses a PID controller that
-adjusts a potential bias parameter (amplitude, center, or width of a
-Gaussian well) based on the observable error.
-
-Constraints:
-  - V_ext bias is BOUNDED (max_bias parameter) to prevent imposing structure.
-  - Steering only via V_ext, never clamping psi.
-  - The PID integral term is anti-windup limited.
-  - All three pillars remain active throughout (P1+P2+P3).
-  - The controller converges to the target EMERGENTLY from the PDE dynamics.
-"""
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Optional, Callable
-import numpy as np
 
-from runtime.core.solver import integrate, TriadParams
-from runtime.physics.observables import crystallinity, energy, dominant_wavenumber
-from runtime.backend import get_xp, asnumpy
+from dataclasses import dataclass, field
+
+from runtime.core.solver import TriadParams, integrate
+from runtime.physics.observables import crystallinity, dominant_wavenumber, energy
+from triad import ntri as np
+
 
 @dataclass
 class PIDConfig:
-    """PID controller configuration for V_ext steering."""
-    kp: float = 1.0          
-    ki: float = 0.1          
-    kd: float = 0.05         
-    max_bias: float = 2.0    
-    max_integral: float = 5.0  
-    target: float = 0.8      
-    observable: str = "crystallinity"  
-    well_center: float = 0.0 
-    well_sigma: float = 2.0  
+
+    kp: float = 1.0
+    ki: float = 0.1
+    kd: float = 0.05
+    max_bias: float = 2.0
+    max_integral: float = 5.0
+    target: float = 0.8
+    observable: str = "crystallinity"
+    well_center: float = 0.0
+    well_sigma: float = 2.0
 
 @dataclass
 class PIDState:
-    """Internal state of the PID controller."""
+
     integral: float = 0.0
     prev_error: float = 0.0
     prev_bias: float = 0.0
@@ -44,7 +31,7 @@ class PIDState:
 
 def _measure_observable(psi: np.ndarray, dx: float, p: TriadParams,
                          name: str) -> float:
-    """Measure the specified observable from the field."""
+
     if name == "crystallinity":
         return crystallinity(psi, dx)
     elif name == "energy":
@@ -56,8 +43,7 @@ def _measure_observable(psi: np.ndarray, dx: float, p: TriadParams,
 
 def _pid_step(state: PIDState, error: float, dt_ctrl: float,
               cfg: PIDConfig) -> float:
-    """One PID update.  Returns the new bias amplitude (bounded)."""
-    
+
     p_term = cfg.kp * error
 
     state.integral += error * dt_ctrl
@@ -74,36 +60,10 @@ def _pid_step(state: PIDState, error: float, dt_ctrl: float,
 
     return bias
 
-def steer(p: TriadParams, cfg: Optional[PIDConfig] = None,
+def steer(p: TriadParams, cfg: PIDConfig | None = None,
           n_rounds: int = 20, T_per_round: float = 2.0,
           verbose: bool = False) -> dict:
-    """Run V_ext steering via PID control over multiple integration rounds.
 
-    Each round:
-      1. Measure the target observable from the current field.
-      2. Compute error vs target.
-      3. PID updates the V_ext bias amplitude.
-      4. Re-integrate with the new V_ext.
-
-    The V_ext is a Gaussian well: V_ext(x) = -bias * exp(-x^2 / (2*sigma^2))
-    The bias is bounded to prevent imposing structure.
-
-    Parameters
-    ----------
-    p : TriadParams
-        Base parameters (will be modified each round with new V_ext).
-    cfg : PIDConfig, optional
-        PID configuration.  Uses defaults if None.
-    n_rounds : int
-        Number of steering rounds.
-    T_per_round : float
-        Integration time per round.
-    verbose : bool
-
-    Returns
-    -------
-    dict with final psi, observables history, bias history, converged.
-    """
     if cfg is None:
         cfg = PIDConfig()
 
@@ -120,7 +80,7 @@ def steer(p: TriadParams, cfg: Optional[PIDConfig] = None,
     y = None
 
     for rnd in range(n_rounds):
-        
+
         p_round = TriadParams(**{**p.__dict__, 'T': T_per_round,
                                   'seed': p.seed + rnd * 13})
         r = integrate(p_round, psi0=psi, y0=y)
@@ -135,7 +95,7 @@ def steer(p: TriadParams, cfg: Optional[PIDConfig] = None,
 
         sigma = cfg.well_sigma
         center = cfg.well_center
-        bias_cap = bias  
+        bias_cap = bias
 
         def _make_vext(b, sig, cen):
             def vext_fn(x_arr):

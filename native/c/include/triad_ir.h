@@ -1,13 +1,3 @@
-/*
- * triad_ir.h — Native TriadLang IR (mirror of compiler/ir.py) +
- * lowering from the universal AST (mirror of compiler/lower.py).
- *
- * Ownership: every TriadIRNode and inline array/string returned by
- * this API is bump-allocated from the TriadArena passed in. Freeing
- * the arena frees the whole IRModule. Do NOT free individual nodes.
- *
- * Concurrency: not thread-safe. One arena per lowering pass.
- */
 #ifndef TRIAD_IR_H
 #define TRIAD_IR_H
 
@@ -18,7 +8,7 @@ extern "C" {
 #endif
 
 typedef enum {
-    /* literals & primitives */
+
     TRIAD_IR_INT,
     TRIAD_IR_FLOAT,
     TRIAD_IR_BOOL,
@@ -26,7 +16,6 @@ typedef enum {
     TRIAD_IR_NONE,
     TRIAD_IR_IDENT,
 
-    /* ops & access */
     TRIAD_IR_BINOP,
     TRIAD_IR_UNARYOP,
     TRIAD_IR_CALL,
@@ -40,7 +29,6 @@ typedef enum {
     TRIAD_IR_LIST_COMP,
     TRIAD_IR_ASSIGN_EXPR,
 
-    /* statements */
     TRIAD_IR_LET,
     TRIAD_IR_CONST,
     TRIAD_IR_ASSIGN,
@@ -54,9 +42,16 @@ typedef enum {
     TRIAD_IR_FUNCTION,
     TRIAD_IR_TRY_CATCH,
     TRIAD_IR_THROW,
+    TRIAD_IR_WITH,
+    TRIAD_IR_ASSERT,
+    TRIAD_IR_PASS,
+    TRIAD_IR_DEL,
+    TRIAD_IR_ASYNC_FOR,
+    TRIAD_IR_ASYNC_WITH,
     TRIAD_IR_TYPE_DECL,
     TRIAD_IR_ENTITY_DECL,
     TRIAD_IR_WORLD_DECL,
+    TRIAD_IR_SUBSTRATE_DECL,
     TRIAD_IR_REG_DECL,
     TRIAD_IR_OBSERVE,
     TRIAD_IR_RUN,
@@ -64,8 +59,25 @@ typedef enum {
     TRIAD_IR_DESTRUCT_LET,
     TRIAD_IR_CLASS_DECL,
     TRIAD_IR_YIELD,
+    TRIAD_IR_COMPLEX,
+    TRIAD_IR_BYTES,
+    TRIAD_IR_TUPLE,
+    TRIAD_IR_SET,
+    TRIAD_IR_TERNARY,
+    TRIAD_IR_CHAIN_CMP,
+    TRIAD_IR_SUPER,
+    TRIAD_IR_DICT_COMP,
+    TRIAD_IR_SET_COMP,
+    TRIAD_IR_GEN_COMP,
+    TRIAD_IR_YIELD_EXPR,
+    TRIAD_IR_AWAIT,
+    TRIAD_IR_COMP_CLAUSE,
+    TRIAD_IR_COUPLE,
+    TRIAD_IR_PAIR,
+    TRIAD_IR_RING,
+    TRIAD_IR_SEQUENCE,
+    TRIAD_IR_ANNOTATION,
 
-    /* top level */
     TRIAD_IR_MODULE,
 
     TRIAD_IR_KIND_COUNT
@@ -94,15 +106,11 @@ typedef struct {
     size_t        body_len;
 } TriadIRElifClause;
 
-/* IRFString.parts: list[tuple[str, Optional[IRNode]]].
- * If `expr` is non-NULL the part is an interpolation; otherwise `text`
- * is a literal piece. Matches IRFString in compiler/ir.py. */
 typedef struct {
-    const char  *text;     /* "" when expr != NULL */
-    TriadIRNode *expr;     /* NULL when text-only   */
+    const char  *text;
+    TriadIRNode *expr;
 } TriadIRFStringPart;
 
-/* IRTypeDecl.fields: list[tuple[str, str]] = (name, type_ann). */
 typedef struct {
     const char *name;
     const char *type_ann;
@@ -130,7 +138,7 @@ struct TriadIRNode {
 
         struct {
             TriadIRNode  *func_or_obj;
-            const char   *method;    /* method-call only */
+            const char   *method;
             TriadIRNode **args;
             size_t        args_len;
             TriadIRKwArg *kwargs;
@@ -159,11 +167,86 @@ struct TriadIRNode {
             const char  *var;
             TriadIRNode *iter;
             TriadIRNode *condition;
+
+            struct {
+                const char  *var;
+                TriadIRNode *iter;
+                TriadIRNode **conditions;
+                size_t       conditions_len;
+            } *clauses;
+            size_t clauses_len;
         } list_comp;
+
+        struct {
+            double real_val;
+            double imag_val;
+        } complex_lit;
+
+        struct {
+            const char *bytes_val;
+            size_t      bytes_len;
+        } bytes_lit;
+
+        struct { TriadIRNode **elements; size_t elements_len; } tuple_lit;
+        struct { TriadIRNode **elements; size_t elements_len; } set_lit;
+
+        struct {
+            TriadIRNode *condition;
+            TriadIRNode *then_val;
+            TriadIRNode *else_val;
+        } ternary;
+
+        struct {
+            TriadIRNode **operands;
+            size_t       operands_len;
+            const char  **ops;
+            size_t       ops_len;
+        } chain_cmp;
+
+        struct {
+            TriadIRNode **args;
+            size_t       args_len;
+        } super_expr;
+
+        struct {
+            TriadIRNode *key_expr;
+            TriadIRNode *value_expr;
+            struct {
+                const char  *var;
+                TriadIRNode *iter;
+                TriadIRNode **conditions;
+                size_t       conditions_len;
+            } *clauses;
+            size_t clauses_len;
+        } dict_comp;
+
+        struct {
+            TriadIRNode *expr;
+            struct {
+                const char  *var;
+                TriadIRNode *iter;
+                TriadIRNode **conditions;
+                size_t       conditions_len;
+            } *clauses;
+            size_t clauses_len;
+        } set_comp;
+
+        struct {
+            TriadIRNode *expr;
+            struct {
+                const char  *var;
+                TriadIRNode *iter;
+                TriadIRNode **conditions;
+                size_t       conditions_len;
+            } *clauses;
+            size_t clauses_len;
+        } gen_comp;
+
+        struct { TriadIRNode *value; } yield_expr;
+        struct { TriadIRNode *value; } await_expr;
 
         struct { TriadIRNode *target; TriadIRNode *value; } assign_expr;
 
-        /* statements */
         struct {
             const char  *name;
             const char  *type_ann;
@@ -175,7 +258,7 @@ struct TriadIRNode {
         } const_stmt;
         struct { TriadIRNode *target; TriadIRNode *value; } assign_stmt;
         struct { TriadIRNode *expr; }                       expr_stmt;
-        struct { TriadIRNode *value; }                      ret_or_throw;  /* for IRReturn/IRThrow/IRYield */
+        struct { TriadIRNode *value; }                      ret_or_throw;
 
         struct {
             TriadIRNode       *condition;
@@ -183,7 +266,7 @@ struct TriadIRNode {
             size_t             then_body_len;
             TriadIRElifClause *elif_clauses;
             size_t             elif_clauses_len;
-            TriadIRNode      **else_body;          /* NULL = absent */
+            TriadIRNode      **else_body;
             size_t             else_body_len;
             int                has_else;
         } if_stmt;
@@ -202,7 +285,7 @@ struct TriadIRNode {
         } while_stmt;
 
         struct {
-            const char   *name;       /* "" for lambdas */
+            const char   *name;
             const char  **params;
             size_t        params_len;
             TriadIRNode **body;
@@ -213,13 +296,29 @@ struct TriadIRNode {
             TriadIRNode **body;
             size_t        body_len;
             const char   *catch_var;
-            TriadIRNode **catch_body;          /* NULL = absent */
+            TriadIRNode **catch_body;
             size_t        catch_body_len;
             int           has_catch;
-            TriadIRNode **finally_body;        /* NULL = absent */
+            TriadIRNode **finally_body;
             size_t        finally_body_len;
             int           has_finally;
         } try_catch;
+
+        struct {
+            TriadIRNode  *expr;
+            const char   *var;
+            TriadIRNode **body;
+            size_t        body_len;
+        } with_stmt;
+
+        struct {
+            TriadIRNode *condition;
+            TriadIRNode *message;
+        } assert_stmt;
+
+        struct {
+            TriadIRNode *target;
+        } del_stmt;
 
         struct {
             const char        *name;
@@ -229,7 +328,7 @@ struct TriadIRNode {
 
         struct {
             const char       *name;
-            const char       *base;            /* nullable */
+            const char       *base;
             TriadIRStrEntry  *fields;
             size_t            fields_len;
         } entity_decl;
@@ -238,14 +337,26 @@ struct TriadIRNode {
             const char       *name;
             TriadIRStrEntry  *fields;
             size_t            fields_len;
-            TriadIRNode     **entities;        /* each is an IREntityDecl node */
+            TriadIRNode     **entities;
             size_t            entities_len;
         } world_decl;
 
         struct {
+            const char       *name;
+            const char       *regime;
+            const char      **members;
+            size_t            members_len;
+            TriadIRStrEntry  *properties;
+            size_t            properties_len;
+            TriadIRStrEntry  *overrides;
+            size_t            overrides_len;
+            int               is_composed;
+        } substrate_decl;
+
+        struct {
             const char  *name;
-            const char  *regime;       /* nullable */
-            TriadIRNode *value;        /* nullable */
+            const char  *regime;
+            TriadIRNode *value;
         } reg_decl;
 
         struct {
@@ -255,13 +366,48 @@ struct TriadIRNode {
         } observe;
 
         struct {
-            TriadIRNode *duration;     /* nullable */
+            TriadIRNode *duration;
+            const char  *target;
         } run;
+
+        struct {
+            const char  *src;
+            const char  *dst;
+            TriadIRNode *kappa;
+            TriadIRNode *duration;
+        } couple;
+
+        struct {
+            const char  *a;
+            const char  *b;
+            TriadIRNode *kappa;
+            TriadIRNode *duration;
+        } pair;
+
+        struct {
+            const char **members;
+            size_t       members_len;
+            TriadIRNode *kappa;
+            TriadIRNode *duration;
+        } ring;
+
+        struct {
+            const char *key;
+            const char *args;
+        } annotation;
+
+        struct {
+            TriadIRNode *inputs;
+            const char  *target;
+            TriadIRNode *each_for;
+        } sequence;
 
         struct {
             const char **path;
             size_t       path_len;
-            const char  *alias;        /* nullable */
+            const char  *alias;
+            const char **names;
+            size_t       names_len;
         } import_stmt;
 
         struct {
@@ -272,16 +418,16 @@ struct TriadIRNode {
 
         struct {
             const char  *name;
-            const char  *parent;       /* nullable */
-            const char **fields;       /* list of field names only */
+            const char  *parent;
+            const char **fields;
             size_t       fields_len;
-            TriadIRNode **methods;     /* each is an IRFunction node */
+            TriadIRNode **methods;
             size_t       methods_len;
         } class_decl;
 
         struct {
             const char    *name;
-            TriadIRNode  **imports;    /* each is an IRImport node */
+            TriadIRNode  **imports;
             size_t         imports_len;
             TriadIRNode  **body;
             size_t         body_len;
@@ -289,26 +435,17 @@ struct TriadIRNode {
     } u;
 };
 
-/* ── Lowering ───────────────────────────────────────────────────── */
-
-/* Lower an AST module into an IR module. Returns NULL on error;
- * `diag` is filled if non-NULL. */
 TriadIRNode *triad_ir_lower_module(TriadArena *arena,
                                    const TriadAstNode *module,
                                    TriadDiag *diag);
 
 const char *triad_ir_kind_name(TriadIRKind k);
 
-/* ── JSON dump ──────────────────────────────────────────────────── */
-
-/* Schema matches compiler/emit_json.py: every dataclass becomes
- *   {"_type": "<ClassName>", "<field>": ...}
- * Tuples become arrays. Used by scripts/ir_to_json.py + native parity. */
 char *triad_ir_dump_json(const TriadIRNode *module, int indent);
 int   triad_ir_dump_json_fp(const TriadIRNode *module, FILE *fp, int indent);
 
 #ifdef __cplusplus
-} /* extern "C" */
+}
 #endif
 
-#endif /* TRIAD_IR_H */
+#endif

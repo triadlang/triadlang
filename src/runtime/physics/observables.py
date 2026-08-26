@@ -1,19 +1,15 @@
-"""Field measurement functions (observables).
 
-All functions accept arrays from either numpy (CPU) or cupy (GPU).
-They auto-detect the backend via ``backend.xp_of`` and compute on the
-same device, avoiding GPU-CPU round-trips when the solver runs on CUDA.
-
-Scalar returns are plain Python floats.  Array returns follow the
-caller's backend (GPU in, GPU out).
-"""
 from __future__ import annotations
-import numpy as _np
 
-from runtime.backend import xp as _default_xp, asnumpy as _asnumpy, xp_of as _xp_of, to_xp as _to_xp
+from runtime.backend import asnumpy as _asnumpy
+from runtime.backend import to_xp as _to_xp
+from runtime.backend import xp as _default_xp
+from runtime.backend import xp_of as _xp_of
+from triad import ntri as _np
+
 
 def _xp(arr):
-    """Return the array module (numpy or cupy) matching *arr*."""
+
     return _xp_of(arr) if arr is not None else _default_xp
 
 def norm(psi, dx: float) -> float:
@@ -53,7 +49,7 @@ def participation_ratio(psi, dx: float) -> float:
     return n2 * n2 / max(n4, 1e-30)
 
 def power_spectrum(psi, dx: float):
-    """Return (k_sorted, P_sorted) on the same backend as *psi*."""
+
     np = _xp(psi)
     N = len(psi)
     psi_hat = np.fft.fft(psi)
@@ -72,12 +68,15 @@ def dominant_wavenumber(psi, dx: float, k_min: float = 0.0) -> float:
     P_m = P[mask]
     return float(abs(float(_asnumpy(k_m[int(_asnumpy(np.argmax(P_m)))]))))
 
-def crystallinity(psi, dx: float, k_cutoff: float = 1.0) -> float:
+def crystallinity(psi, dx: float, k_cutoff: float | None = None) -> float:
     np = _xp(psi)
     k, P = power_spectrum(psi, dx)
     total = float(_asnumpy(P.sum()))
     if total <= 0:
         return 0.0
+    if k_cutoff is None:
+        L = psi.shape[-1] * dx
+        k_cutoff = 2.0 * _np.pi / L
     structured = float(_asnumpy(P[np.abs(k) > k_cutoff].sum()))
     return structured / total
 
@@ -130,7 +129,7 @@ def _autocorr(series):
     n = s.size
     if n < 2 or _np.allclose(s, 0.0):
         return _np.array([1.0])
-    ac = _np.correlate(s, s, mode='full')[n - 1:]
+    ac = _np.correlate(s, s, mode='triad')[n - 1:]
     return ac / ac[0]
 
 def memory_persistence(series, dt: float = 1.0) -> float:
@@ -252,7 +251,7 @@ def reservoir_memory_capacity(states, inputs,
 
 def triad_phase_synchronization(psi, dx: float,
                                 shell_width: int = 2) -> float:
-    """Phase synchronization of Fourier triads."""
+
     np = _xp(psi)
     psi_k = np.fft.fft(psi)
     N = len(psi_k)
@@ -283,7 +282,7 @@ def triad_phase_synchronization(psi, dx: float,
 
 def spectral_flux(psi, dx: float, n_shells: int = 20,
                   k_min: float = 0.0):
-    """Spectral energy flux per |k| shell.  Returns numpy array (host)."""
+
     np = _xp(psi)
     psi_k = np.fft.fft(psi)
     k_all = 2.0 * np.pi * np.fft.fftfreq(len(psi_k), d=dx)
@@ -292,18 +291,18 @@ def spectral_flux(psi, dx: float, n_shells: int = 20,
     k_max = float(_asnumpy(abs_k.max()))
     if k_max <= k_min or n_shells < 2:
         return _np.zeros(0)
-    edges = _np.linspace(k_min, k_max, n_shells + 1)
+    links = _np.linspace(k_min, k_max, n_shells + 1)
     abs_k_h = _asnumpy(abs_k)
     P_h = _asnumpy(P)
     flux = _np.zeros(n_shells)
     for s in range(n_shells):
-        sel = (abs_k_h >= edges[s]) & (abs_k_h < edges[s + 1])
+        sel = (abs_k_h >= links[s]) & (abs_k_h < links[s + 1])
         if sel.any():
             flux[s] = float(P_h[sel].sum())
     return flux
 
 def memory_overlap(y_a, y_b) -> float:
-    """Cosine similarity between two memory-field or density vectors."""
+
     a = _np.asarray(_asnumpy(y_a), dtype=_np.float64).ravel()
     b = _np.asarray(_asnumpy(y_b), dtype=_np.float64).ravel()
     na = _np.linalg.norm(a)
@@ -313,19 +312,12 @@ def memory_overlap(y_a, y_b) -> float:
     return float(_np.dot(a, b) / (na * nb))
 
 def capacity_observable(N: int) -> float:
-    """Theoretical Hopfield capacity estimate: K ~ 0.3 * N^1.2."""
+
     return 0.3 * float(N) ** 1.2
 
 def energy(psi, dx: float, hbar: float = 1.0, m: float = 1.0,
            Lambda: float = -0.5, V_ext=None, V_mem=None) -> float:
-    """Hamiltonian energy of the field.
 
-    E[psi] = integral (hbar^2/(2m) |grad psi|^2 + V_ext |psi|^2
-                       + (Lambda/2) |psi|^4 + V_mem |psi|^2) dx
-
-    Reads the field; never modifies dynamics.  Kinetic term computed in
-    k-space via Parseval so it stays O(N log N) with the rest of the solver.
-    """
     np = _xp(psi)
     N = len(psi)
     k = 2.0 * np.pi * np.fft.fftfreq(N, d=dx)

@@ -1,8 +1,10 @@
 from __future__ import annotations
-import numpy as np
-from typing import Optional, Callable, Generator
-from dataclasses import dataclass, field
+
 import time
+from collections.abc import Callable, Generator
+from dataclasses import dataclass, field
+
+from triad import ntri as np
 
 THINK_START = 151667
 THINK_END = 151668
@@ -54,8 +56,8 @@ def sample_token(logits: np.ndarray, temperature: float = 1.0,
                  top_k: int = 0, top_p: float = 1.0,
                  repetition_penalty: float = 1.0,
                  repetition_window: int = 64,
-                 recent_tokens: Optional[list[int]] = None,
-                 rng: Optional[np.random.Generator] = None) -> int:
+                 recent_tokens: list[int] | None = None,
+                 rng: np.random.Generator | None = None) -> int:
     if rng is None:
         rng = np.random.default_rng()
     logits = logits.astype(np.float64)
@@ -90,8 +92,8 @@ def sample_token(logits: np.ndarray, temperature: float = 1.0,
 def _run_generate(model, prompt_ids: list[int], max_new_tokens: int,
                   temperature: float, top_k: int, top_p: float,
                   repetition_penalty: float, repetition_window: int,
-                  stop_ids: set[int], seed: Optional[int],
-                  callback: Optional[Callable]) -> GenerationResult:
+                  stop_ids: set[int], seed: int | None,
+                  callback: Callable | None) -> GenerationResult:
     from runtime.ml.forward import forward
 
     rng = np.random.default_rng(seed)
@@ -171,7 +173,7 @@ def _run_generate(model, prompt_ids: list[int], max_new_tokens: int,
 def _run_stream(model, prompt_ids: list[int], max_new_tokens: int,
                 temperature: float, top_k: int, top_p: float,
                 repetition_penalty: float, repetition_window: int,
-                stop_ids: set[int], seed: Optional[int]
+                stop_ids: set[int], seed: int | None
                 ) -> Generator[StreamToken, None, GenerationResult]:
     from runtime.ml.forward import forward
 
@@ -248,9 +250,9 @@ def _run_stream(model, prompt_ids: list[int], max_new_tokens: int,
 def generate(model, prompt_ids: list[int], max_new_tokens: int = 512,
              temperature: float = 0.6, top_k: int = 50, top_p: float = 0.95,
              repetition_penalty: float = 1.0, repetition_window: int = 64,
-             stop_ids: Optional[list[int]] = None,
-             callback: Optional[Callable[[int, int, str], None]] = None,
-             seed: Optional[int] = None) -> GenerationResult:
+             stop_ids: list[int] | None = None,
+             callback: Callable[[int, int, str], None] | None = None,
+             seed: int | None = None) -> GenerationResult:
     eos_ids = set(stop_ids or [])
     eos_ids.update([IM_END, PAD])
     return _run_generate(model, prompt_ids, max_new_tokens, temperature, top_k, top_p,
@@ -259,8 +261,8 @@ def generate(model, prompt_ids: list[int], max_new_tokens: int = 512,
 def stream_generate(model, prompt_ids: list[int], max_new_tokens: int = 512,
                     temperature: float = 0.6, top_k: int = 50, top_p: float = 0.95,
                     repetition_penalty: float = 1.0, repetition_window: int = 64,
-                    stop_ids: Optional[list[int]] = None,
-                    seed: Optional[int] = None) -> Generator[StreamToken, None, GenerationResult]:
+                    stop_ids: list[int] | None = None,
+                    seed: int | None = None) -> Generator[StreamToken, None, GenerationResult]:
     eos_ids = set(stop_ids or [])
     eos_ids.update([IM_END, PAD])
     return _run_stream(model, prompt_ids, max_new_tokens, temperature, top_k, top_p,
@@ -269,7 +271,7 @@ def stream_generate(model, prompt_ids: list[int], max_new_tokens: int = 512,
 def chat(model, messages: list[dict[str, str]], max_new_tokens: int = 1024,
          temperature: float = 0.6, top_k: int = 50, top_p: float = 0.95,
          repetition_penalty: float = 1.0,
-         seed: Optional[int] = None,
+         seed: int | None = None,
          show_thinking: bool = False,
          stream: bool = False) -> GenerationResult:
     ids = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True, think=True)

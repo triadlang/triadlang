@@ -1,0 +1,37 @@
+import triad.engine3d as e3;
+
+print("Atom Golf 3D — the physics is the Triad");
+print("====================================");
+
+let eng = e3.engine(N=32, L=16.0, seed=11);
+
+eng.add_wall_box([0.0, 0.0, 0.0], [1.0, 16.0, 16.0], height=10.0, gap=2.2);
+eng.add_well_sphere([5.0, 0.0, 0.0], 2.2, depth=4.0);
+
+eng.spawn_atom(-5.0, 0.0, 0.0, width=1.1, amp=1.0, vx=2.2);
+let inicial = eng.total_mass();
+print(f"ball mass: {inicial:.3f}");
+print("");
+
+let frames = 10;
+for frame in range(frames) {
+    eng.step(0.2);
+    let no_buraco = eng.mass_in_sphere([5.0, 0.0, 0.0], 2.2);
+    let pct = 100.0 * no_buraco / inicial;
+    print(f"t={eng.t:.1f}  mass in hole: {no_buraco:.3f} ({pct:.1f}%)  atoms: {eng.atom_count()}");
+}
+
+print("");
+print("top view (z projection):");
+print(eng.render_ascii(axis="z"));
+
+let final = eng.mass_in_sphere([5.0, 0.0, 0.0], 2.2);
+let score = 100.0 * final / inicial;
+print("");
+if score > 30.0 {
+    print(f"HOLE! {score:.1f}% captured — perfect shot");
+} elif score > 10.0 {
+    print(f"on the green: {score:.1f}% captured");
+} else {
+    print(f"missed: only {score:.1f}% arrived — adjust the shot (vx, gap, well)");
+}

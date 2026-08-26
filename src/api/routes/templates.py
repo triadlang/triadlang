@@ -1,12 +1,22 @@
 from __future__ import annotations
+
 import os
-from fastapi import APIRouter
+import re
+
+from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
 
 _EXAMPLES_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..', '..', 'examples')
 )
+
+_NAME_RE = re.compile(r'^[A-Za-z0-9_\-\.]+$')
+
+def _safe_name(name: str) -> str:
+    if not _NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail='invalid template name')
+    return name
 
 def _collect_templates() -> list[dict]:
     templates = []
@@ -21,9 +31,9 @@ def _collect_templates() -> list[dict]:
                 continue
             fpath = os.path.join(cat_dir, fname)
             try:
-                with open(fpath, 'r') as f:
+                with open(fpath) as f:
                     content = f.read()
-            except Exception:
+            except OSError:
                 content = ''
             templates.append({
                 'category': category,
@@ -46,11 +56,13 @@ async def list_templates(category: str | None = None):
 
 @router.get('/{category}/{name}', summary='Get a single template source')
 async def get_template(category: str, name: str):
+    category = _safe_name(category)
+    name = _safe_name(name)
     fpath = os.path.join(_EXAMPLES_ROOT, category, name)
-    if not os.path.isfile(fpath):
-        from fastapi import HTTPException
+    fpath = os.path.abspath(fpath)
+    if not fpath.startswith(_EXAMPLES_ROOT) or not os.path.isfile(fpath):
         raise HTTPException(status_code=404, detail=f'template not found: {category}/{name}')
-    with open(fpath, 'r') as f:
+    with open(fpath) as f:
         source = f.read()
     return {
         'category': category,

@@ -1,10 +1,3 @@
-/* triad_ast_dump.c — JSON dumper for the native AST.
- *
- * The output schema matches what scripts/ast_to_json.py emits on the
- * Python side: every dataclass becomes {"_type": "<ClassName>", ...
- * field: value}. Positions are objects with line/col/file. None values
- * are emitted as JSON null. Tuples become arrays.
- */
 #include "triad_frontend.h"
 
 #include <math.h>
@@ -13,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* growable string buffer */
 typedef struct {
     char  *data;
     size_t len;
@@ -62,15 +54,40 @@ static void emit_json_string(S *s, const char *t) {
             case '\b': s_puts(s, "\\b"); break;
             case '\f': s_puts(s, "\\f"); break;
             default:
-                if (c < 0x20) s_printf(s, "\\u%04x", c);
-                else          s_putc(s, (char)c);
+                if (c < 0x20) {
+                    s_printf(s, "\\u%04x", c);
+                } else if (c < 0x80) {
+                    s_putc(s, (char)c);
+                } else {
+
+                    unsigned cp = 0;
+                    int extra = 0;
+                    if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; extra = 1; }
+                    else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; extra = 2; }
+                    else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; extra = 3; }
+                    else { s_putc(s, (char)c); continue; }
+                    int ok = 1;
+                    for (int k = 1; k <= extra; ++k) {
+                        if ((p[k] & 0xC0) != 0x80) { ok = 0; break; }
+                        cp = (cp << 6) | (p[k] & 0x3F);
+                    }
+                    if (!ok) { s_putc(s, (char)c); continue; }
+                    p += extra;
+                    if (cp > 0xFFFF) {
+                        cp -= 0x10000;
+                        s_printf(s, "\\u%04x", 0xD800 + (cp >> 10));
+                        s_printf(s, "\\u%04x", 0xDC00 + (cp & 0x3FF));
+                    } else {
+                        s_printf(s, "\\u%04x", cp);
+                    }
+                }
         }
     }
     s_putc(s, '"');
 }
 
 typedef struct {
-    int indent;       /* spaces per level; 0 = compact */
+    int indent;
     int depth;
 } Ctx;
 
@@ -107,16 +124,7 @@ static void emit_bool(S *s, int v)       { s_puts(s, v ? "true" : "false"); }
 static void emit_float(S *s, double v) {
     if (isnan(v)) { s_puts(s, "NaN"); return; }
     if (isinf(v)) { s_puts(s, v > 0 ? "Infinity" : "-Infinity"); return; }
-    /* Match Python float.__repr__: shortest decimal that round-trips,
-     * with Python's preference for fixed-point over exponential when
-     * the exponent is in [-4, 16] (the same window used by repr).
-     *
-     * Strategy: find the minimum precision p in 1..17 such that
-     *   strtod(snprintf("%.*g", p, v)) == v.
-     * Then format with both "%.*e" (which gives the canonical mantissa
-     * at p-1 significant digits) and a fixed-point form, and pick the
-     * one Python would pick: fixed when the decimal exponent is in
-     * [-4, 16], otherwise exponential. */
+
     char buf[64];
     int prec = 17;
     for (int p = 1; p <= 17; ++p) {
@@ -124,10 +132,9 @@ static void emit_float(S *s, double v) {
         if (strtod(buf, NULL) == v) { prec = p; break; }
     }
 
-    /* Extract decimal exponent of v using %.*e at `prec`. */
     char ebuf[64];
     snprintf(ebuf, sizeof(ebuf), "%.*e", prec - 1, v);
-    /* Parse exponent. */
+
     const char *epos = strchr(ebuf, 'e');
     int decexp = 0;
     if (epos) decexp = atoi(epos + 1);
@@ -135,36 +142,27 @@ static void emit_float(S *s, double v) {
     int use_fixed = (decexp >= -4 && decexp < 16);
 
     if (use_fixed) {
-        /* Compute number of digits after the decimal point for %.*f.
-         * Total significant digits is `prec`; the integer part has
-         * (decexp + 1) digits when decexp >= 0, else 0 (with leading
-         * zeros after the point). */
+
         int after;
         if (decexp >= 0) after = prec - 1 - decexp;
         else             after = prec - 1 + (-decexp);
         if (after < 0) after = 0;
         snprintf(buf, sizeof(buf), "%.*f", after, v);
-        /* Trim trailing zeros after the decimal point, but keep at
-         * least one digit (Python keeps "10.0", not "10"). */
+
         char *dot = strchr(buf, '.');
         if (dot) {
             char *end = buf + strlen(buf) - 1;
             while (end > dot + 1 && *end == '0') { *end = '\0'; --end; }
         } else {
-            /* No decimal point yet — append .0 so JSON stays a float. */
+
             size_t L = strlen(buf);
             if (L + 2 < sizeof(buf)) { buf[L] = '.'; buf[L+1] = '0'; buf[L+2] = '\0'; }
         }
-        /* Sanity: round-trip; if it fails (shouldn't for prec sigfigs),
-         * fall through to exponential form. */
+
         if (strtod(buf, NULL) != v) use_fixed = 0;
     }
     if (!use_fixed) {
-        /* Build "<mantissa>e<sign><exp>" matching Python: mantissa
-         * shortened by trimming trailing zeros, exponent without
-         * leading zeros (but at least two digits is *not* required
-         * in Python; e.g. repr(1e20) == '1e+20'). */
-        /* ebuf currently is "<sign>d.dddde<sign>NN". Trim mantissa zeros. */
+
         char *e2 = strchr(ebuf, 'e');
         if (e2) {
             char *dot = strchr(ebuf, '.');
@@ -173,8 +171,7 @@ static void emit_float(S *s, double v) {
                 while (q > dot && *q == '0') { memmove(q, q + 1, strlen(q)); --q; e2--; }
                 if (q == dot) { memmove(dot, dot + 1, strlen(dot)); e2--; }
             }
-            /* Normalise exponent: keep sign, strip leading zeros, but
-             * Python emits at least two digits ("1e+20", "1e-05"). */
+
             char *ep = e2 + 1;
             char sign = '+';
             if (*ep == '+' || *ep == '-') { sign = *ep; ep++; }
@@ -195,8 +192,6 @@ static void emit_str_or_null(S *s, const char *t) {
     if (!t) emit_null(s);
     else    emit_json_string(s, t);
 }
-
-/* ── Field helpers ──────────────────────────────────────────────── */
 
 typedef struct {
     int  first;
@@ -227,14 +222,12 @@ static void end_obj(S *s, Ctx *c) {
     s_putc(s, '}');
 }
 
-/* Emit a pos field on every dataclass that has one. */
 static void emit_pos_field(S *s, Ctx *c, FieldState *fs, TriadPos p) {
     emit_field_sep(s, c, fs);
     emit_field_key(s, "pos");
     emit_pos(s, c, p);
 }
 
-/* Emit an array of statement/expression nodes. */
 static void emit_node_array(S *s, Ctx *c, TriadAstNode *const *items, size_t n) {
     if (n == 0) { s_puts(s, "[]"); return; }
     s_putc(s, '[');
@@ -263,7 +256,21 @@ static void emit_string_array(S *s, Ctx *c, const char *const *items, size_t n) 
     s_putc(s, ']');
 }
 
-/* Map (string -> node) → JSON object. */
+static void emit_str_or_null_array(S *s, Ctx *c, const char *const *items, size_t n) {
+    if (n == 0) { s_puts(s, "[]"); return; }
+    s_putc(s, '[');
+    c->depth++;
+    for (size_t k = 0; k < n; ++k) {
+        if (k) s_putc(s, ',');
+        emit_nl_indent(s, c);
+        if (items && items[k]) emit_json_string(s, items[k]);
+        else emit_null(s);
+    }
+    c->depth--;
+    emit_nl_indent(s, c);
+    s_putc(s, ']');
+}
+
 static void emit_str_node_map(S *s, Ctx *c, const TriadStrEntry *e, size_t n) {
     s_putc(s, '{');
     c->depth++;
@@ -279,10 +286,6 @@ static void emit_str_node_map(S *s, Ctx *c, const TriadStrEntry *e, size_t n) {
     s_putc(s, '}');
 }
 
-/* Map (string -> node) using Python {key: expr}-like JSON. Used for
- * RegStmt.overrides (Python: dict). */
-
-/* Param object */
 static void emit_param(S *s, Ctx *c, const TriadParam *p) {
     FieldState fs = {1};
     start_obj(s, c, &fs, "Param");
@@ -335,8 +338,6 @@ static void emit_typefield_array(S *s, Ctx *c, const TriadTypeField *items, size
     s_putc(s, ']');
 }
 
-/* IfStmt.elif_clauses : list[tuple[Expr, list[Stmt]]]. _serialize maps
- * tuples to JSON arrays, so each clause becomes [cond, [body...]]. */
 static void emit_elif_clauses(S *s, Ctx *c, const TriadElifClause *items, size_t n) {
     if (n == 0) { s_puts(s, "[]"); return; }
     s_putc(s, '[');
@@ -360,7 +361,6 @@ static void emit_elif_clauses(S *s, Ctx *c, const TriadElifClause *items, size_t
     s_putc(s, ']');
 }
 
-/* MatchCase: not a dataclass with default field("Pos"), but plain dataclass. */
 static void emit_match_case(S *s, Ctx *c, const TriadMatchCase *mc) {
     FieldState fs = {1};
     start_obj(s, c, &fs, "MatchCase");
@@ -386,7 +386,6 @@ static void emit_match_case_array(S *s, Ctx *c, const TriadMatchCase *items, siz
     s_putc(s, ']');
 }
 
-/* Map literal pairs: list[tuple[Expr, Expr]] -> list of 2-element arrays. */
 static void emit_map_pairs(S *s, Ctx *c, const TriadMapPair *items, size_t n) {
     if (n == 0) { s_puts(s, "[]"); return; }
     s_putc(s, '[');
@@ -410,7 +409,6 @@ static void emit_map_pairs(S *s, Ctx *c, const TriadMapPair *items, size_t n) {
     s_putc(s, ']');
 }
 
-/* CallExpr/MethodCallExpr kwargs: dict[str, Expr] */
 static void emit_kwargs(S *s, Ctx *c, const TriadKwArg *items, size_t n) {
     s_putc(s, '{');
     c->depth++;
@@ -426,8 +424,6 @@ static void emit_kwargs(S *s, Ctx *c, const TriadKwArg *items, size_t n) {
     s_putc(s, '}');
 }
 
-/* FStringExpr.parts: list of (type, value). Python type is "str" or
- * "expr". _serialize maps tuples to arrays. */
 static void emit_fstring_parts(S *s, Ctx *c, const TriadFStringAstPart *items, size_t n) {
     if (n == 0) { s_puts(s, "[]"); return; }
     s_putc(s, '[');
@@ -441,8 +437,14 @@ static void emit_fstring_parts(S *s, Ctx *c, const TriadFStringAstPart *items, s
         emit_json_string(s, items[k].is_expr ? "expr" : "str");
         s_putc(s, ',');
         emit_nl_indent(s, c);
-        if (items[k].is_expr) emit_node(s, c, items[k].expr);
-        else                  emit_json_string(s, items[k].text ? items[k].text : "");
+        if (items[k].is_expr) {
+            emit_node(s, c, items[k].expr);
+            s_putc(s, ',');
+            emit_nl_indent(s, c);
+            emit_str_or_null(s, items[k].fmt_spec);
+        } else {
+            emit_json_string(s, items[k].text ? items[k].text : "");
+        }
         c->depth--;
         emit_nl_indent(s, c);
         s_putc(s, ']');
@@ -451,8 +453,6 @@ static void emit_fstring_parts(S *s, Ctx *c, const TriadFStringAstPart *items, s
     emit_nl_indent(s, c);
     s_putc(s, ']');
 }
-
-/* ── Main node dispatcher ───────────────────────────────────────── */
 
 static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
     if (!n) { emit_null(s); return; }
@@ -531,7 +531,29 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
             emit_field_sep(s, c, &fs); emit_field_key(s, "var"); emit_str_or_null(s, n->u.list_comp.var);
             emit_field_sep(s, c, &fs); emit_field_key(s, "iter"); emit_node(s, c, n->u.list_comp.iter);
             emit_field_sep(s, c, &fs); emit_field_key(s, "condition");
-            if (n->u.list_comp.condition) emit_node(s, c, n->u.list_comp.condition); else emit_null(s);
+            emit_null(s);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "clauses");
+            s_putc(s, '[');
+            c->depth++;
+            emit_nl_indent(s, c);
+            {
+                FieldState cfs = {1};
+                start_obj(s, c, &cfs, "CompClause");
+                emit_field_sep(s, c, &cfs); emit_field_key(s, "var"); emit_str_or_null(s, n->u.list_comp.var);
+                emit_field_sep(s, c, &cfs); emit_field_key(s, "iter"); emit_node(s, c, n->u.list_comp.iter);
+                emit_field_sep(s, c, &cfs); emit_field_key(s, "conditions");
+                if (n->u.list_comp.condition) {
+                    TriadAstNode *conds1[1];
+                    conds1[0] = n->u.list_comp.condition;
+                    emit_node_array(s, c, conds1, 1);
+                } else {
+                    s_puts(s, "[]");
+                }
+                end_obj(s, c);
+            }
+            c->depth--;
+            emit_nl_indent(s, c);
+            s_putc(s, ']');
             emit_pos_field(s, c, &fs, n->pos);
             break;
         case TRIAD_AST_MAP:
@@ -574,6 +596,51 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
             if (n->u.unary_value.value) emit_node(s, c, n->u.unary_value.value); else emit_null(s);
             emit_pos_field(s, c, &fs, n->pos);
             break;
+        case TRIAD_AST_COMPLEX_LIT:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "real"); emit_float(s, n->u.complex_lit.real_val);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "imag"); emit_float(s, n->u.complex_lit.imag_val);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_BYTES_LIT:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "value"); emit_str_or_null(s, n->u.bytes_lit.bytes_val);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_SET_LIT:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "elements");
+            emit_node_array(s, c, n->u.set_lit.elements, n->u.set_lit.elements_len);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_TERNARY:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "condition"); emit_node(s, c, n->u.ternary.condition);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "then_val"); emit_node(s, c, n->u.ternary.then_val);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "else_val"); emit_node(s, c, n->u.ternary.else_val);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_CHAIN_CMP:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "operands");
+            emit_node_array(s, c, n->u.chain_cmp.operands, n->u.chain_cmp.operands_len);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "ops");
+            emit_string_array(s, c, n->u.chain_cmp.ops, n->u.chain_cmp.ops_len);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_SUPER:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "args");
+            emit_node_array(s, c, n->u.super_expr.args, n->u.super_expr.args_len);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_DICT_COMP:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "key_expr"); emit_node(s, c, n->u.dict_comp.key_expr);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "value_expr"); emit_node(s, c, n->u.dict_comp.value_expr);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_SET_COMP:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "expr"); emit_node(s, c, n->u.set_comp.expr);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_GEN_COMP:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "expr"); emit_node(s, c, n->u.gen_comp.expr);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
 
         case TRIAD_AST_LET:
             emit_field_sep(s, c, &fs); emit_field_key(s, "name"); emit_str_or_null(s, n->u.let_stmt.name);
@@ -583,6 +650,12 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
             emit_pos_field(s, c, &fs, n->pos);
             break;
         case TRIAD_AST_DESTRUCT_LET:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "names");
+            emit_string_array(s, c, n->u.destruct.names, n->u.destruct.names_len);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "value"); emit_node(s, c, n->u.destruct.value);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "star_idx"); emit_int(s, n->u.destruct.star_idx);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
         case TRIAD_AST_MAP_DESTRUCT:
             emit_field_sep(s, c, &fs); emit_field_key(s, "names");
             emit_string_array(s, c, n->u.destruct.names, n->u.destruct.names_len);
@@ -610,6 +683,21 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
             if (n->u.unary_value.value) emit_node(s, c, n->u.unary_value.value); else emit_null(s);
             emit_pos_field(s, c, &fs, n->pos);
             break;
+        case TRIAD_AST_PASS:
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_ASSERT:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "condition");
+            emit_node(s, c, n->u.assert_stmt.condition);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "message");
+            if (n->u.assert_stmt.message) emit_node(s, c, n->u.assert_stmt.message); else emit_null(s);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_DEL:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "target");
+            emit_node(s, c, n->u.del_stmt.target);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
         case TRIAD_AST_BREAK:
         case TRIAD_AST_CONTINUE:
             emit_pos_field(s, c, &fs, n->pos);
@@ -627,11 +715,20 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
                 emit_null(s);
             emit_pos_field(s, c, &fs, n->pos);
             break;
+        case TRIAD_AST_ASYNC_FOR:
         case TRIAD_AST_FOR:
             emit_field_sep(s, c, &fs); emit_field_key(s, "var"); emit_str_or_null(s, n->u.for_stmt.var);
             emit_field_sep(s, c, &fs); emit_field_key(s, "iter"); emit_node(s, c, n->u.for_stmt.iter);
             emit_field_sep(s, c, &fs); emit_field_key(s, "body");
             emit_node_array(s, c, n->u.for_stmt.body, n->u.for_stmt.body_len);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_ASYNC_WITH:
+        case TRIAD_AST_WITH:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "expr"); emit_node(s, c, n->u.with_stmt.expr);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "var"); emit_str_or_null(s, n->u.with_stmt.var);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "body");
+            emit_node_array(s, c, n->u.with_stmt.body, n->u.with_stmt.body_len);
             emit_pos_field(s, c, &fs, n->pos);
             break;
         case TRIAD_AST_WHILE:
@@ -648,6 +745,11 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
             emit_field_sep(s, c, &fs); emit_field_key(s, "body");
             emit_node_array(s, c, n->u.fn_decl.body, n->u.fn_decl.body_len);
             emit_field_sep(s, c, &fs); emit_field_key(s, "is_async"); emit_bool(s, n->u.fn_decl.is_async);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "decorators");
+            if (n->u.fn_decl.decorators)
+                emit_node_array(s, c, n->u.fn_decl.decorators, n->u.fn_decl.decorators_len);
+            else
+                emit_null(s);
             emit_pos_field(s, c, &fs, n->pos);
             break;
         case TRIAD_AST_TRY_CATCH:
@@ -658,6 +760,28 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
             emit_node_array(s, c, n->u.try_catch.catch_body, n->u.try_catch.catch_body_len);
             emit_field_sep(s, c, &fs); emit_field_key(s, "finally_body");
             emit_node_array(s, c, n->u.try_catch.finally_body, n->u.try_catch.finally_body_len);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "catches");
+            if (n->u.try_catch.has_catch) {
+                s_putc(s, '[');
+                c->depth++;
+                emit_nl_indent(s, c);
+                {
+                    FieldState kfs = {1};
+                    start_obj(s, c, &kfs, "CatchBlock");
+                    emit_field_sep(s, c, &kfs); emit_field_key(s, "exceptions");
+                    emit_string_array(s, c, n->u.try_catch.exceptions, n->u.try_catch.exceptions_len);
+                    emit_field_sep(s, c, &kfs); emit_field_key(s, "var");
+                    emit_str_or_null(s, n->u.try_catch.catch_var);
+                    emit_field_sep(s, c, &kfs); emit_field_key(s, "body");
+                    emit_node_array(s, c, n->u.try_catch.catch_body, n->u.try_catch.catch_body_len);
+                    end_obj(s, c);
+                }
+                c->depth--;
+                emit_nl_indent(s, c);
+                s_putc(s, ']');
+            } else {
+                emit_null(s);
+            }
             emit_pos_field(s, c, &fs, n->pos);
             break;
         case TRIAD_AST_TYPE_DECL:
@@ -671,6 +795,8 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
         case TRIAD_AST_CLASS_DECL:
             emit_field_sep(s, c, &fs); emit_field_key(s, "name"); emit_str_or_null(s, n->u.type_decl.name);
             emit_field_sep(s, c, &fs); emit_field_key(s, "parent"); emit_str_or_null(s, n->u.type_decl.parent);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "parents");
+            emit_string_array(s, c, n->u.type_decl.parents, n->u.type_decl.parents_len);
             emit_field_sep(s, c, &fs); emit_field_key(s, "fields");
             emit_typefield_array(s, c, n->u.type_decl.fields, n->u.type_decl.fields_len);
             emit_field_sep(s, c, &fs); emit_field_key(s, "methods");
@@ -688,6 +814,8 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
             emit_string_array(s, c, n->u.from_import.path, n->u.from_import.path_len);
             emit_field_sep(s, c, &fs); emit_field_key(s, "names");
             emit_string_array(s, c, n->u.from_import.names, n->u.from_import.names_len);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "aliases");
+            emit_str_or_null_array(s, c, n->u.from_import.aliases, n->u.from_import.names_len);
             emit_pos_field(s, c, &fs, n->pos);
             break;
         case TRIAD_AST_MATCH:
@@ -732,11 +860,25 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
             emit_node_array(s, c, n->u.world_decl.body, n->u.world_decl.body_len);
             emit_pos_field(s, c, &fs, n->pos);
             break;
+        case TRIAD_AST_SUBSTRATE:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "name"); emit_str_or_null(s, n->u.substrate_decl.name);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "regime"); emit_str_or_null(s, n->u.substrate_decl.regime);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "members");
+            emit_string_array(s, c, n->u.substrate_decl.members, n->u.substrate_decl.members_len);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "properties");
+            emit_str_node_map(s, c, n->u.substrate_decl.properties, n->u.substrate_decl.properties_len);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "overrides");
+            emit_str_node_map(s, c, n->u.substrate_decl.overrides, n->u.substrate_decl.overrides_len);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "is_composed"); emit_bool(s, n->u.substrate_decl.is_composed);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
         case TRIAD_AST_COUPLE:
             emit_field_sep(s, c, &fs); emit_field_key(s, "src"); emit_str_or_null(s, n->u.couple_stmt.src);
             emit_field_sep(s, c, &fs); emit_field_key(s, "dst"); emit_str_or_null(s, n->u.couple_stmt.dst);
             emit_field_sep(s, c, &fs); emit_field_key(s, "kappa");
             if (n->u.couple_stmt.kappa) emit_node(s, c, n->u.couple_stmt.kappa); else emit_null(s);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "duration");
+            if (n->u.couple_stmt.duration) emit_node(s, c, n->u.couple_stmt.duration); else emit_null(s);
             emit_pos_field(s, c, &fs, n->pos);
             break;
         case TRIAD_AST_PAIR:
@@ -767,6 +909,17 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
         case TRIAD_AST_RUN:
             emit_field_sep(s, c, &fs); emit_field_key(s, "duration");
             if (n->u.run_stmt.duration) emit_node(s, c, n->u.run_stmt.duration); else emit_null(s);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "target");
+            emit_str_or_null(s, n->u.run_stmt.target);
+            emit_pos_field(s, c, &fs, n->pos);
+            break;
+        case TRIAD_AST_SEQUENCE:
+            emit_field_sep(s, c, &fs); emit_field_key(s, "inputs");
+            emit_node(s, c, n->u.sequence_stmt.inputs);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "target");
+            emit_str_or_null(s, n->u.sequence_stmt.target);
+            emit_field_sep(s, c, &fs); emit_field_key(s, "each_for");
+            if (n->u.sequence_stmt.each_for) emit_node(s, c, n->u.sequence_stmt.each_for); else emit_null(s);
             emit_pos_field(s, c, &fs, n->pos);
             break;
         case TRIAD_AST_ANNOTATION:
@@ -785,8 +938,6 @@ static void emit_node(S *s, Ctx *c, const TriadAstNode *n) {
     }
     end_obj(s, c);
 }
-
-/* ── Public API ─────────────────────────────────────────────────── */
 
 char *triad_ast_dump_json(const TriadAstNode *module, int indent) {
     S s = {0};

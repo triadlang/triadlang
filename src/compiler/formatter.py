@@ -1,5 +1,11 @@
 from __future__ import annotations
-from frontend.parser import Program, RegDecl, Op, LoopBlock, SegmentBlock, IfBlock, OutStmt, HaltStmt, Annotation, EvolveStmt, CoupleStmt as DCoupleStmt, PairStmt as DPairStmt, RingStmt as DRingStmt, SequenceStmt, ObserveStmt as DObserveStmt, AssertStmt, SubstrateDecl, CheckpointStmt, IdentRef, NumLit, BoolLit, StrLit
+
+from frontend.ast_nodes import *
+
+
+def _quote(s: str) -> str:
+    out = s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\t', '\\t')
+    return f'"{out}"'
 
 def _val(v):
     if isinstance(v, bool):
@@ -9,9 +15,9 @@ def _val(v):
     if isinstance(v, float):
         return repr(v)
     if isinstance(v, str):
-        return f'"{v}"'
+        return _quote(v)
     if isinstance(v, tuple):
-        return '(' + ', '.join((_val(x) for x in v)) + ')'
+        return '(' + ', '.join(_val(x) for x in v) + ')'
     return str(v)
 
 def _expr(e):
@@ -26,7 +32,7 @@ def _expr(e):
             return f'''from_file("{e.value[len('__from_file__:'):]}")'''
         if e.value.startswith('__from_checkpoint__:'):
             return f'''from_checkpoint("{e.value[len('__from_checkpoint__:'):]}")'''
-        return f'"{e.value}"'
+        return _quote(e.value)
     if isinstance(e, IdentRef):
         return e.name
     return str(e)
@@ -55,10 +61,10 @@ def _fmt_stmt(stmt, indent: int=0) -> str:
     if isinstance(stmt, DPairStmt):
         return f'{pad}pair({stmt.a.name}, {stmt.b.name}) kappa={stmt.kappa} for T={stmt.duration};'
     if isinstance(stmt, DRingStmt):
-        members = ', '.join((m.name for m in stmt.members))
+        members = ', '.join(m.name for m in stmt.members)
         return f'{pad}ring({members}) kappa={stmt.kappa} for T={stmt.duration};'
     if isinstance(stmt, SequenceStmt):
-        inputs = ', '.join((i.name for i in stmt.inputs))
+        inputs = ', '.join(i.name for i in stmt.inputs)
         return f'{pad}sequence {stmt.target.name} via ({inputs}) each_for={stmt.each_for};'
     if isinstance(stmt, DObserveStmt):
         s = f"{pad}OBSERVE {stmt.target.name} {', '.join(stmt.metrics)}"
@@ -71,8 +77,8 @@ def _fmt_stmt(stmt, indent: int=0) -> str:
         return f'{pad}assert {stmt.predicate}({stmt.target.name});'
     if isinstance(stmt, CheckpointStmt):
         return f'{pad}CHECKPOINT {stmt.target.name} to "{stmt.path}";'
-    if isinstance(stmt, SubstrateDecl):
-        members = ', '.join((m.name for m in stmt.composed_of))
+    if isinstance(stmt, LSubstrateDecl):
+        members = ', '.join(m.name for m in stmt.composed_of)
         out = [f'{pad}substrate {stmt.name} composed_of ({members})']
         if stmt.properties:
             out.append(' {')
@@ -83,31 +89,32 @@ def _fmt_stmt(stmt, indent: int=0) -> str:
         return '\n'.join(out)
     if isinstance(stmt, LoopBlock):
         target = _expr(stmt.target)
-        body = '\n'.join((_fmt_stmt(s, indent + 1) for s in stmt.body.body))
+        body = '\n'.join(_fmt_stmt(s, indent + 1) for s in stmt.body.body)
         return f'{pad}loop {target} {{\n{body}\n{pad}}}'
     if isinstance(stmt, SegmentBlock):
-        body = '\n'.join((_fmt_stmt(s, indent + 1) for s in stmt.body.body))
+        body = '\n'.join(_fmt_stmt(s, indent + 1) for s in stmt.body.body)
         head = f"segment(t={getattr(stmt, '_duration', stmt.segment_id)})" if getattr(stmt, '_duration', -1) > 0 else f'segment({stmt.segment_id})'
         return f'{pad}{head} {{\n{body}\n{pad}}}'
     if isinstance(stmt, IfBlock):
-        then_body = '\n'.join((_fmt_stmt(s, indent + 1) for s in stmt.then_body.body))
+        then_body = '\n'.join(_fmt_stmt(s, indent + 1) for s in stmt.then_body.body)
         out = [f'{pad}if {stmt.cond.name} {{', then_body, f'{pad}}}']
         if stmt.else_body:
-            else_body = '\n'.join((_fmt_stmt(s, indent + 1) for s in stmt.else_body.body))
+            else_body = '\n'.join(_fmt_stmt(s, indent + 1) for s in stmt.else_body.body)
             out += [f'{pad}else {{', else_body, f'{pad}}}']
         return '\n'.join(out)
     if isinstance(stmt, Op):
-        args = ', '.join((_expr(a) for a in stmt.args))
+        args = ', '.join(_expr(a) for a in stmt.args)
         return f'{pad}{stmt.opcode} {args};'
     if isinstance(stmt, OutStmt):
-        return f"{pad}OUT {', '.join((_expr(a) for a in stmt.args))};"
+        return f"{pad}OUT {', '.join(_expr(a) for a in stmt.args)};"
     if isinstance(stmt, HaltStmt):
         return f'{pad}HALT;'
     return f'{pad}{stmt!r}'
 
 def format_program(prog: Program) -> str:
-    return '\n'.join((_fmt_stmt(s) for s in prog.body)) + '\n'
+    return '\n'.join(_fmt_stmt(s) for s in prog.body) + '\n'
 from frontend.ast_nodes import *
+
 
 def _fmt_u_expr(e, indent: int=0) -> str:
     pad = '    ' * indent
@@ -120,7 +127,7 @@ def _fmt_u_expr(e, indent: int=0) -> str:
     if isinstance(e, BoolLit):
         return 'true' if e.value else 'false'
     if isinstance(e, StringLit):
-        return repr(e.value)
+        return _quote(e.value)
     if isinstance(e, NoneLit):
         return 'none'
     if isinstance(e, Ident):
@@ -138,14 +145,14 @@ def _fmt_u_expr(e, indent: int=0) -> str:
         return f'{e.op}{val}'
     if isinstance(e, CallExpr):
         func = _fmt_u_expr(e.func)
-        args = ', '.join((_fmt_u_expr(a) for a in e.args))
+        args = ', '.join(_fmt_u_expr(a) for a in e.args)
         kwargs = ', '.join((f'{k}={_fmt_u_expr(v)}' for k, v in e.kwargs.items()))
         all_args = ', '.join(filter(None, [args, kwargs]))
         return f'{func}({all_args})'
     if isinstance(e, MethodCallExpr):
         obj = _fmt_u_expr(e.obj)
         method = 'push' if e.method == 'append' else e.method
-        args = ', '.join((_fmt_u_expr(a) for a in e.args))
+        args = ', '.join(_fmt_u_expr(a) for a in e.args)
         kwargs = ', '.join((f'{k}={_fmt_u_expr(v)}' for k, v in e.kwargs.items()))
         all_args = ', '.join(filter(None, [args, kwargs]))
         return f'{obj}.{method}({all_args})'
@@ -161,12 +168,12 @@ def _fmt_u_expr(e, indent: int=0) -> str:
     if isinstance(e, FieldExpr):
         return f'{_fmt_u_expr(e.obj)}.{e.field}'
     if isinstance(e, ListExpr):
-        elems = ', '.join((_fmt_u_expr(el) for el in e.elements))
+        elems = ', '.join(_fmt_u_expr(el) for el in e.elements)
         return f'[{elems}]'
     if isinstance(e, TupleExpr):
         if not e.elements:
             return '()'
-        elems = ', '.join((_fmt_u_expr(el) for el in e.elements))
+        elems = ', '.join(_fmt_u_expr(el) for el in e.elements)
         if len(e.elements) == 1:
             return f'({elems},)'
         return f'({elems})'
@@ -183,16 +190,21 @@ def _fmt_u_expr(e, indent: int=0) -> str:
         return f'{{{pairs}}}'
     if isinstance(e, FStringExpr):
         parts = []
-        for ptype, pval in e.parts:
+        for part in e.parts:
+            ptype, pval = part[0], part[1]
             if ptype == 'str':
                 parts.append(pval.replace('{', '{{').replace('}', '}}'))
             else:
-                parts.append('{' + _fmt_u_expr(pval) + '}')
+                spec = part[2] if len(part) > 2 and part[2] else None
+                if spec:
+                    parts.append('{' + _fmt_u_expr(pval) + ':' + spec + '}')
+                else:
+                    parts.append('{' + _fmt_u_expr(pval) + '}')
         return f'''f"{''.join(parts)}"'''
     if isinstance(e, LambdaExpr):
-        params = ', '.join((_fmt_u_param(p) for p in e.params))
+        params = ', '.join(_fmt_u_param(p) for p in e.params)
         if e.body:
-            body = '; '.join((_fmt_u_stmt(s) for s in e.body))
+            body = '; '.join(_fmt_u_stmt(s) for s in e.body)
             return f'fn({params}) {{ {body} }}'
         return f'fn({params}) {{ }}'
     if isinstance(e, AssignExpr):
@@ -270,7 +282,7 @@ def _fmt_u_stmt(s, indent: int=0) -> str:
         lines.append(f'{pad}}}')
         return '\n'.join(lines)
     if isinstance(s, FnDecl):
-        params = ', '.join((_fmt_u_param(p) for p in s.params))
+        params = ', '.join(_fmt_u_param(p) for p in s.params)
         prefix = 'async ' if s.is_async else ''
         lines = [f'{pad}{prefix}fn {s.name}({params}) {{']
         for st in s.body:
@@ -284,7 +296,7 @@ def _fmt_u_stmt(s, indent: int=0) -> str:
             type_part = f': {f.type_ann}' if f.type_ann else ''
             lines.append(f'{pad}    {f.name}{type_part}{default}')
         for m in s.methods:
-            params = ', '.join((_fmt_u_param(p) for p in m.params))
+            params = ', '.join(_fmt_u_param(p) for p in m.params)
             lines.append(f'{pad}    fn {m.name}({params}) {{')
             for st in m.body:
                 lines.append(_fmt_u_stmt(st, indent + 2))
@@ -349,9 +361,25 @@ def _fmt_u_stmt(s, indent: int=0) -> str:
     if isinstance(s, ObserveStmt):
         metrics = ', '.join(s.metrics)
         return f'{pad}OBSERVE {s.target} {metrics};'
+    if isinstance(s, SubstrateDecl):
+        if s.members:
+            members = ', '.join(s.members)
+            if s.properties:
+                props = ' '.join((f'{k}: {_fmt_u_expr(v)};' for k, v in s.properties.items()))
+                return f'{pad}substrate {s.name} composed_of ({members}) {{ {props} }};'
+            return f'{pad}substrate {s.name} composed_of ({members});'
+        regime = f' : {s.regime}' if s.regime else ''
+        if s.overrides:
+            ovr = ' '.join((f'{k}: {_fmt_u_expr(v)};' for k, v in s.overrides.items()))
+            return f'{pad}substrate {s.name}{regime} {{ {ovr} }};'
+        return f'{pad}substrate {s.name}{regime};'
     if isinstance(s, RunStmt):
-        dur = f' {_fmt_u_expr(s.duration)}' if s.duration else ''
-        return f'{pad}run{dur};'
+        if s.target:
+            dur = f' for T={_fmt_u_expr(s.duration)}' if s.duration else ''
+            return f'{pad}evolve {s.target}{dur};'
+        if s.duration:
+            return f'{pad}run T={_fmt_u_expr(s.duration)};'
+        return f'{pad}run;'
     if isinstance(s, AnnotationStmt):
         return f'{pad}@{s.key}({s.args})'
     if isinstance(s, ClassDecl):
@@ -362,7 +390,7 @@ def _fmt_u_stmt(s, indent: int=0) -> str:
             type_part = f': {f.type_ann}' if f.type_ann else ''
             lines.append(f'{pad}    {f.name}{type_part}{default}')
         for m in s.methods:
-            params = ', '.join((_fmt_u_param(p) for p in m.params))
+            params = ', '.join(_fmt_u_param(p) for p in m.params)
             lines.append(f'{pad}    fn {m.name}({params}) {{')
             for st in m.body:
                 lines.append(_fmt_u_stmt(st, indent + 2))
@@ -391,3 +419,4 @@ def format_universal(mod: Module) -> str:
     for s in mod.body:
         lines.append(_fmt_u_stmt(s))
     return '\n'.join(lines) + '\n'
+

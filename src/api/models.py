@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from typing import Literal, Optional
+
 from pydantic import BaseModel, Field
 
 V_EXT_LITERAL = Optional[Literal['harmonic', 'double_well', 'gaussian_bump', 'ramp', 'lattice']]
@@ -20,11 +22,11 @@ class TriadParamsModel(BaseModel):
     f_FDT: float = 0.002
     nu: list[float] = Field(default=[2.0, 0.5, 0.1])
     lam: list[float] = Field(default=[-0.3, -0.2, -0.1])
-    mode: Literal['full', 'linear', 'thermal'] = 'full'
+    mode: Literal['triad'] = 'triad'
     seed: int = 0
     record_every: int = 4
-    D: int = 1
-    backend: Literal['auto', 'numpy', 'cuda'] = 'auto'
+    D: int = 3
+    backend: Literal['auto', 'numpy', 'cuda', 'metal', 'mlx', 'gpu', 'ane', 'neural'] = 'auto'
     bc: Literal['periodic', 'absorbing'] = 'periodic'
     bc_width: float = 0.15
     step_mode: Literal['strang', 'exptrap'] = 'strang'
@@ -40,7 +42,7 @@ class TriadParamsModel(BaseModel):
         return TriadParams(**d)
 
     @classmethod
-    def from_triad_params(cls, p) -> 'TriadParamsModel':
+    def from_triad_params(cls, p) -> TriadParamsModel:
         v_ext = p.V_ext if isinstance(p.V_ext, str) or p.V_ext is None else None
         return cls(
             L=p.L, N=p.N, dt=p.dt, T=p.T, hbar=p.hbar, m=p.m,
@@ -55,8 +57,8 @@ class TriadParamsModel(BaseModel):
 
 class SolveRequest(BaseModel):
     params: TriadParamsModel = Field(default_factory=TriadParamsModel)
-    regime: Optional[str] = None
-    psi0_b64: Optional[str] = None
+    regime: str | None = None
+    psi0_b64: str | None = None
     stream: bool = False
 
 class SolveResult(BaseModel):
@@ -74,9 +76,9 @@ class SolveResult(BaseModel):
 
 class BatchSolveRequest(BaseModel):
     params: TriadParamsModel = Field(default_factory=TriadParamsModel)
-    regime: Optional[str] = None
+    regime: str | None = None
     K: int = 8
-    seeds: Optional[list[int]] = None
+    seeds: list[int] | None = None
 
 class BatchSolveResult(BaseModel):
     results: list[SolveResult]
@@ -111,7 +113,7 @@ class ObservablesRequest(BaseModel):
     psi_b64: str
     dx: float
     k_cutoff: float = 1.0
-    L: Optional[float] = None
+    L: float | None = None
 
 class ObservablesResult(BaseModel):
     crystallinity: float
@@ -137,7 +139,7 @@ class LangRunResult(BaseModel):
     stdout: str
     stderr: str
     ok: bool
-    error: Optional[str] = None
+    error: str | None = None
 
 class LangCheckResult(BaseModel):
     ok: bool
@@ -146,12 +148,12 @@ class LangCheckResult(BaseModel):
 class LangCompileResult(BaseModel):
     ir_json: str
     ok: bool
-    error: Optional[str] = None
+    error: str | None = None
 
 class LangFormatResult(BaseModel):
     source: str
     ok: bool
-    error: Optional[str] = None
+    error: str | None = None
 
 class RegimeInfo(BaseModel):
     name: str

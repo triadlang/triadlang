@@ -1,0 +1,33 @@
+import triad.engine3d as e3;
+import math;
+
+print("Atom Shapes 3D — the ring");
+print("========================");
+
+let eng = e3.engine(N=32, L=16.0, seed=3);
+
+let pontos = [];
+for i in range(8) {
+    let ang = 2.0 * math.pi * i / 8.0;
+    pontos.append([4.0 * math.cos(ang), 4.0 * math.sin(ang), 0.0]);
+}
+eng.place_shape(pontos, width=0.9, amp=1.0);
+
+print(f"atoms placed: 8 | detected: {eng.atom_count()}");
+print("");
+print("ring at t=0 (top view):");
+print(eng.render_ascii(axis="z"));
+
+for frame in range(4) {
+    eng.step(0.25);
+}
+
+print("");
+print(f"ring at t={eng.t:.1f}: {eng.atom_count()} atoms");
+print(eng.render_ascii(axis="z"));
+
+let lista = eng.atoms();
+print("");
+for a in lista {
+    print(f"  atom at ({a.x:.1f}, {a.y:.1f}, {a.z:.1f})  mass {a.mass:.2f}");
+}

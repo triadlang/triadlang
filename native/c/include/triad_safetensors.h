@@ -43,4 +43,4 @@ int triad_safetensors_read_row_f64(const TriadSafeTensorFile *f,
 
 const char *triad_safetensors_dtype_name(TriadSafeDType dtype);
 
-#endif /* TRIAD_SAFETENSORS_H */
+#endif

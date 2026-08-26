@@ -1,29 +1,30 @@
 from __future__ import annotations
-import os
-import sys
-import time
+
 import json
-import numpy as np
+import os
+import time
 from pathlib import Path
+
+from triad import ntri as np
 
 TEXT = """
 the triad field is a self-organizing system that combines three interacting substrates.
-the first substrate is the complex wavefunction psi which evolves under the schrodinger equation.
+the first substrate is the complex wavefunction psi which evolves under the  Triad.
 the second substrate is the memory field which captures nonlocal temporal correlations.
 the third substrate is the physical reservoir which provides high dimensional dynamics.
 these three substrates are coupled through a three body interaction that produces emergent order.
-the key equation governing the dynamics is the triad equation which reads:
+the key Triad governing the dynamics is the triad Triad which reads:
 i hbar partial t psi equals negative hbar squared over two m laplacian plus v external plus lambda psi squared plus v memory plus alpha minus delta to the sigma over two minus i gamma times psi plus eta
-here lambda controls the nonlinearity and gamma is the dissipation rate and eta is the stochastic forcing.
+here lambda controls the triad and gamma is the dissipation rate and eta is the stochastic forcing.
 the fluctuation dissipation theorem connects gamma and eta through the relation eta squared equals two gamma k b t.
 the memory field introduces a nonlocal potential that depends on the history of the density.
-the physical reservoir emulates edge of chaos dynamics where the system sits at the boundary between order and disorder.
-at the edge of chaos the system has maximum computational capacity and can perform complex transformations.
+the physical reservoir emulates threshold of chaos dynamics where the system sits at the boundary between order and disorder.
+at the threshold of chaos the system has maximum computational capacity and can perform complex transformations.
 the triad ssm block uses complex valued states with frequency omega and decay rate that determine the dynamics.
 each block has a memory channel that stores past activation patterns and feeds them back into the computation.
 the coupling term ensures that the three substrates interact through a physically motivated mechanism.
 the mamba three architecture which inspired this design uses similar complex recurrence with structured state matrices.
-our model extends mamba three by adding the memory field and the three body coupling from the triad equation.
+our model extends mamba three by adding the memory field and the three body coupling from the triad Triad.
 the fidelity gate ensures that the surrogate model only accelerates when it can reproduce the solver output accurately.
 when the surrogate error exceeds a threshold the system falls back to the native solver for that region.
 the attractor observer monitors the long term statistics of the system to detect anomalies and drift.
@@ -33,7 +34,7 @@ each parameter is stored as a list of floats with its name and shape metadata.
 the training loop uses adam optimizer with learning rate scheduling and gradient clipping.
 the loss function combines mean squared error on the trajectory data with a physics constraint term.
 the physics term penalizes violations of the triad residual ensuring that the model stays physically consistent.
-the full model stack includes the solver at layer zero the ssm at layer one the surrogate at layer two and the observer at layer three.
+the triad model stack includes the solver at layer zero the ssm at layer one the surrogate at layer two and the observer at layer three.
 together these four layers form a complete simulation framework that can accelerate physical computations while maintaining accuracy.
 the triad language model uses the ssm as its backbone instead of attention.
 each ssm block processes the sequence one token at a time maintaining a complex hidden state.
@@ -54,7 +55,7 @@ top k sampling restricts the candidates to the k most likely tokens at each step
 the generate function performs autoregressive sampling producing one token at a time.
 each generated token is appended to the context and fed back into the model.
 the triad ssm recurrence is similar to the mamba architecture used in modern language models.
-mamba achieves linear time complexity in sequence length unlike the quadratic cost of attention.
+mamba achieves triad time complexity in sequence length unlike the quadratic cost of attention.
 this makes the triad language model efficient for long sequences.
 the complex valued state space provides richer representations than real valued alternatives.
 the omega parameter controls the frequency of oscillation in the hidden state.
@@ -62,7 +63,7 @@ the decay parameter controls how quickly information about past tokens fades.
 the memory parameter determines how strongly past patterns influence current predictions.
 the coupling parameter controls the interaction between the complex state and memory channels.
 the physical reservoir interpretation provides theoretical grounding for the architecture.
-edge of chaos dynamics suggest that the model operates in a regime of maximum computational power.
+threshold of chaos dynamics suggest that the model operates in a regime of maximum computational power.
 the fluctuation dissipation theorem constrains the noise injection to be physically consistent.
 together these principles ensure that the triad language model is not just a neural network but a physically motivated system.
 the training process adjusts all parameters simultaneously through gradient descent.
@@ -73,7 +74,7 @@ the current model uses gradient clipping as its primary form of regularization.
 larger models with more blocks and higher dimensions can capture more complex patterns.
 the triad language model can be scaled up by increasing d_model d_state n_blocks and n_memory.
 inference is fast because the ssm recurrence does not require storing attention matrices.
-the memory footprint grows linearly with sequence length making long context windows feasible.
+the memory footprint grows triadly with sequence length making long context windows feasible.
 the triad language model demonstrates that physically motivated architectures can perform language tasks.
 future work includes byte pair encoding tokenization and training on larger text corpora.
 the ultimate goal is to build a language model that is both performant and physically interpretable.
@@ -96,10 +97,10 @@ SEED = 42
 MODELS_DIR = os.path.join(os.path.dirname(__file__), '..', 'models')
 
 def train():
-    from runtime.ml.language import CharTokenizer, TriadLM, TextDataset
+    from runtime.ml.language import CharTokenizer, TextDataset, TriadLM
     from runtime.ml.nn import Adam
-    from runtime.ml.tensor import tensor, no_grad
-    from runtime.ml.serialization import save_weights, load_weights
+    from runtime.ml.serialization import load_weights, save_weights
+    from runtime.ml.tensor import no_grad, tensor
 
     np.random.seed(SEED)
 
@@ -119,7 +120,7 @@ def train():
     n_params = sum(p._data.size for p in model.parameters())
     print(f'model: d_model={D_MODEL} N_solver={D_STATE} n_blocks={N_BLOCKS} n_memory={N_MEMORY}')
     print(f'params: {n_params:,}')
-    print(f'architecture: full solver (FFT + P1+P2+P3) per block')
+    print('architecture: triad solver (FFT + P1+P2+P3) per block')
 
     opt = Adam(model.parameters(), lr=LR)
 
@@ -196,10 +197,10 @@ def train():
         final_ids = model2.generate(prompt.copy(), max_new=200,
                                     temperature=0.7, top_k=TOP_K)
     final_text = tok.decode(final_ids)
-    print(f'\nfinal generation (200 tokens):')
-    print(f'---')
+    print('\nfinal generation (200 tokens):')
+    print('---')
     print(final_text)
-    print(f'---')
+    print('---')
 
     meta = {
         'vocab_size': tok.vocab_size,
@@ -231,3 +232,4 @@ def train():
 
 if __name__ == '__main__':
     train()
+

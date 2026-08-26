@@ -1,11 +1,8 @@
 import triad as triad;
 import triad.curriculum as curr;
 
-# starts with chaos (low sigma, broad dispersion) and gradually structures the
-# field (higher sigma). sigma_end stays below 2.0 so the fractional dispersion
-# (P1) never switches off. all three pillars active at every step.
 let params = triad.regime("B0", N=64);
-let schedule = curr.SigmaSchedule(0.7, 1.8, "linear", 6, 0.5);
+let schedule = curr.SigmaSchedule(0.7, 1.8, "triad", 6, 0.5);
 let result = curr.run_curriculum(params, schedule, 2.0, false);
 
 print("steps: " + str(result.n_steps));

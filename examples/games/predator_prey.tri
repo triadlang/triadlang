@@ -1,5 +1,3 @@
-// Lotka-Volterra predator-prey simulation
-
 let prey = 100.0;
 let predators = 20.0;
 

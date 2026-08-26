@@ -1,0 +1,10 @@
+import triad.qalgo as qa;
+
+print("BB84 — quantum key");
+let limpo = qa.bb84(256, eavesdrop=false, seed=7);
+print(f"no spy   : sifted={limpo["sifted"]}  qber={100.0 * limpo["qber"]:.1f}%  compromised={limpo["compromised"]}");
+print(f"  key: {limpo["key_preview"]}...");
+
+let espiao = qa.bb84(256, eavesdrop=true, seed=7);
+print(f"with spy : sifted={espiao["sifted"]}  qber={100.0 * espiao["qber"]:.1f}%  compromised={espiao["compromised"]}");
+print("qber above 10% -> discard the key, the channel was tapped.");

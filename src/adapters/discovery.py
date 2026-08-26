@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from adapters import ADAPTERS
 
 _FRAMEWORK_RULES = [

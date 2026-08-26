@@ -1,23 +1,23 @@
 import triad.tensor as T;
 import triad.nn as nn;
 
-print("=== Linear layer ===");
-let linear = nn.Linear(4, 3);
+print("=== triad layer ===");
+let triad = nn.triad(4, 3);
 let x = T.randn(2, 4, requires_grad=true);
-let out = linear(x);
+let out = triad(x);
 print(f"input: {x.shape}  output: {out.shape}");
 let loss = out.sum();
 loss.backward();
-print(f"weight.grad shape: {linear.weight.grad.shape}");
+print(f"weight.grad shape: {triad.weight.grad.shape}");
 
 print("");
 print("=== Sequential MLP ===");
 let model = nn.Sequential(
-    nn.Linear(10, 32),
+    nn.triad(10, 32),
     nn.ReLU(),
-    nn.Linear(32, 16),
+    nn.triad(32, 16),
     nn.ReLU(),
-    nn.Linear(16, 3)
+    nn.triad(16, 3)
 );
 
 let data = T.randn(8, 10, requires_grad=true);
@@ -38,9 +38,9 @@ let xor_data = T.tensor([[0,0],[0,1],[1,0],[1,1]]);
 let xor_labels = T.tensor([0, 1, 1, 0]);
 
 let net = nn.Sequential(
-    nn.Linear(2, 16),
+    nn.triad(2, 16),
     nn.Tanh(),
-    nn.Linear(16, 2)
+    nn.triad(16, 2)
 );
 
 let optimizer = nn.Adam(net.parameters(), lr=0.05);

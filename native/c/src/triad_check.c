@@ -1,23 +1,9 @@
-/* triad_check.c — Port of compiler/typecheck_universal.py.
- *
- * Implements:
- *   - scope tracking via a small hash set per nested context;
- *   - arity verification for builtins and user functions;
- *   - error reporting with byte-identical text format (E2001/E2002/
- *     E2010/E2011) and "file: ..., line: ..., col: ..." position
- *     suffixes matching the Python `_pos`.
- *
- * The errors are accumulated; check_module returns -1 if any were
- * emitted, mirroring TypeCheckError on the Python side.
- */
 #include "triad_check.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ── Tiny hash set of cstrings (linear-probe). ──────────────────── */
 
 typedef struct {
     const char **buckets;
@@ -84,7 +70,7 @@ static int ss_has(const StrSet *s, const char *k) {
 }
 
 static void ss_copy_from(StrSet *dst, const StrSet *src) {
-    /* dst is fresh */
+
     ss_init(dst, src->cap);
     for (size_t i = 0; i < src->cap; ++i) {
         if (src->buckets[i]) ss_add(dst, src->buckets[i]);
@@ -93,16 +79,34 @@ static void ss_copy_from(StrSet *dst, const StrSet *src) {
 
 static void ss_free(StrSet *s) { free(s->buckets); s->buckets = NULL; s->cap = s->len = 0; }
 
-/* ── Builtins + arities (mirror typecheck_universal.py). ────────── */
-
 static const char *const BUILTINS[] = {
     "print", "input", "len", "range", "enumerate", "str", "int", "float",
     "type", "abs", "min", "max", "append", "sorted", "reversed",
     "true", "false", "none",
+    "set", "dict", "list", "tuple", "zip", "map", "filter", "sum",
+    "round", "any", "all", "pow", "open", "isinstance", "repr",
+    "ord", "chr", "hash", "id", "iter", "next", "bool", "divmod",
+    "format", "bytes", "exit", "callable", "getattr", "setattr",
+    "hasattr", "sqrt", "sin", "cos", "exp", "log",
+    "solver_solve", "solve", "ccall", "py_call", "py_eval", "py_exec",
+    "cuda_available", "set_device", "device",
+    "run_async", "sleep", "gather", "create_task",
+    "async_read", "async_write", "async_fetch",
+    "ml_tensor", "ml_zeros", "ml_randn", "ml_triad", "ml_forward",
+    "ml_relu", "ml_sigmoid", "ml_tanh_act", "ml_softmax",
+    "ml_mse_loss", "ml_cross_entropy", "ml_backward",
+    "ml_item", "ml_data", "ml_seq_new", "ml_seq_set", "ml_seq_forward",
+    "ml_adam", "ml_sgd", "ml_adam_step", "ml_adam_zero",
+    "ml_sgd_step", "ml_sgd_zero", "ml_tensor_add", "ml_tensor_sub",
+    "ml_tensor_mul", "ml_tensor_matmul", "ml_tensor_sum",
+    "ml_tensor_mean", "ml_print",
+    "ml_embedding", "ml_embedding_forward", "ml_layernorm",
+    "ml_layernorm_forward", "ml_mha", "ml_mha_forward",
+    "ml_transformer", "ml_transformer_forward", "ml_transformer_adam",
+    "ml_wave", "ml_wave_forward", "ml_wave_adam",
     NULL
 };
 
-/* arity == -1 means variadic / no arity check. */
 typedef struct { const char *name; int arity; } BArity;
 static const BArity BUILTIN_ARITIES[] = {
     { "len", 1 }, { "abs", 1 }, { "min", -1 }, { "max", -1 },
@@ -121,8 +125,6 @@ static int builtin_arity(const char *name, int *out_arity) {
     }
     return 0;
 }
-
-/* ── Function-arity map: insertion-ordered chain. ───────────────── */
 
 typedef struct FnEntry {
     const char     *name;
@@ -157,8 +159,6 @@ static void fnmap_free(FnMap *m) {
     m->head = NULL;
 }
 
-/* ── Error list. ────────────────────────────────────────────────── */
-
 typedef struct {
     const char **items;
     size_t       len;
@@ -176,8 +176,6 @@ static void err_push(TriadArena *a, ErrList *L, const char *fmt, ...) {
     }
     L->items[L->len++] = triad_arena_strdup(a, buf);
 }
-
-/* ── Position formatter — matches _pos in typecheck_universal.py. ── */
 
 static const char *fmt_pos(TriadArena *a, TriadPos p) {
     char buf[256];
@@ -201,8 +199,6 @@ static const char *fmt_pos(TriadArena *a, TriadPos p) {
     return triad_arena_strdup(a, buf);
 }
 
-/* ── Checker context. ───────────────────────────────────────────── */
-
 typedef struct {
     TriadArena *arena;
     ErrList     errs;
@@ -216,7 +212,40 @@ static void check_body(Ctx *C, TriadAstNode *const *stmts, size_t n, StrSet *sco
     for (size_t i = 0; i < n; ++i) check_stmt(C, stmts[i], scope);
 }
 
-/* ── Expression checks. ─────────────────────────────────────────── */
+static int _cmp_cstr(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+static const char *suggest_name(const StrSet *scope, const char *name) {
+    if (scope->len == 0) return NULL;
+    const char **cands = (const char **)malloc(scope->len * sizeof(char *));
+    if (!cands) return NULL;
+    size_t m = 0;
+    for (size_t i = 0; i < scope->cap; ++i)
+        if (scope->buckets[i]) cands[m++] = scope->buckets[i];
+    qsort(cands, m, sizeof(char *), _cmp_cstr);
+    const char *best = NULL;
+    int best_dist = 4;
+    size_t ln = strlen(name);
+    for (size_t i = 0; i < m; ++i) {
+        size_t lc = strlen(cands[i]);
+        size_t diff = lc > ln ? lc - ln : ln - lc;
+        if (diff > 3) continue;
+        int d = 0;
+        size_t k = ln < lc ? ln : lc;
+        for (size_t j = 0; j < k; ++j) {
+            d += (name[j] != cands[i][j]);
+            if (d > 3) break;
+        }
+        d += (int)diff;
+        if (d < best_dist && d <= 3) {
+            best_dist = d;
+            best = cands[i];
+        }
+    }
+    free(cands);
+    return best;
+}
 
 static void check_expr(Ctx *C, const TriadAstNode *e, StrSet *scope) {
     if (!e) return;
@@ -224,9 +253,16 @@ static void check_expr(Ctx *C, const TriadAstNode *e, StrSet *scope) {
         case TRIAD_AST_IDENT: {
             const char *nm = e->u.ident_name;
             if (!ss_has(scope, nm) && strcmp(nm, "self") != 0) {
-                err_push(C->arena, &C->errs,
-                         "error[E2001]: undefined variable '%s' (%s)",
-                         nm, fmt_pos(C->arena, e->pos));
+                const char *sug = suggest_name(scope, nm);
+                if (sug)
+                    err_push(C->arena, &C->errs,
+                             "error[E2001]: undefined variable '%s' (%s)\n"
+                             "  help: did you mean '%s'?",
+                             nm, fmt_pos(C->arena, e->pos), sug);
+                else
+                    err_push(C->arena, &C->errs,
+                             "error[E2001]: undefined variable '%s' (%s)",
+                             nm, fmt_pos(C->arena, e->pos));
             }
             break;
         }
@@ -243,9 +279,16 @@ static void check_expr(Ctx *C, const TriadAstNode *e, StrSet *scope) {
                 check_expr(C, e->u.call.args[i], scope);
             for (size_t i = 0; i < e->u.call.kwargs_len; ++i)
                 check_expr(C, e->u.call.kwargs[i].value, scope);
-            /* arity check only when func is a bare Ident */
+
+            int has_spread = 0;
+            for (size_t i = 0; i < e->u.call.args_len; ++i) {
+                const TriadAstNode *a = e->u.call.args[i];
+                if (a && a->kind == TRIAD_AST_UNARYOP && a->u.op.op &&
+                    (strcmp(a->u.op.op, "*") == 0 || strcmp(a->u.op.op, "**") == 0))
+                    has_spread = 1;
+            }
             const TriadAstNode *fn = e->u.call.func_or_obj;
-            if (fn && fn->kind == TRIAD_AST_IDENT) {
+            if (fn && fn->kind == TRIAD_AST_IDENT && !has_spread) {
                 const char *nm = fn->u.ident_name;
                 int n_args = (int)e->u.call.args_len;
                 int arity;
@@ -323,13 +366,42 @@ static void check_expr(Ctx *C, const TriadAstNode *e, StrSet *scope) {
         case TRIAD_AST_AWAIT_EXPR:
             check_expr(C, e->u.unary_value.value, scope);
             break;
+        case TRIAD_AST_COMPLEX_LIT:
+            break;
+        case TRIAD_AST_BYTES_LIT:
+            break;
+        case TRIAD_AST_SET_LIT:
+            for (size_t i = 0; i < e->u.set_lit.elements_len; i++)
+                check_expr(C, e->u.set_lit.elements[i], scope);
+            break;
+        case TRIAD_AST_TERNARY:
+            check_expr(C, e->u.ternary.condition, scope);
+            check_expr(C, e->u.ternary.then_val, scope);
+            check_expr(C, e->u.ternary.else_val, scope);
+            break;
+        case TRIAD_AST_CHAIN_CMP:
+            for (size_t i = 0; i < e->u.chain_cmp.operands_len; i++)
+                check_expr(C, e->u.chain_cmp.operands[i], scope);
+            break;
+        case TRIAD_AST_SUPER:
+            for (size_t i = 0; i < e->u.super_expr.args_len; i++)
+                check_expr(C, e->u.super_expr.args[i], scope);
+            break;
+        case TRIAD_AST_DICT_COMP:
+            check_expr(C, e->u.dict_comp.key_expr, scope);
+            check_expr(C, e->u.dict_comp.value_expr, scope);
+            break;
+        case TRIAD_AST_SET_COMP:
+            check_expr(C, e->u.set_comp.expr, scope);
+            break;
+        case TRIAD_AST_GEN_COMP:
+            check_expr(C, e->u.gen_comp.expr, scope);
+            break;
         default:
-            /* literals + slice: no checks */
+
             break;
     }
 }
-
-/* ── Statement checks. ──────────────────────────────────────────── */
 
 static void check_stmt(Ctx *C, const TriadAstNode *s, StrSet *scope) {
     if (!s) return;
@@ -358,6 +430,15 @@ static void check_stmt(Ctx *C, const TriadAstNode *s, StrSet *scope) {
         case TRIAD_AST_RETURN:
             if (s->u.unary_value.value) check_expr(C, s->u.unary_value.value, scope);
             break;
+        case TRIAD_AST_PASS:
+            break;
+        case TRIAD_AST_ASSERT:
+            check_expr(C, s->u.assert_stmt.condition, scope);
+            if (s->u.assert_stmt.message) check_expr(C, s->u.assert_stmt.message, scope);
+            break;
+        case TRIAD_AST_DEL:
+            check_expr(C, s->u.del_stmt.target, scope);
+            break;
         case TRIAD_AST_IF: {
             check_expr(C, s->u.if_stmt.condition, scope);
             { StrSet inner; ss_copy_from(&inner, scope);
@@ -377,11 +458,21 @@ static void check_stmt(Ctx *C, const TriadAstNode *s, StrSet *scope) {
             }
             break;
         }
+        case TRIAD_AST_ASYNC_FOR:
         case TRIAD_AST_FOR: {
             check_expr(C, s->u.for_stmt.iter, scope);
             StrSet inner; ss_copy_from(&inner, scope);
             ss_add(&inner, s->u.for_stmt.var);
             check_body(C, s->u.for_stmt.body, s->u.for_stmt.body_len, &inner);
+            ss_free(&inner);
+            break;
+        }
+        case TRIAD_AST_ASYNC_WITH:
+        case TRIAD_AST_WITH: {
+            check_expr(C, s->u.with_stmt.expr, scope);
+            StrSet inner; ss_copy_from(&inner, scope);
+            if (s->u.with_stmt.var) ss_add(&inner, s->u.with_stmt.var);
+            check_body(C, s->u.with_stmt.body, s->u.with_stmt.body_len, &inner);
             ss_free(&inner);
             break;
         }
@@ -393,7 +484,12 @@ static void check_stmt(Ctx *C, const TriadAstNode *s, StrSet *scope) {
             break;
         }
         case TRIAD_AST_FN_DECL: {
-            fnmap_set(&C->functions, s->u.fn_decl.name, (int)s->u.fn_decl.params_len);
+            int fn_arity = (int)s->u.fn_decl.params_len;
+            for (size_t i = 0; i < s->u.fn_decl.params_len; ++i) {
+                const TriadParam *pp = &s->u.fn_decl.params[i];
+                if (pp->is_args || pp->is_kwargs || pp->default_value) { fn_arity = -1; break; }
+            }
+            fnmap_set(&C->functions, s->u.fn_decl.name, fn_arity);
             ss_add(scope, s->u.fn_decl.name);
             StrSet inner; ss_copy_from(&inner, scope);
             for (size_t i = 0; i < s->u.fn_decl.params_len; ++i)
@@ -402,6 +498,7 @@ static void check_stmt(Ctx *C, const TriadAstNode *s, StrSet *scope) {
             ss_free(&inner);
             break;
         }
+        case TRIAD_AST_CLASS_DECL:
         case TRIAD_AST_TYPE_DECL: {
             ss_add(scope, s->u.type_decl.name);
             ss_add(&C->types_declared, s->u.type_decl.name);
@@ -419,13 +516,18 @@ static void check_stmt(Ctx *C, const TriadAstNode *s, StrSet *scope) {
         case TRIAD_AST_IMPORT: {
             const char *name = s->u.import_stmt.alias;
             if (!name && s->u.import_stmt.path_len > 0)
-                name = s->u.import_stmt.path[s->u.import_stmt.path_len - 1];
+                name = s->u.import_stmt.path[0];
             if (name) ss_add(scope, name);
             break;
         }
         case TRIAD_AST_FROM_IMPORT:
-            for (size_t i = 0; i < s->u.from_import.names_len; ++i)
-                ss_add(scope, s->u.from_import.names[i]);
+            for (size_t i = 0; i < s->u.from_import.names_len; ++i) {
+                const char *bound = NULL;
+                if (s->u.from_import.aliases)
+                    bound = s->u.from_import.aliases[i];
+                if (!bound) bound = s->u.from_import.names[i];
+                ss_add(scope, bound);
+            }
             break;
         case TRIAD_AST_REG:
             ss_add(scope, s->u.reg_stmt.name);
@@ -436,6 +538,24 @@ static void check_stmt(Ctx *C, const TriadAstNode *s, StrSet *scope) {
         case TRIAD_AST_WORLD:
             ss_add(scope, s->u.world_decl.name);
             break;
+        case TRIAD_AST_SUBSTRATE:
+            if (s->u.substrate_decl.is_composed) {
+                for (size_t i = 0; i < s->u.substrate_decl.members_len; ++i) {
+                    const char *m = s->u.substrate_decl.members[i];
+                    if (!ss_has(scope, m)) {
+                        err_push(C->arena, &C->errs,
+                            "error[E2012]: substrate '%s': composed_of '%s' not declared (%s)",
+                            s->u.substrate_decl.name, m, fmt_pos(C->arena, s->pos));
+                    }
+                }
+                for (size_t i = 0; i < s->u.substrate_decl.properties_len; ++i)
+                    check_expr(C, s->u.substrate_decl.properties[i].value, scope);
+            } else {
+                for (size_t i = 0; i < s->u.substrate_decl.overrides_len; ++i)
+                    check_expr(C, s->u.substrate_decl.overrides[i].value, scope);
+            }
+            ss_add(scope, s->u.substrate_decl.name);
+            break;
         case TRIAD_AST_OBSERVE:
             if (!ss_has(scope, s->u.observe_stmt.target)) {
                 err_push(C->arena, &C->errs,
@@ -445,6 +565,16 @@ static void check_stmt(Ctx *C, const TriadAstNode *s, StrSet *scope) {
             break;
         case TRIAD_AST_RUN:
             if (s->u.run_stmt.duration) check_expr(C, s->u.run_stmt.duration, scope);
+            break;
+        case TRIAD_AST_SEQUENCE:
+            check_expr(C, s->u.sequence_stmt.inputs, scope);
+            if (s->u.sequence_stmt.target && !ss_has(scope, s->u.sequence_stmt.target)) {
+                err_push(C->arena, &C->errs,
+                    "error[E2013]: undefined sequence target '%s' (%s)",
+                    s->u.sequence_stmt.target, fmt_pos(C->arena, s->pos));
+            }
+            if (s->u.sequence_stmt.each_for)
+                check_expr(C, s->u.sequence_stmt.each_for, scope);
             break;
         case TRIAD_AST_TRY_CATCH: {
             { StrSet inner; ss_copy_from(&inner, scope);
@@ -495,13 +625,10 @@ static void check_stmt(Ctx *C, const TriadAstNode *s, StrSet *scope) {
                         s->u.ring_stmt.members[i], fmt_pos(C->arena, s->pos));
             break;
         default:
-            /* BreakStmt, ContinueStmt, MatchStmt, ClassDecl, AnnotationStmt:
-             * Python checker has no case for these, so we do nothing. */
+
             break;
     }
 }
-
-/* ── Entry. ─────────────────────────────────────────────────────── */
 
 int triad_check_module(TriadArena *arena, const TriadAstNode *module,
                        TriadCheckErrors *out) {

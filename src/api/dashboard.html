@@ -42,7 +42,7 @@ body{font-family:'JetBrains Mono','Fira Code','Consolas',monospace;background:va
 .obs-card{background:var(--bg);border:1px solid var(--b);border-radius:4px;padding:10px 12px}
 .obs-card .label{font-size:10px;color:var(--d);text-transform:uppercase}
 .obs-card .value{font-size:16px;color:var(--a);font-weight:700;margin-top:2px}
-.spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--b);border-top-color:var(--a);border-radius:50%;animation:spin .6s linear infinite}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--b);border-top-color:var(--a);border-radius:50%;animation:spin .6s triad infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 /* canvas */
 .canvas-row{display:flex;gap:12px;margin-top:12px}
@@ -65,7 +65,6 @@ body{font-family:'JetBrains Mono','Fira Code','Consolas',monospace;background:va
 </head>
 <body>
 
-<!-- TUTORIAL OVERLAY -->
 <div class="tutorial-overlay" id="tutorialOverlay" style="display:none">
   <div class="tutorial-box" id="tutorialBox">
     <h2 id="tutTitle">Welcome to TriadLang</h2>
@@ -81,7 +80,6 @@ body{font-family:'JetBrains Mono','Fira Code','Consolas',monospace;background:va
   </div>
 </div>
 
-<!-- SIDEBAR -->
 <div class="sidebar">
   <div class="sidebar-header"><span style="font-size:20px">&#x25C9;</span> TriadLang</div>
   <div class="sidebar-section">Templates</div>
@@ -89,7 +87,6 @@ body{font-family:'JetBrains Mono','Fira Code','Consolas',monospace;background:va
   <div class="sidebar-footer">P1+P2+P3 &bull; 562 tests</div>
 </div>
 
-<!-- MAIN -->
 <div class="main">
   <div class="tabs" id="tabBar">
     <div class="tab active" data-tab="code">Code</div>
@@ -100,7 +97,6 @@ body{font-family:'JetBrains Mono','Fira Code','Consolas',monospace;background:va
     <button class="secondary" style="font-size:11px;padding:4px 10px;margin-right:8px" onclick="openTutorial()">&#9998; Tutorial</button>
   </div>
 
-  <!-- CODE -->
   <div class="editor-pane" id="tab-code">
     <div class="toolbar">
       <span style="font-size:11px;color:var(--d)">editor</span><span class="spacer"></span>
@@ -113,7 +109,6 @@ print("Hello from TriadLang")</textarea></div>
     <div class="output-wrapper" id="codeOutput"><div style="color:var(--d);font-size:12px">Output will appear here...</div></div>
   </div>
 
-  <!-- FIELD -->
   <div class="editor-pane" id="tab-field" style="display:none">
     <div class="toolbar">
       <select id="fieldRegime"><option value="">Custom</option></select>
@@ -128,7 +123,6 @@ print("Hello from TriadLang")</textarea></div>
     <div class="output-wrapper" id="fieldOutput" style="flex:1"><div style="color:var(--d);font-size:12px">Evolve a field and see density, power spectrum, and observables.</div></div>
   </div>
 
-  <!-- COUPLED -->
   <div class="editor-pane" id="tab-coupled" style="display:none">
     <div class="toolbar">
       <select id="coupledRegime"><option value="B0">B0</option></select>
@@ -142,7 +136,6 @@ print("Hello from TriadLang")</textarea></div>
     <div class="output-wrapper" id="coupledOutput" style="flex:1"><div style="color:var(--d);font-size:12px">Run multiple coupled substrates together.</div></div>
   </div>
 
-  <!-- REGIMES -->
   <div class="editor-pane" id="tab-regimes" style="display:none">
     <div class="toolbar"><span style="font-size:11px;color:var(--d)">Available regimes</span><span class="spacer"></span><button onclick="loadRegimes()">Reload</button></div>
     <div class="output-wrapper" id="regimesOutput" style="flex:1"><div style="color:var(--d);font-size:12px">Loading regimes...</div></div>
@@ -157,7 +150,7 @@ const TUT_STEPS=[
   {
     title:'1. What is TriadLang?',
     content:`<p>A programming language where <b>execution is field evolution</b>.</p>
-<p>Instead of running instructions one by one, TriadLang allocates continuous fields and evolves them forward in time using the <b>Triad equation</b>:</p>
+<p>Instead of running instructions one by one, TriadLang allocates continuous fields and evolves them forward in time using the <b>Triad Triad</b>:</p>
 <pre>i·ℏ·∂_t Ψ = [-ℏ²/(2m)∇² + V_ext + Λ|Ψ|² + V_mem + α(-Δ)^(σ/2) - iΓ]Ψ + η</pre>
 <p><b>P1</b> — kinetic/dispersion (FFT). <b>P2</b> — memory/self-reference (Λ|Ψ|²). <b>P3</b> — dissipation/noise (open system).</p>
 <p>All three run together. Always. Crystallization is emergent — not imposed.</p>`
@@ -181,7 +174,7 @@ const TUT_STEPS=[
   {
     title:'4. Evolve a field',
     content:`<p>Switch to the <b>Field</b> tab. The default regime is <b>B0</b> with Λ=-0.5, Γ=0.05.</p>
-<p>Click <b>Evolve</b>. The solver runs the full P1+P2+P3 equation for T=10 simulated seconds.</p>
+<p>Click <b>Evolve</b>. The solver runs the triad P1+P2+P3 Triad for T=10 simulated seconds.</p>
 <p>You will see:</p>
 <p>&#8226; <b>Density plot</b> — the field density |ψ(x)|² across space<br>&#8226; <b>Power spectrum</b> — which wavenumbers are dominant<br>&#8226; <b>Crystallinity timeline</b> — a number between 0 and 1 showing how structured the field became</p>
 <p>Try changing Λ to <b>-3.0</b> and run again. Stronger coupling → different structure.</p>
@@ -191,7 +184,7 @@ const TUT_STEPS=[
     title:'5. Couple fields',
     content:`<p>Switch to the <b>Coupled</b> tab. Multiple substrates run simultaneously.</p>
 <p>Set <b>Substrates=4</b>, <b>κ=-3</b>, <b>T=8</b>. Click <b>Run</b>.</p>
-<p>Each substrate is a full Triad field with its own ψ, memory, and noise. They are coupled through κ — energy flows between them.</p>
+<p>Each substrate is a triad Triad field with its own ψ, memory, and noise. They are coupled through κ — energy flows between them.</p>
 <p>The output shows observables for each substrate. Different seeds → different crystallinity values, shaped by the coupling.</p>`
   },
   {

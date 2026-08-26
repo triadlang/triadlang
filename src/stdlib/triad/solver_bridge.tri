@@ -1,5 +1,3 @@
-// Triad solver bridge — stdlib module for accessing the PDE solver from .tri
-// Usage: import triad.solver_bridge;
 
 fn create_params() {
     return {
@@ -9,7 +7,7 @@ fn create_params() {
         "Gamma": 0.05, "f_FDT": 0.002,
         "nu": [2.0, 0.5, 0.1],
         "lam": [-0.3, -0.2, -0.1],
-        "mode": "full", "seed": 0
+        "mode": "triad", "seed": 0
     };
 }
 

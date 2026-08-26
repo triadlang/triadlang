@@ -1,24 +1,3 @@
-/*
- * triad_observables_atoms.c — Native port of runtime/observables_atoms.py.
- *
- * P1+P2+P3 invariance: this module READS atoms from a |Ψ|² field that
- * was produced by the full equation. It does not modify the field and
- * does not impose any structure on it. Atoms are emergent crystallisation
- * already present in ρ; the observable just counts them.
- *
- * Periodic boundary handling mirrors the Python reference EXACTLY,
- * including its known asymmetries:
- *   - count_clusters_1d   : periodic (uses roll-to-start-False trick).
- *   - cluster_centroids_1d: NOT periodic (walks i = 0..N-1 linearly);
- *                           a cluster that wraps becomes two centroids.
- *                           This is the documented v3 behaviour — porting
- *                           the fix would diverge from Python parity.
- *   - 2D/3D               : periodic via union-find of labels touching
- *                           opposite faces; centroids computed on the
- *                           ORIGINAL pixel coords (so a wrapping blob's
- *                           centroid sits at the box centre, same as
- *                           scipy.ndimage.center_of_mass).
- */
 #define _POSIX_C_SOURCE 200809L
 #include "triad_observables_atoms.h"
 #include "triad_rt.h"
@@ -26,8 +5,6 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ── density helpers ───────────────────────────────────────────── */
 
 static double _max_rho(const TriadCplx *psi, int64_t n) {
     double m = 0.0;
@@ -37,8 +14,6 @@ static double _max_rho(const TriadCplx *psi, int64_t n) {
     }
     return m;
 }
-
-/* ── 1D: count_clusters (periodic) ─────────────────────────────── */
 
 int triad_atom_count_1d(const TriadCplx *psi, int N, double dx,
                         double threshold_frac) {
@@ -57,12 +32,12 @@ int triad_atom_count_1d(const TriadCplx *psi, int N, double dx,
     }
     if (!any) { free(above); return 0; }
     if (all)  { free(above); return 1; }
-    /* find first False to use as roll origin */
+
     int idx0 = 0;
     for (int i = 0; i < N; ++i) {
         if (!above[i]) { idx0 = i; break; }
     }
-    /* count rising edges in the rolled array */
+
     int count = 0;
     for (int k = 0; k < N - 1; ++k) {
         int a = above[(idx0 + k) % N];
@@ -73,8 +48,6 @@ int triad_atom_count_1d(const TriadCplx *psi, int N, double dx,
     return count;
 }
 
-/* ── 1D: cluster_centroids (NON-periodic, by reference design) ── */
-
 double *triad_atom_centroids_1d(const TriadCplx *psi, int N, double dx,
                                 double threshold_frac, int *out_count) {
     if (out_count) *out_count = 0;
@@ -82,7 +55,7 @@ double *triad_atom_centroids_1d(const TriadCplx *psi, int N, double dx,
     double rho_max = _max_rho(psi, N);
     if (rho_max <= 0.0) return NULL;
     double thr = threshold_frac * rho_max;
-    /* Two-pass: first count clusters, then write centroids. */
+
     int n_clusters = 0;
     int in_cluster = 0;
     for (int i = 0; i < N; ++i) {
@@ -128,7 +101,7 @@ double triad_atom_separation_1d(const TriadCplx *psi, int N, double dx,
     int n;
     double *cs = triad_atom_centroids_1d(psi, N, dx, threshold_frac, &n);
     if (n < 2) { free(cs); return 0.0; }
-    /* sort ascending */
+
     for (int i = 1; i < n; ++i) {
         double v = cs[i];
         int j = i - 1;
@@ -142,11 +115,6 @@ double triad_atom_separation_1d(const TriadCplx *psi, int N, double dx,
     return mean;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   2D / 3D periodic connected-components via BFS + union-find
-   ═══════════════════════════════════════════════════════════════════ */
-
-/* Union-find with path compression. */
 typedef struct { int *parent; int n; } UF;
 
 static void uf_init(UF *u, int n) {
@@ -169,8 +137,6 @@ static void uf_union(UF *u, int a, int b) {
 }
 
 static void uf_free(UF *u) { free(u->parent); }
-
-/* ── 2D: non-periodic flood-label, then periodic merge via UF ── */
 
 static int *_label_2d_nonperiodic(const int *above, int N, int *out_count) {
     int *labels = (int *)calloc((size_t)N * (size_t)N, sizeof(int));
@@ -206,24 +172,22 @@ static int *_label_2d_nonperiodic(const int *above, int N, int *out_count) {
     return labels;
 }
 
-/* Merge labels via UF on opposite faces (periodic). Returns *new* labels
- * relabelled 1..final_n in scan order. */
 static int *_periodic_merge_2d(int *labels, int N, int n, int *final_n) {
     if (n <= 1) { *final_n = n; return labels; }
     UF u; uf_init(&u, n);
-    /* axis 0: row 0 vs row N-1, same column */
+
     for (int j = 0; j < N; ++j) {
         int lo = labels[0 * N + j];
         int hi = labels[(N - 1) * N + j];
         if (lo > 0 && hi > 0) uf_union(&u, lo, hi);
     }
-    /* axis 1: col 0 vs col N-1, same row */
+
     for (int i = 0; i < N; ++i) {
         int lo = labels[i * N + 0];
         int hi = labels[i * N + (N - 1)];
         if (lo > 0 && hi > 0) uf_union(&u, lo, hi);
     }
-    /* Relabel: walk scan order, assign new ids by first appearance. */
+
     int *remap = (int *)calloc((size_t)(n + 1), sizeof(int));
     int next_id = 0;
     int *new_labels = (int *)calloc((size_t)N * (size_t)N, sizeof(int));
@@ -266,8 +230,6 @@ int triad_atom_count_2d(const TriadCplx *psi, int N, double dx,
     return final_n;
 }
 
-/* ── 2D centroids: pixel-coord COM per component, no wrap ──── */
-
 double *triad_atom_centroids_2d(const TriadCplx *psi, int N, double dx,
                                 double threshold_frac, int *out_count) {
     if (out_count) *out_count = 0;
@@ -292,7 +254,6 @@ double *triad_atom_centroids_2d(const TriadCplx *psi, int N, double dx,
     int *merged = _periodic_merge_2d(labels, N, n, &final_n);
     if (final_n == 0) { free(merged); free(rho); return NULL; }
 
-    /* For each merged label, accumulate weighted (i, j) on original pixels. */
     double *sum_iw = (double *)calloc((size_t)final_n, sizeof(double));
     double *sum_jw = (double *)calloc((size_t)final_n, sizeof(double));
     double *sum_w  = (double *)calloc((size_t)final_n, sizeof(double));
@@ -321,8 +282,6 @@ double *triad_atom_centroids_2d(const TriadCplx *psi, int N, double dx,
     return out;
 }
 
-/* ── 3D: same scheme as 2D ─────────────────────────────────────── */
-
 static int *_label_3d_nonperiodic(const int *above, int N, int *out_count) {
     int64_t G = (int64_t)N * N * N;
     int *labels = (int *)calloc((size_t)G, sizeof(int));
@@ -335,7 +294,7 @@ static int *_label_3d_nonperiodic(const int *above, int N, int *out_count) {
                 if (!above[idx] || labels[idx] != 0) continue;
                 ++next_label;
                 int head = 0, tail = 0;
-                queue[tail++] = (int)idx;  /* fits while G < INT_MAX */
+                queue[tail++] = (int)idx;
                 labels[idx] = next_label;
                 while (head < tail) {
                     int p = queue[head++];
@@ -368,19 +327,19 @@ static int *_label_3d_nonperiodic(const int *above, int N, int *out_count) {
 static int *_periodic_merge_3d(int *labels, int N, int n, int *final_n) {
     if (n <= 1) { *final_n = n; return labels; }
     UF u; uf_init(&u, n);
-    /* axis 0 */
+
     for (int j = 0; j < N; ++j) for (int k = 0; k < N; ++k) {
         int lo = labels[0*N*N + j*N + k];
         int hi = labels[(N-1)*N*N + j*N + k];
         if (lo > 0 && hi > 0) uf_union(&u, lo, hi);
     }
-    /* axis 1 */
+
     for (int i = 0; i < N; ++i) for (int k = 0; k < N; ++k) {
         int lo = labels[i*N*N + 0*N + k];
         int hi = labels[i*N*N + (N-1)*N + k];
         if (lo > 0 && hi > 0) uf_union(&u, lo, hi);
     }
-    /* axis 2 */
+
     for (int i = 0; i < N; ++i) for (int j = 0; j < N; ++j) {
         int lo = labels[i*N*N + j*N + 0];
         int hi = labels[i*N*N + j*N + (N-1)];
@@ -485,8 +444,6 @@ double *triad_atom_centroids_3d(const TriadCplx *psi, int N, double dx,
     return out;
 }
 
-/* ── ND dispatchers ────────────────────────────────────────────── */
-
 int triad_atom_count_nd(const TriadCplx *psi, int D, int N, double dx,
                         double threshold_frac) {
     if (D == 1) return triad_atom_count_1d(psi, N, dx, threshold_frac);
@@ -503,8 +460,6 @@ double *triad_atom_centroids_nd(const TriadCplx *psi, int D, int N, double dx,
     if (out_count) *out_count = 0;
     return NULL;
 }
-
-/* ── Composites ────────────────────────────────────────────────── */
 
 double triad_atoms_per_region(const TriadCplx *psi, int D, int N, double dx,
                               double threshold_frac) {
@@ -535,11 +490,6 @@ double triad_atomicity_ratio(const TriadCplx *psi_macro,
     return m / a;
 }
 
-/* atom_persistence_late: variance of count over late quarter window.
- * density_traj layout in C: density_traj[k * N + i] (1D field, k = time).
- * In the Python reference density_traj has shape (N, n_records); the
- * counts are taken on each column. Our C drivers can present a flat
- * (n_records, N) buffer because that's how multi_runtime records traj. */
 double triad_atom_persistence_late(const double *density_traj,
                                    int n_records, int N, double dx,
                                    double threshold_frac) {
@@ -584,7 +534,7 @@ double triad_atom_persistence_late(const double *density_traj,
         double d = (double)counts[k] - mean;
         var += d * d;
     }
-    var /= (double)n_late;  /* np.var default is population variance */
+    var /= (double)n_late;
     free(counts);
     return var;
 }

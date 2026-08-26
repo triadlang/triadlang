@@ -1,23 +1,27 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import os
-from typing import Optional
-import numpy as np
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+
 from api.models import (
-    SolveRequest, SolveResult, BatchSolveRequest, BatchSolveResult,
+    BatchSolveRequest,
+    BatchSolveResult,
+    SolveRequest,
+    SolveResult,
     TriadParamsModel,
 )
-from api.serialization import ndarray_to_b64, b64_to_ndarray, compute_standard_observables
+from api.serialization import b64_to_ndarray, compute_standard_observables, ndarray_to_b64
+from triad import ntri as np
 
 router = APIRouter()
 
 _TIMEOUT = float(os.environ.get('TRIAD_API_TIMEOUT', '120'))
 
 def _resolve_params(req: SolveRequest):
-    from runtime.core.solver import TriadParams
     if req.regime:
         from stdlib.regimes import resolve_regime
         base = resolve_regime(req.regime)
@@ -50,6 +54,8 @@ def _build_solve_result(raw: dict, p) -> SolveResult:
 def _run_1d_sync(req: SolveRequest) -> SolveResult:
     from runtime.core.solver import integrate
     p = _resolve_params(req)
+    if p.D != 1:
+        p.D = 1
     psi0 = b64_to_ndarray(req.psi0_b64) if req.psi0_b64 else None
     raw = integrate(p, psi0=psi0)
     return _build_solve_result(raw, p)
@@ -72,7 +78,7 @@ def _run_3d_sync(req: SolveRequest) -> SolveResult:
     return _build_solve_result(raw, p)
 
 def _run_batch_sync(req: BatchSolveRequest) -> BatchSolveResult:
-    from runtime.core.solver import integrate, TriadParams
+    from runtime.core.solver import integrate_nd
     seeds = req.seeds if req.seeds else list(range(req.K))
     results = []
     for s in seeds:
@@ -90,7 +96,7 @@ def _run_batch_sync(req: BatchSolveRequest) -> BatchSolveResult:
         else:
             p = req.params.to_triad_params()
             p.seed = s
-        raw = integrate(p)
+        raw = integrate_nd(p)
         results.append(_build_solve_result(raw, p))
     crystallinities = [r.crystallinity for r in results]
     return BatchSolveResult(
@@ -144,7 +150,7 @@ async def run_1d(req: SolveRequest):
             loop.run_in_executor(None, _run_1d_sync, req),
             timeout=_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(status_code=504, detail=f'solver timed out after {_TIMEOUT}s')
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -158,7 +164,7 @@ async def run_2d(req: SolveRequest):
             loop.run_in_executor(None, _run_2d_sync, req),
             timeout=_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(status_code=504, detail=f'solver timed out after {_TIMEOUT}s')
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -177,7 +183,7 @@ async def run_3d(req: SolveRequest):
             loop.run_in_executor(None, _run_3d_sync, req),
             timeout=_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(status_code=504, detail=f'solver timed out after {_TIMEOUT}s')
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -199,8 +205,8 @@ async def run_batch(req: BatchSolveRequest):
             loop.run_in_executor(None, _run_batch_sync, req),
             timeout=_TIMEOUT * req.K,
         )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail=f'batch timed out')
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail='batch timed out')
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return result

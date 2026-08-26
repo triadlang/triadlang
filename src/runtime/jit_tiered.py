@@ -1,45 +1,19 @@
-"""Tiered execution support for TriadLang.
-
-what is active: hot-spot tracking. for-loop iterations are counted at runtime
-(compiler_runtime emits _triad_jit_hit per loop), so the runtime knows which
-loops are hot. these counts are available through get_jit().stats() and the
-`triad jit-stats` cli command, and are useful for diagnostics and for deciding
-where vectorization would pay off.
-
-what is intentionally NOT active: automatic native compilation of hot scalar
-loops. the native helpers below (compile_function, compile_loop_body) only build
-int->int scalar loop kernels. speeding up a scalar loop that way is the exact
-anti-pattern this project rejects: triadlang's speed comes from the vectorized
-equation (FFT / NumPy / the native PDE solver), not from compiling fibonacci-style
-scalar loops. so the tracker observes, but it does not trigger scalar JIT.
-
-the native tier is meaningful only for vectorized / PDE kernels, which already run
-native through the solver (runtime/core/solver.py, native/c). the helpers here
-remain as building blocks for that vectorized path, not for scalar loop bodies.
-
-the three pillars stay native where it matters:
-  P1: FFT / dispersion in the solver (NumPy / CuPy / FFTW)
-  P2: memory fields pass through the native solver boundary
-  P3: noise / dissipation run inside the native solver path
-"""
 from __future__ import annotations
-import os
-import sys
-import time
-import ctypes
-import tempfile
-import subprocess
-import threading
-from typing import Optional, Callable
-from collections import OrderedDict
 
-JIT_THRESHOLD = 128        
-JIT_MAX_CACHE = 64         
-JIT_COMPILE_TIMEOUT = 30   
-JIT_ENABLED = True         
+import ctypes
+import os
+import subprocess
+import tempfile
+import threading
+from collections import OrderedDict
+from collections.abc import Callable
+
+JIT_THRESHOLD = 1
+JIT_MAX_CACHE = 64
+JIT_COMPILE_TIMEOUT = 30
+JIT_ENABLED = True
 
 class HotSpotTracker:
-    """Tracks call counts for functions and loops to detect hot paths."""
 
     def __init__(self):
         self._counts: dict[str, int] = {}
@@ -47,30 +21,30 @@ class HotSpotTracker:
         self._compiled: set[str] = set()
 
     def hit(self, name: str) -> int:
-        """Record a hit for the given function/loop. Returns new count."""
+
         with self._lock:
             self._counts[name] = self._counts.get(name, 0) + 1
             return self._counts[name]
 
     def is_hot(self, name: str) -> bool:
-        """Check if a function/loop has exceeded the JIT threshold."""
+
         with self._lock:
             return (self._counts.get(name, 0) >= JIT_THRESHOLD
                     and name not in self._compiled)
 
     def mark_compiled(self, name: str):
-        """Mark a function as already compiled."""
+
         with self._lock:
             self._compiled.add(name)
 
     def reset(self):
-        """Reset all counters."""
+
         with self._lock:
             self._counts.clear()
             self._compiled.clear()
 
     def stats(self) -> dict:
-        """Return current profiling stats."""
+
         with self._lock:
             return {
                 'counts': dict(self._counts),
@@ -79,14 +53,13 @@ class HotSpotTracker:
             }
 
 class LRUCache:
-    """Simple LRU cache for JIT-compiled function handles."""
 
     def __init__(self, maxsize: int = JIT_MAX_CACHE):
         self._cache: OrderedDict[str, ctypes.CDLL] = OrderedDict()
         self._maxsize = maxsize
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Optional[ctypes.CDLL]:
+    def get(self, key: str) -> ctypes.CDLL | None:
         with self._lock:
             if key in self._cache:
                 self._cache.move_to_end(key)
@@ -106,38 +79,27 @@ class LRUCache:
         return len(self._cache)
 
 class TieredJIT:
-    """Manages tiered compilation: Python exec -> native C compilation.
-
-    Usage:
-        jit = TieredJIT(repo_root='/path/to/triad-lang')
-        jit.ensure_runtime()
-
-        # In compiled Python code, the runtime injects:
-        # _triad_jit.hit('my_func')
-        # if _triad_jit.is_hot('my_func'):
-        #     compiled_fn = _triad_jit.compile_function('my_func', source)
-    """
 
     def __init__(self, repo_root: str = ''):
         self.repo_root = repo_root or self._find_repo_root()
         self.tracker = HotSpotTracker()
         self._cache = LRUCache()
         self._rt_built = False
-        self._compile_queue: list[tuple[str, str]] = []  
+        self._compile_queue: list[tuple[str, str]] = []
         self._compile_lock = threading.Lock()
         self._temp_dir = tempfile.mkdtemp(prefix='triad_jit_')
         self._compile_count = 0
 
     @staticmethod
     def _find_repo_root() -> str:
-        """Walk up from cwd to find repo root."""
+
         d = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if os.path.basename(d) in ('python', 'src'):
             return os.path.dirname(d)
         return d
 
     def ensure_runtime(self):
-        """Ensure libtriad_rt.a is built."""
+
         if self._rt_built:
             return
         rt_dir = os.path.join(self.repo_root, 'native', 'c')
@@ -147,23 +109,15 @@ class TieredJIT:
             return
 
     def hit(self, name: str) -> int:
-        """Record a call hit. Returns count."""
+
         return self.tracker.hit(name)
 
     def is_hot(self, name: str) -> bool:
-        """Check if name is hot enough to compile."""
+
         return JIT_ENABLED and self.tracker.is_hot(name)
 
-    def compile_function(self, name: str, c_source: str) -> Optional[ctypes.CDLL]:
-        """Compile a C function to a shared library and return the handle.
+    def compile_function(self, name: str, c_source: str) -> ctypes.CDLL | None:
 
-        Args:
-            name: function name (used for filename)
-            c_source: complete C source code including the function
-
-        Returns:
-            ctypes.CDLL handle, or None on failure
-        """
         cached = self._cache.get(name)
         if cached is not None:
             return cached
@@ -181,7 +135,12 @@ class TieredJIT:
         cc = os.environ.get('CC', 'gcc')
         cflags = ['-std=c11', '-O2', '-fPIC', '-shared',
                   '-I', os.path.join(rt_dir, 'include')]
-        libs = ['-L', rt_dir, '-ltriad_rt', '-lm', '-lgc']
+        libs = ['-L', rt_dir, '-ltriad_rt', '-lm']
+
+        if any(os.path.isfile(h) for h in ('/usr/include/gc/gc.h',
+                                           '/usr/local/include/gc/gc.h',
+                                           '/opt/homebrew/include/gc/gc.h')):
+            libs.append('-lgc')
         if os.path.exists('/usr/include/fftw3.h'):
             cflags.append('-DUSE_FFTW')
             libs.append('-lfftw3')
@@ -204,18 +163,8 @@ class TieredJIT:
             return None
 
     def compile_and_call(self, name: str, c_source: str,
-                         func_name: str, *args) -> Optional[object]:
-        """Compile a function and call it immediately.
+                         func_name: str, *args) -> object | None:
 
-        Args:
-            name: cache key
-            c_source: C source
-            func_name: name of the function in the C source
-            *args: arguments to pass to the function
-
-        Returns:
-            Return value of the compiled function, or None
-        """
         handle = self.compile_function(name, c_source)
         if handle is None:
             return None
@@ -227,21 +176,8 @@ class TieredJIT:
 
     def compile_loop_body(self, loop_name: str, body_c: str,
                           param_type: str = 'int',
-                          result_type: str = 'int') -> Optional[Callable]:
-        """Compile a loop body to a native function.
+                          result_type: str = 'int') -> Callable | None:
 
-        Generates a wrapper function that takes the iteration count
-        and returns the accumulated result.
-
-        Args:
-            loop_name: identifier for the loop
-            body_c: C code for the loop body (receives 'i' as iteration var)
-            param_type: C type for the iteration variable
-            result_type: C type for the return value
-
-        Returns:
-            Python-callable function, or None
-        """
         c_source = f"""#include "triad_rt.h"
 {result_type} _triad_jit_{loop_name}({param_type} n) {{
     {result_type} acc = 0;
@@ -263,7 +199,7 @@ class TieredJIT:
             return None
 
     def stats(self) -> dict:
-        """Return JIT statistics."""
+
         s = self.tracker.stats()
         s['cache_size'] = len(self._cache)
         s['compile_count'] = self._compile_count
@@ -272,30 +208,54 @@ class TieredJIT:
         return s
 
     def cleanup(self):
-        """Clean up temporary files."""
+
         import shutil
         try:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
-        except Exception:
+        except OSError:
             pass
 
 def _triad_jit_hit(name: str) -> int:
-    """Global JIT hit counter, injected into compiled TriadLang code."""
-    if _GLOBAL_JIT is not None:
-        return _GLOBAL_JIT.hit(name)
-    return 0
+    global _GLOBAL_JIT
+    if _GLOBAL_JIT is None:
+        _GLOBAL_JIT = TieredJIT()
+    return _GLOBAL_JIT.hit(name)
 
 def _triad_jit_is_hot(name: str) -> bool:
-    """Global JIT hot check, injected into compiled TriadLang code."""
+
     if _GLOBAL_JIT is not None:
         return _GLOBAL_JIT.is_hot(name)
     return False
 
-_GLOBAL_JIT: Optional[TieredJIT] = None
+_interp_time: dict = {}
+_compile_cost: list = []
+
+def _triad_jit_time(name: str, dt: float):
+    _interp_time[name] = _interp_time.get(name, 0.0) + float(dt)
+
+def _measured_compile_cost() -> float:
+    if _compile_cost:
+        return _compile_cost[0]
+    import time as _t
+    src = ('#include <stdint.h>\n'
+           'int64_t kernel(int64_t *I, double *D){ (void)I; (void)D; return 0; }\n')
+    t0 = _t.perf_counter()
+    lib = get_jit().compile_function('_triad_probe', src)
+    cost = _t.perf_counter() - t0 if lib is not None else float('inf')
+    _compile_cost.append(cost)
+    return cost
+
+def _triad_jit_ready(name: str) -> bool:
+    if not JIT_ENABLED:
+        return False
+    return _triad_jit_is_hot(name)
+
+_GLOBAL_JIT: TieredJIT | None = None
 
 def get_jit(repo_root: str = '') -> TieredJIT:
-    """Get or create the global JIT instance."""
+
     global _GLOBAL_JIT
     if _GLOBAL_JIT is None:
         _GLOBAL_JIT = TieredJIT(repo_root)
     return _GLOBAL_JIT
+

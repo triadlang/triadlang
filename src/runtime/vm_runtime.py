@@ -1,19 +1,19 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional
-import numpy as np
-from runtime.vm import TriadVM, VMState, Instruction
+
 from runtime.core.solver import TriadParams
-from runtime.core.multi_runtime import CouplingEdge, Segment
-from stdlib.regimes import resolve_regime
+from runtime.vm import TriadVM, VMState
+from triad import ntri as np
+
 
 @dataclass
 class VMSubstrate:
     name: str
     vm: TriadVM
-    params: dict
+    params: TriadParams
     id: int = -1
-    psi: Optional[np.ndarray] = None
+    psi: np.ndarray | None = None
     dx: float = 0.25
 
 class VMRuntime:
@@ -26,6 +26,7 @@ class VMRuntime:
         self._segments: list[tuple[float, float, list]] = []
         self.global_t: float = 0.0
         self._coupling: dict[str, list[tuple[str, float]]] = {}
+        self._ran: bool = False
 
     def add_substrate(self, name: str, params: TriadParams) -> VMSubstrate:
         p = params
@@ -41,8 +42,8 @@ class VMRuntime:
         hbar = p.hbar
         Gamma = p.Gamma
         H_lin = hbar ** 2 * k ** 2 / 2.0 + alpha * np.abs(k) ** sigma
-        
-        half_lin = np.exp(-1j * H_lin * self.dt / (2 * hbar))
+
+        half_lin = np.exp(-1j * H_lin * self.dt / hbar)
         psi = np.exp(-x ** 2 / 8.0).astype(np.complex128)
         psi /= np.sqrt(np.sum(np.abs(psi) ** 2) * dx)
         nu = np.array(p.nu)
@@ -60,13 +61,13 @@ class VMRuntime:
         return sub
 
     def add_segment(self, seg):
-        self._segments.append((seg.t_start, seg.t_end, seg.edges))
-        for edge in seg.edges:
-            src_name = self._id_to_name(edge.src_id)
-            dst_name = self._id_to_name(edge.dst_id)
+        self._segments.append((seg.t_start, seg.t_end, seg.links))
+        for link in seg.links:
+            src_name = self._id_to_name(link.src_id)
+            dst_name = self._id_to_name(link.dst_id)
             if dst_name not in self._coupling:
                 self._coupling[dst_name] = []
-            self._coupling[dst_name].append((src_name, edge.kappa))
+            self._coupling[dst_name].append((src_name, link.kappa))
 
     def _id_to_name(self, sid: int) -> str:
         for name, sub in self.substrates.items():
@@ -75,7 +76,7 @@ class VMRuntime:
         return ''
 
     def run(self, verbose: bool=False):
-        for seg_start, seg_end, edges in self._segments:
+        for seg_start, seg_end, links in self._segments:
             T = seg_end - seg_start
             n_steps = max(1, int(round(T / self.dt)))
             self._setup_coupling()
@@ -93,9 +94,26 @@ class VMRuntime:
         self._ran = True
 
     def _setup_coupling(self):
-        pass
+        for dst_name, links in list(self._coupling.items()):
+            if dst_name not in self.substrates:
+                continue
+            valid_links = []
+            for src_name, kappa in links:
+                if src_name in self.substrates:
+                    valid_links.append((src_name, kappa))
+            if valid_links:
+                self._coupling[dst_name] = valid_links
+            else:
+                del self._coupling[dst_name]
 
-    def _get_coupled_rho(self, dst_name: str) -> Optional[np.ndarray]:
+        for name, sub in self.substrates.items():
+            if sub.psi is None:
+                sub.psi = sub.vm.state.psi.copy()
+            if name in self._coupling:
+                first_kappa = self._coupling[name][0][1] if self._coupling[name] else -3.0
+                sub.vm.state.kappa = first_kappa
+
+    def _get_coupled_rho(self, dst_name: str) -> np.ndarray | None:
         if dst_name not in self._coupling:
             return None
         total = None
@@ -110,6 +128,3 @@ class VMRuntime:
                 total = total + kappa * rho
         return total
 
-def _patch_substrate(sub):
-    sub.psi = sub.vm.state.psi
-    sub.dx = sub.vm.state.V_ext.shape[0] and sub.params.get('L', 32.0) / sub.vm.state.psi.shape[0]

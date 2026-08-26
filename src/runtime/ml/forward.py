@@ -1,17 +1,41 @@
+
 from __future__ import annotations
-import torch
-import numpy as np
-from typing import Optional, Union
+
+from typing import TYPE_CHECKING
+
+from triad import ntri as np
+
+if TYPE_CHECKING:
+    from runtime.ml.generate import GenerationResult
+
+EXTERNAL_STACK = True
+
+_HAS_TORCH = False
+try:
+    import torch
+    _HAS_TORCH = True
+except (ImportError, ModuleNotFoundError):
+    torch = None
+
+def _ensure_torch():
+    if not _HAS_TORCH:
+        raise RuntimeError(
+            'PyTorch is not installed. This module (runtime.ml.forward) is '
+            'an **external interop backend** and requires torch. '
+            'Install with: pip install torch'
+        )
 
 _device = None
 
 def _get_device() -> torch.device:
+    _ensure_torch()
     global _device
     if _device is None:
         _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return _device
 
 def _t(arr: np.ndarray) -> torch.Tensor:
+    _ensure_torch()
     return torch.as_tensor(arr, device=_get_device())
 
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -46,10 +70,10 @@ def rope(x: torch.Tensor, positions: torch.Tensor,
     x1 = x_rot[..., :half]
     x2 = x_rot[..., half:]
     rotated = torch.cat([-x2, x1], dim=-1)
-    rotated_full = x_rot * cos_t + rotated * sin_t
+    rotated_triad = x_rot * cos_t + rotated * sin_t
     if rotary_dim < head_dim:
-        return torch.cat([rotated_full, x_pass], dim=-1)
-    return rotated_full
+        return torch.cat([rotated_triad, x_pass], dim=-1)
+    return rotated_triad
 
 def _rotate_half(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
@@ -163,7 +187,7 @@ def _rms_norm_gated(hidden_states: torch.Tensor, gate: torch.Tensor,
     return hidden_states.to(hidden_states.dtype)
 
 def _causal_conv1d_forward(x: torch.Tensor, weight: torch.Tensor,
-                            bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+                            bias: torch.Tensor | None = None) -> torch.Tensor:
     _, conv_dim, seq_len = x.shape
     kernel_size = weight.shape[-1]
     padded = torch.nn.functional.pad(x, (kernel_size - 1, 0))
@@ -174,7 +198,7 @@ def _causal_conv1d_forward(x: torch.Tensor, weight: torch.Tensor,
 
 def _causal_conv1d_update(x: torch.Tensor, conv_state: torch.Tensor,
                            weight: torch.Tensor,
-                           bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+                           bias: torch.Tensor | None = None) -> torch.Tensor:
     _, conv_dim, seq_len = x.shape
     state_len = conv_state.shape[-1]
     x_new = torch.cat([conv_state, x], dim=-1).to(weight.dtype)
@@ -184,17 +208,17 @@ def _causal_conv1d_update(x: torch.Tensor, conv_state: torch.Tensor,
     out = torch.nn.functional.silu(out[:, :, -seq_len:])
     return out.to(x.dtype)
 
-def forward_linear_attn_layer(x: torch.Tensor, layer_idx: int,
+def forward_triad_attn_layer(x: torch.Tensor, layer_idx: int,
                                weights: dict[str, torch.Tensor],
                                config: dict,
                                prefix: str = "model",
-                               layer_state: Optional[dict] = None) -> tuple[torch.Tensor, Optional[dict]]:
-    p = f"{prefix}.layers.{layer_idx}.linear_attn"
-    n_kv = config.get("linear_num_value_heads", 32)
-    n_k = config.get("linear_num_key_heads", 16)
-    head_k_dim = config.get("linear_key_head_dim", 128)
-    head_v_dim = config.get("linear_value_head_dim", 128)
-    conv_kernel = config.get("linear_conv_kernel_dim", 4)
+                               layer_state: dict | None = None) -> tuple[torch.Tensor, dict | None]:
+    p = f"{prefix}.layers.{layer_idx}.triad_attn"
+    n_kv = config.get("triad_num_value_heads", 32)
+    n_k = config.get("triad_num_key_heads", 16)
+    head_k_dim = config.get("triad_key_head_dim", 128)
+    head_v_dim = config.get("triad_value_head_dim", 128)
+    conv_kernel = config.get("triad_conv_kernel_dim", 4)
     key_dim = n_k * head_k_dim
     value_dim = n_kv * head_v_dim
 
@@ -275,8 +299,8 @@ def forward_attention_layer_qwen35(x: torch.Tensor, layer_idx: int,
                                     weights: dict[str, torch.Tensor],
                                     config: dict,
                                     positions: torch.Tensor,
-                                    kv_cache: Optional[list] = None,
-                                    prefix: str = "model") -> tuple[torch.Tensor, Optional[list]]:
+                                    kv_cache: list | None = None,
+                                    prefix: str = "model") -> tuple[torch.Tensor, list | None]:
     p = f"{prefix}.layers.{layer_idx}.self_attn"
     n_heads = config.get("num_attention_heads", 16)
     n_kv_heads = config.get("num_key_value_heads", 4)
@@ -316,34 +340,34 @@ def forward_attention_layer_qwen35(x: torch.Tensor, layer_idx: int,
             kv_cache.append(torch.zeros(1, n_kv_heads, 0, head_dim, dtype=v.dtype, device=v.device))
         cached_k, cached_v = kv_cache[0], kv_cache[1]
         if cached_k.shape[-2] > 0:
-            k_full = torch.cat([cached_k[0], k], dim=0)
-            v_full = torch.cat([cached_v[0], v], dim=0)
+            k_triad = torch.cat([cached_k[0], k], dim=0)
+            v_triad = torch.cat([cached_v[0], v], dim=0)
         else:
-            k_full = k
-            v_full = v
-        kv_cache[0] = k_full[None]
-        kv_cache[1] = v_full[None]
+            k_triad = k
+            v_triad = v
+        kv_cache[0] = k_triad[None]
+        kv_cache[1] = v_triad[None]
     else:
-        k_full = k
-        v_full = v
+        k_triad = k
+        v_triad = v
 
     n_rep = n_heads // n_kv_heads
     if n_rep > 1:
-        k_full = k_full.repeat_interleave(n_rep, dim=1)
-        v_full = v_full.repeat_interleave(n_rep, dim=1)
+        k_triad = k_triad.repeat_interleave(n_rep, dim=1)
+        v_triad = v_triad.repeat_interleave(n_rep, dim=1)
 
     q_t = q.transpose(0, 1)[None]
-    k_t = k_full.transpose(0, 1)[None]
-    v_t = v_full.transpose(0, 1)[None]
+    k_t = k_triad.transpose(0, 1)[None]
+    v_t = v_triad.transpose(0, 1)[None]
 
-    total_len = k_full.shape[0]
+    total_len = k_triad.shape[0]
     if kv_cache is not None:
         mask = torch.zeros(1, 1, seq_len, total_len, dtype=x.dtype, device=x.device)
         start = total_len - seq_len
         for i in range(seq_len):
             mask[0, 0, i, start + i + 1:] = -1e9
     else:
-        causal = torch.triu(torch.full((seq_len, seq_len), -1e9, dtype=x.dtype, device=x.device), diagonal=1)
+        causal = torch.triu(torch.triad((seq_len, seq_len), -1e9, dtype=x.dtype, device=x.device), diagonal=1)
         mask = causal[None, None]
 
     scale = head_dim ** -0.5
@@ -360,8 +384,8 @@ def forward_attention_layer(x: torch.Tensor, layer_idx: int,
                             weights: dict[str, torch.Tensor],
                             config: dict,
                             positions: torch.Tensor,
-                            kv_cache: Optional[list] = None,
-                            prefix: str = "model") -> tuple[torch.Tensor, Optional[list]]:
+                            kv_cache: list | None = None,
+                            prefix: str = "model") -> tuple[torch.Tensor, list | None]:
     p = f"{prefix}.layers.{layer_idx}.self_attn"
     n_heads = config.get("num_attention_heads", config.get("n_head", 32))
     n_kv_heads = config.get("num_key_value_heads", n_heads)
@@ -396,34 +420,34 @@ def forward_attention_layer(x: torch.Tensor, layer_idx: int,
             kv_cache.append(torch.zeros(1, n_kv_heads, 0, head_dim, dtype=v.dtype, device=v.device))
         cached_k, cached_v = kv_cache[0], kv_cache[1]
         if cached_k.shape[-2] > 0:
-            k_full = torch.cat([cached_k[0], k], dim=0)
-            v_full = torch.cat([cached_v[0], v], dim=0)
+            k_triad = torch.cat([cached_k[0], k], dim=0)
+            v_triad = torch.cat([cached_v[0], v], dim=0)
         else:
-            k_full = k
-            v_full = v
-        kv_cache[0] = k_full[None]
-        kv_cache[1] = v_full[None]
+            k_triad = k
+            v_triad = v
+        kv_cache[0] = k_triad[None]
+        kv_cache[1] = v_triad[None]
     else:
-        k_full = k
-        v_full = v
+        k_triad = k
+        v_triad = v
 
     n_rep = n_heads // n_kv_heads
     if n_rep > 1:
-        k_full = k_full.repeat_interleave(n_rep, dim=1)
-        v_full = v_full.repeat_interleave(n_rep, dim=1)
+        k_triad = k_triad.repeat_interleave(n_rep, dim=1)
+        v_triad = v_triad.repeat_interleave(n_rep, dim=1)
 
     q_t = q.transpose(0, 1)[None]
-    k_t = k_full.transpose(0, 1)[None]
-    v_t = v_full.transpose(0, 1)[None]
+    k_t = k_triad.transpose(0, 1)[None]
+    v_t = v_triad.transpose(0, 1)[None]
 
-    total_len = k_full.shape[0]
+    total_len = k_triad.shape[0]
     if kv_cache is not None:
         mask = torch.zeros(1, 1, seq_len, total_len, dtype=x.dtype, device=x.device)
         start = total_len - seq_len
         for i in range(seq_len):
             mask[0, 0, i, start + i + 1:] = -1e9
     else:
-        causal = torch.triu(torch.full((seq_len, seq_len), -1e9, dtype=x.dtype, device=x.device), diagonal=1)
+        causal = torch.triu(torch.triad((seq_len, seq_len), -1e9, dtype=x.dtype, device=x.device), diagonal=1)
         mask = causal[None, None]
 
     scale = head_dim ** -0.5
@@ -451,7 +475,7 @@ def forward_ffn(h: torch.Tensor, layer_idx: int,
     return h + (silu(gate) * up) @ down_w.T
 
 def forward_transformer(model, token_ids: np.ndarray,
-                        kv_caches: Optional[list] = None) -> np.ndarray:
+                        kv_caches: list | None = None) -> np.ndarray:
     dev = _get_device()
     w_gpu = {}
     if not hasattr(model, '_gpu_weights') or model._gpu_weights is None:
@@ -509,7 +533,7 @@ def forward_ffn_qwen35(h: torch.Tensor, layer_idx: int,
     return h + (silu(gate) * up) @ down_w.T
 
 def forward_transformer_qwen35(model, token_ids: np.ndarray,
-                                kv_caches: Optional[list] = None) -> np.ndarray:
+                                kv_caches: list | None = None) -> np.ndarray:
     from runtime.ml.model_loader import TriadModelGGUF
     dev = _get_device()
 
@@ -526,7 +550,7 @@ def forward_transformer_qwen35(model, token_ids: np.ndarray,
 
     cfg = model.config
     n_layers = model.n_layers
-    layer_types = cfg.get("layer_types", ["full_attention"] * n_layers)
+    layer_types = cfg.get("layer_types", ["triad_attention"] * n_layers)
     prefix = "model.language_model"
 
     embed_w = w_gpu[f"{prefix}.embed_tokens.weight"]
@@ -535,17 +559,17 @@ def forward_transformer_qwen35(model, token_ids: np.ndarray,
 
     if kv_caches is not None and len(kv_caches) == 0:
         for i in range(n_layers):
-            if layer_types[i] == "linear_attention":
+            if layer_types[i] == "triad_attention":
                 kv_caches.append({})
             else:
                 kv_caches.append([])
 
     seq_len = x.shape[0]
-    full_attn_indices = [i for i in range(n_layers) if layer_types[i] == "full_attention"]
-    if kv_caches is not None and full_attn_indices:
-        first_full = kv_caches[full_attn_indices[0]]
-        if isinstance(first_full, list) and len(first_full) >= 2:
-            start_pos = first_full[0].shape[1]
+    triad_attn_indices = [i for i in range(n_layers) if layer_types[i] == "triad_attention"]
+    if kv_caches is not None and triad_attn_indices:
+        first_triad = kv_caches[triad_attn_indices[0]]
+        if isinstance(first_triad, list) and len(first_triad) >= 2:
+            start_pos = first_triad[0].shape[1]
         else:
             start_pos = 0
     else:
@@ -554,8 +578,8 @@ def forward_transformer_qwen35(model, token_ids: np.ndarray,
 
     for i in range(n_layers):
         layer_cache = kv_caches[i] if kv_caches is not None else None
-        if layer_types[i] == "linear_attention":
-            x, _ = forward_linear_attn_layer(x, i, w_gpu, cfg, prefix, layer_cache)
+        if layer_types[i] == "triad_attention":
+            x, _ = forward_triad_attn_layer(x, i, w_gpu, cfg, prefix, layer_cache)
             if kv_caches is not None:
                 kv_caches[i] = layer_cache
         else:
@@ -575,7 +599,7 @@ def _forward_qwen35_gguf_streaming(model, token_ids, kv_caches, dev):
     import torch.cuda
     cfg = model.config
     n_layers = model.n_layers
-    layer_types = cfg.get("layer_types", ["full_attention"] * n_layers)
+    layer_types = cfg.get("layer_types", ["triad_attention"] * n_layers)
 
     embed_w = model.get_embed_weight()
     ids_t = torch.as_tensor(token_ids, dtype=torch.long, device=dev)
@@ -584,17 +608,17 @@ def _forward_qwen35_gguf_streaming(model, token_ids, kv_caches, dev):
 
     if kv_caches is not None and len(kv_caches) == 0:
         for i in range(n_layers):
-            if layer_types[i] == "linear_attention":
+            if layer_types[i] == "triad_attention":
                 kv_caches.append({})
             else:
                 kv_caches.append([])
 
     seq_len = x.shape[0]
-    full_attn_indices = [i for i in range(n_layers) if layer_types[i] == "full_attention"]
-    if kv_caches is not None and full_attn_indices:
-        first_full = kv_caches[full_attn_indices[0]]
-        if isinstance(first_full, list) and len(first_full) >= 2:
-            start_pos = first_full[0].shape[1]
+    triad_attn_indices = [i for i in range(n_layers) if layer_types[i] == "triad_attention"]
+    if kv_caches is not None and triad_attn_indices:
+        first_triad = kv_caches[triad_attn_indices[0]]
+        if isinstance(first_triad, list) and len(first_triad) >= 2:
+            start_pos = first_triad[0].shape[1]
         else:
             start_pos = 0
     else:
@@ -605,12 +629,12 @@ def _forward_qwen35_gguf_streaming(model, token_ids, kv_caches, dev):
         lw = model.get_layer_weights(i)
         layer_cache = kv_caches[i] if kv_caches is not None else None
 
-        if layer_types[i] == "linear_attention":
-            x, _ = _forward_linear_attn_gguf(x, i, lw, cfg, layer_cache)
+        if layer_types[i] == "triad_attention":
+            x, _ = _forward_triad_attn_gguf(x, i, lw, cfg, layer_cache)
             if kv_caches is not None:
                 kv_caches[i] = layer_cache
         else:
-            x, updated_kv = _forward_full_attn_gguf(x, i, lw, cfg, positions, layer_cache)
+            x, updated_kv = _forward_triad_attn_gguf(x, i, lw, cfg, positions, layer_cache)
             if kv_caches is not None:
                 kv_caches[i] = updated_kv
         x = _forward_ffn_gguf(x, lw)
@@ -626,7 +650,7 @@ def _forward_qwen35_gguf_streaming(model, token_ids, kv_caches, dev):
     del lm_head_w
     return logits.cpu().numpy()
 
-def _forward_full_attn_gguf(x, layer_idx, lw, cfg, positions, kv_cache):
+def _forward_triad_attn_gguf(x, layer_idx, lw, cfg, positions, kv_cache):
     n_heads = cfg.get("num_attention_heads", 16)
     n_kv_heads = cfg.get("num_key_value_heads", 4)
     head_dim = cfg.get("head_dim", 256)
@@ -653,33 +677,33 @@ def _forward_full_attn_gguf(x, layer_idx, lw, cfg, positions, kv_cache):
             kv_cache.append(torch.zeros(1, n_kv_heads, 0, head_dim, dtype=v.dtype, device=v.device))
         cached_k, cached_v = kv_cache[0], kv_cache[1]
         if cached_k.shape[-2] > 0:
-            k_full = torch.cat([cached_k[0], k], dim=0)
-            v_full = torch.cat([cached_v[0], v], dim=0)
+            k_triad = torch.cat([cached_k[0], k], dim=0)
+            v_triad = torch.cat([cached_v[0], v], dim=0)
         else:
-            k_full = k
-            v_full = v
-        kv_cache[0] = k_full[None]
-        kv_cache[1] = v_full[None]
+            k_triad = k
+            v_triad = v
+        kv_cache[0] = k_triad[None]
+        kv_cache[1] = v_triad[None]
     else:
-        k_full = k
-        v_full = v
+        k_triad = k
+        v_triad = v
 
     n_rep = n_heads // n_kv_heads
     if n_rep > 1:
-        k_full = k_full.repeat_interleave(n_rep, dim=1)
-        v_full = v_full.repeat_interleave(n_rep, dim=1)
+        k_triad = k_triad.repeat_interleave(n_rep, dim=1)
+        v_triad = v_triad.repeat_interleave(n_rep, dim=1)
 
     q_t = q.transpose(0, 1)[None]
-    k_t = k_full.transpose(0, 1)[None]
-    v_t = v_full.transpose(0, 1)[None]
-    total_len = k_full.shape[0]
+    k_t = k_triad.transpose(0, 1)[None]
+    v_t = v_triad.transpose(0, 1)[None]
+    total_len = k_triad.shape[0]
     if kv_cache is not None:
         mask = torch.zeros(1, 1, seq_len, total_len, dtype=x.dtype, device=x.device)
         start = total_len - seq_len
         for i in range(seq_len):
             mask[0, 0, i, start + i + 1:] = -1e9
     else:
-        causal = torch.triu(torch.full((seq_len, seq_len), -1e9, dtype=x.dtype, device=x.device), diagonal=1)
+        causal = torch.triu(torch.triad((seq_len, seq_len), -1e9, dtype=x.dtype, device=x.device), diagonal=1)
         mask = causal[None, None]
     scale = head_dim ** -0.5
     scores = torch.matmul(q_t, k_t.transpose(-2, -1)) * scale + mask
@@ -690,12 +714,12 @@ def _forward_full_attn_gguf(x, layer_idx, lw, cfg, positions, kv_cache):
     attn_out = out @ lw["o_proj.weight"].T
     return x + attn_out, kv_cache
 
-def _forward_linear_attn_gguf(x, layer_idx, lw, cfg, layer_state):
-    n_kv = cfg.get("linear_num_value_heads", 32)
-    n_k = cfg.get("linear_num_key_heads", 16)
-    head_k_dim = cfg.get("linear_key_head_dim", 128)
-    head_v_dim = cfg.get("linear_value_head_dim", 128)
-    conv_kernel = cfg.get("linear_conv_kernel_dim", 4)
+def _forward_triad_attn_gguf(x, layer_idx, lw, cfg, layer_state):
+    n_kv = cfg.get("triad_num_value_heads", 32)
+    n_k = cfg.get("triad_num_key_heads", 16)
+    head_k_dim = cfg.get("triad_key_head_dim", 128)
+    head_v_dim = cfg.get("triad_value_head_dim", 128)
+    conv_kernel = cfg.get("triad_conv_kernel_dim", 4)
     key_dim = n_k * head_k_dim
     value_dim = n_kv * head_v_dim
     seq_len = x.shape[0]
@@ -765,8 +789,8 @@ def _forward_ffn_gguf(h, lw):
     up = h_normed @ lw["up_proj.weight"].T
     return h + (silu(gate) * up) @ lw["down_proj.weight"].T
 
-def forward(model, token_ids: Union[list[int], np.ndarray],
-            kv_caches: Optional[list] = None) -> np.ndarray:
+def forward(model, token_ids: list[int] | np.ndarray,
+            kv_caches: list | None = None) -> np.ndarray:
     if isinstance(token_ids, list):
         token_ids = np.array(token_ids, dtype=np.int64)
     arch = model.arch
@@ -774,4 +798,330 @@ def forward(model, token_ids: Union[list[int], np.ndarray],
         return forward_transformer_qwen35(model, token_ids, kv_caches)
     if arch in ("llama", "qwen2", "qwen3", "mistral", "gemma"):
         return forward_transformer(model, token_ids, kv_caches)
+    if arch == "gemma2":
+        return forward_transformer_gemma2(model, token_ids, kv_caches)
+    if arch == "mixtral":
+        return forward_transformer_mixtral(model, token_ids, kv_caches)
     raise NotImplementedError(f"forward pass not implemented for arch: {arch}")
+
+def forward_attention_layer_gemma2(x: torch.Tensor, layer_idx: int,
+                                    weights: dict[str, torch.Tensor],
+                                    config: dict,
+                                    positions: torch.Tensor,
+                                    kv_cache: list | None = None,
+                                    prefix: str = "model") -> tuple[torch.Tensor, list | None]:
+    p = f"{prefix}.layers.{layer_idx}.self_attn"
+    n_heads = config.get("num_attention_heads", 16)
+    n_kv_heads = config.get("num_key_value_heads", 4)
+    head_dim = config.get("head_dim", 256)
+    rope_base = config.get("rope_theta", 10000.0)
+    eps = config.get("rms_norm_eps", 1e-6)
+    sliding_window = config.get("sliding_window", None)
+    logits_softcap = config.get("attn_logit_softcapping", None)
+    seq_len = x.shape[0]
+
+    inp_norm_w = weights[f"{prefix}.layers.{layer_idx}.input_layernorm.weight"]
+    h = rms_norm(x, inp_norm_w)
+
+    q_w = weights[f"{p}.q_proj.weight"]
+    k_w = weights[f"{p}.k_proj.weight"]
+    v_w = weights[f"{p}.v_proj.weight"]
+    o_w = weights[f"{p}.o_proj.weight"]
+
+    q = (h @ q_w.T).reshape(seq_len, n_heads, head_dim)
+    k = (h @ k_w.T).reshape(seq_len, n_kv_heads, head_dim)
+    v = (h @ v_w.T).reshape(seq_len, n_kv_heads, head_dim)
+
+    q = rope(q.reshape(1, seq_len, n_heads, head_dim), positions, head_dim, rope_base)[0]
+    k = rope(k.reshape(1, seq_len, n_kv_heads, head_dim), positions, head_dim, rope_base)[0]
+
+    if kv_cache is not None:
+        if len(kv_cache) == 0:
+            kv_cache.append(torch.zeros(1, n_kv_heads, 0, head_dim, dtype=k.dtype, device=k.device))
+            kv_cache.append(torch.zeros(1, n_kv_heads, 0, head_dim, dtype=v.dtype, device=v.device))
+        cached_k, cached_v = kv_cache[0], kv_cache[1]
+        if cached_k.shape[-2] > 0:
+            k_triad = torch.cat([cached_k[0], k], dim=0)
+            v_triad = torch.cat([cached_v[0], v], dim=0)
+        else:
+            k_triad = k
+            v_triad = v
+        kv_cache[0] = k_triad[None]
+        kv_cache[1] = v_triad[None]
+    else:
+        k_triad = k
+        v_triad = v
+
+    n_rep = n_heads // n_kv_heads
+    if n_rep > 1:
+        k_triad = k_triad.repeat_interleave(n_rep, dim=1)
+        v_triad = v_triad.repeat_interleave(n_rep, dim=1)
+
+    q_t = q.transpose(0, 1)[None]
+    k_t = k_triad.transpose(0, 1)[None]
+    v_t = v_triad.transpose(0, 1)[None]
+
+    total_len = k_triad.shape[0]
+    scale = head_dim ** -0.5
+    scores = torch.matmul(q_t, k_t.transpose(-2, -1)) * scale
+
+    if logits_softcap is not None and logits_softcap > 0:
+        scores = logits_softcap * torch.tanh(scores / logits_softcap)
+
+    if kv_cache is not None:
+        mask = torch.zeros(1, 1, seq_len, total_len, dtype=x.dtype, device=x.device)
+        start = total_len - seq_len
+        for i in range(seq_len):
+            if sliding_window is not None:
+                ws = max(0, start + i - sliding_window + 1)
+                mask[0, 0, i, :ws] = -1e9
+            mask[0, 0, i, start + i + 1:] = -1e9
+    else:
+        causal = torch.triu(torch.triad((seq_len, seq_len), -1e9, dtype=x.dtype, device=x.device), diagonal=1)
+        mask = causal[None, None]
+
+    scores = scores + mask
+    probs = torch.softmax(scores, dim=-1)
+    out = torch.matmul(probs, v_t)
+
+    out = out[0].transpose(0, 1).reshape(seq_len, -1)
+    attn_out = out @ o_w.T
+    return x + attn_out, kv_cache
+
+def forward_ffn_gemma2(h: torch.Tensor, layer_idx: int,
+                       weights: dict[str, torch.Tensor],
+                       prefix: str = "model") -> torch.Tensor:
+    p = f"{prefix}.layers.{layer_idx}"
+    norm_w = weights[f"{p}.post_attention_layernorm.weight"]
+    h_normed = rms_norm(h, norm_w)
+    gate_w = weights[f"{p}.mlp.gate_proj.weight"]
+    up_w = weights[f"{p}.mlp.up_proj.weight"]
+    down_w = weights[f"{p}.mlp.down_proj.weight"]
+    gate = torch.nn.functional.gelu(h_normed @ gate_w.T, approximate='tanh')
+    up = h_normed @ up_w.T
+    return h + (gate * up) @ down_w.T
+
+def forward_transformer_gemma2(model, token_ids: np.ndarray,
+                                kv_caches: list | None = None) -> np.ndarray:
+    dev = _get_device()
+    if not hasattr(model, '_gpu_weights') or model._gpu_weights is None:
+        w_gpu = {}
+        for k, v in model.weights.items():
+            w_gpu[k] = torch.as_tensor(v, device=dev)
+        model._gpu_weights = w_gpu
+    else:
+        w_gpu = model._gpu_weights
+
+    cfg = model.config
+    n_layers = model.n_layers
+    prefix = "model"
+
+    embed_w = w_gpu[f"{prefix}.embed_tokens.weight"]
+    ids_t = torch.as_tensor(token_ids, dtype=torch.long, device=dev)
+    x = embed_w[ids_t] * np.sqrt(cfg.get("head_dim", 256))
+
+    if kv_caches is not None and len(kv_caches) == 0:
+        for _ in range(n_layers):
+            kv_caches.append([])
+
+    seq_len = x.shape[0]
+    if kv_caches is not None and len(kv_caches) > 0 and len(kv_caches[0]) >= 2:
+        cached_len = kv_caches[0][0].shape[1]
+        start_pos = cached_len
+    else:
+        start_pos = 0
+    positions = torch.arange(start_pos, start_pos + seq_len, dtype=torch.float32, device=dev)
+
+    for i in range(n_layers):
+        layer_kv = kv_caches[i] if kv_caches is not None else None
+        x, updated_kv = forward_attention_layer_gemma2(x, i, w_gpu, cfg, positions, layer_kv, prefix)
+        if kv_caches is not None:
+            kv_caches[i] = updated_kv
+        x = forward_ffn_gemma2(x, i, w_gpu, prefix)
+
+    norm_w = w_gpu[f"{prefix}.norm.weight"]
+    x = rms_norm(x, norm_w)
+
+    lm_head_w = w_gpu.get("lm_head.weight", embed_w)
+    logits = x @ lm_head_w.T
+
+    softcap = cfg.get("final_logit_softcapping", None)
+    if softcap is not None and softcap > 0:
+        logits = softcap * torch.tanh(logits / softcap)
+
+    return logits.cpu().numpy()
+
+def forward_transformer_mixtral(model, token_ids: np.ndarray,
+                                 kv_caches: list | None = None) -> np.ndarray:
+    dev = _get_device()
+    if not hasattr(model, '_gpu_weights') or model._gpu_weights is None:
+        w_gpu = {}
+        for k, v in model.weights.items():
+            w_gpu[k] = torch.as_tensor(v, device=dev)
+        model._gpu_weights = w_gpu
+    else:
+        w_gpu = model._gpu_weights
+
+    cfg = model.config
+    n_layers = model.n_layers
+    n_experts = cfg.get("num_local_experts", 8)
+    top_k = cfg.get("num_experts_per_tok", 2)
+    prefix = "model"
+
+    embed_w = w_gpu[f"{prefix}.embed_tokens.weight"]
+    ids_t = torch.as_tensor(token_ids, dtype=torch.long, device=dev)
+    x = embed_w[ids_t]
+
+    if kv_caches is not None and len(kv_caches) == 0:
+        for _ in range(n_layers):
+            kv_caches.append([])
+
+    seq_len = x.shape[0]
+    if kv_caches is not None and len(kv_caches) > 0 and len(kv_caches[0]) >= 2:
+        cached_len = kv_caches[0][0].shape[1]
+        start_pos = cached_len
+    else:
+        start_pos = 0
+    positions = torch.arange(start_pos, start_pos + seq_len, dtype=torch.float32, device=dev)
+
+    for i in range(n_layers):
+        layer_kv = kv_caches[i] if kv_caches is not None else None
+        x, updated_kv = forward_attention_layer(x, i, w_gpu, cfg, positions, layer_kv, prefix)
+        if kv_caches is not None:
+            kv_caches[i] = updated_kv
+
+        norm_w = w_gpu[f"{prefix}.layers.{i}.post_attention_layernorm.weight"]
+        h = rms_norm(x, norm_w)
+
+        gate_w = w_gpu[f"{prefix}.layers.{i}.block_sparse_moe.gate.weight"]
+        router_logits = h @ gate_w.T
+        router_probs = torch.softmax(router_logits.float(), dim=-1)
+        topk_vals, topk_indices = torch.topk(router_probs, top_k, dim=-1)
+        topk_vals = topk_vals / topk_vals.sum(dim=-1, keepdim=True)
+
+        moe_out = torch.zeros_like(h)
+        for tok in range(seq_len):
+            for ek in range(top_k):
+                expert_idx = int(topk_indices[tok, ek])
+                weight = float(topk_vals[tok, ek])
+                eg_w = w_gpu[f"{prefix}.layers.{i}.block_sparse_moe.experts.{expert_idx}.w1.weight"]
+                eu_w = w_gpu[f"{prefix}.layers.{i}.block_sparse_moe.experts.{expert_idx}.w2.weight"]
+                ev_w = w_gpu[f"{prefix}.layers.{i}.block_sparse_moe.experts.{expert_idx}.w3.weight"]
+                h_tok = h[tok]
+                gate_act = torch.nn.functional.silu(h_tok @ eg_w.T)
+                up_act = h_tok @ ev_w.T
+                expert_out = (gate_act * up_act) @ eu_w.T
+                moe_out[tok] += weight * expert_out
+
+        x = x + moe_out
+
+    norm_w = w_gpu[f"{prefix}.norm.weight"]
+    x = rms_norm(x, norm_w)
+
+    lm_head_w = w_gpu.get("lm_head.weight", embed_w)
+    logits = x @ lm_head_w.T
+    return logits.cpu().numpy()
+
+def speculative_decode(target_model, draft_model, prompt_ids: list[int],
+                       max_new_tokens: int = 128, speculative_length: int = 5,
+                       temperature: float = 0.6, top_k: int = 50, top_p: float = 0.95,
+                       seed: int | None = None) -> GenerationResult:
+    import time
+
+    from runtime.ml.generate import IM_END, PAD, GenerationResult, _softmax, sample_token
+
+    rng = np.random.default_rng(seed)
+    token_ids = list(prompt_ids)
+    all_tokens = []
+    t_start = time.time()
+    target_kv = []
+    draft_kv = []
+
+    stop_ids = {IM_END, PAD}
+    if hasattr(target_model, 'tokenizer') and target_model.tokenizer.eos_id is not None:
+        stop_ids.add(target_model.tokenizer.eos_id)
+
+    logits = forward(target_model, token_ids, target_kv)
+    draft_kv_fresh = []
+    _ = forward(draft_model, token_ids, draft_kv_fresh)
+
+    while len(all_tokens) < max_new_tokens:
+        draft_tokens = []
+        draft_kv_running = [list(cache) if isinstance(cache, list) else cache
+                           for cache in draft_kv_fresh]
+        current_id = token_ids[-1]
+
+        for _ in range(speculative_length):
+            d_logits = forward(draft_model, [current_id], draft_kv_running)
+            d_next = sample_token(d_logits[-1], temperature, top_k, top_p,
+                                  1.0, 64, token_ids, rng)
+            draft_tokens.append(d_next)
+            current_id = d_next
+            if d_next in stop_ids:
+                break
+
+        n_draft = len(draft_tokens)
+        if n_draft == 0:
+            next_id = sample_token(logits[-1], temperature, top_k, top_p,
+                                   1.0, 64, token_ids, rng)
+            token_ids.append(next_id)
+            all_tokens.append(next_id)
+            logits = forward(target_model, [next_id], target_kv)
+            if next_id in stop_ids:
+                break
+            continue
+
+        verify_ids = draft_tokens
+        verify_logits = forward(target_model, verify_ids, target_kv)
+
+        n_accepted = 0
+        for j in range(n_draft):
+            target_prob = _softmax(verify_logits[j].astype(np.float64))
+            draft_prob = np.zeros_like(target_prob)
+            accepted = False
+            if temperature <= 0:
+                target_choice = int(np.argmax(target_prob))
+                accepted = (target_choice == draft_tokens[j])
+            else:
+                r = rng.random()
+                p_draft = 1.0
+                p_target = target_prob[draft_tokens[j]]
+                if r < min(1.0, p_target / max(p_draft, 1e-30)):
+                    accepted = True
+
+            if accepted:
+                n_accepted = j + 1
+            else:
+                corrected = sample_token(verify_logits[j], temperature, top_k, top_p,
+                                         1.0, 64, token_ids, rng)
+                draft_tokens[j] = corrected
+                n_accepted = j + 1
+                break
+
+        accepted_tokens = draft_tokens[:n_accepted]
+        token_ids.extend(accepted_tokens)
+        all_tokens.extend(accepted_tokens)
+
+        for t_id in accepted_tokens:
+            if t_id in stop_ids:
+                elapsed = time.time() - t_start
+                tps = len(all_tokens) / elapsed if elapsed > 0 else 0.0
+                answer_text = target_model.tokenizer.decode(all_tokens, skip_special=True) if hasattr(target_model, 'tokenizer') else ''
+                return GenerationResult(text=answer_text, all_tokens=all_tokens,
+                                       tokens_per_second=tps,
+                                       prompt_tokens=len(prompt_ids),
+                                       total_tokens=len(prompt_ids) + len(all_tokens))
+
+        last_logits = verify_logits[n_accepted - 1] if n_accepted > 0 else logits[-1]
+        logits = last_logits.reshape(1, -1)
+        logits = np.broadcast_to(logits, (1, logits.shape[-1]))
+
+        draft_kv_fresh = draft_kv_running
+
+    elapsed = time.time() - t_start
+    tps = len(all_tokens) / elapsed if elapsed > 0 else 0.0
+    answer_text = target_model.tokenizer.decode(all_tokens, skip_special=True) if hasattr(target_model, 'tokenizer') else ''
+    return GenerationResult(text=answer_text, all_tokens=all_tokens,
+                           tokens_per_second=tps,
+                           prompt_tokens=len(prompt_ids),
+                           total_tokens=len(prompt_ids) + len(all_tokens))

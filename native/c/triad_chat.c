@@ -1,14 +1,3 @@
-/* ═══════════════════════════════════════════════════════════════════
-   triad-chat — Chat usando a equação Triad como motor de geração
-   ═══════════════════════════════════════════════════════════════════
-   GGUF fornece tokenizer e pesos. token_embd.weight vira campo inicial,
-   o solver P1+P2+P3 evolui o substrato, e output.weight é lido como
-   observável para escolher o próximo token.
-   
-   Uso: triad-chat <model.gguf> [--temp T] [--top-k K]
-        [--full-vocab] [--candidates N] [--layers N]
-   ═══════════════════════════════════════════════════════════════════ */
-
 #define _POSIX_C_SOURCE 200809L
 #include "triad_chat_backend.h"
 #include "triad_gguf.h"
@@ -23,10 +12,6 @@
 #include <time.h>
 #include <stdint.h>
 #include <sys/stat.h>
-
-/* ═══════════════════════════════
-   Codec: token ↔ wavefunction
-   ═══════════════════════════════ */
 
 #define GRID_N    256
 #define GRID_L    32.0
@@ -75,7 +60,6 @@ typedef struct {
     TriadCplx *field_buf;
 } TriadSafeSubstrate;
 
-/* Fallback only used when a token row cannot be read. */
 static void encode_token_spectral(int32_t token_id,
                                   TriadCplx *psi, int32_t N, double L) {
     double dx = L / N;
@@ -398,22 +382,22 @@ static void apply_safe_layers(TriadSafeSubstrate *rt, TriadCplx *psi,
         int nd = 0;
 
         mix_safe_layer_tensor(rt, d, &nd, 16, name, sizeof(name), l,
-                              "linear_attn.in_proj_qkv.weight",
+                              "triad_attn.in_proj_qkv.weight",
                               (int64_t)pos * 131 + l * 17, psi, 0.030);
         mix_safe_layer_tensor(rt, d, &nd, 16, name, sizeof(name), l,
-                              "linear_attn.in_proj_z.weight",
+                              "triad_attn.in_proj_z.weight",
                               (int64_t)pos * 97 + l * 31, psi, 0.022);
         mix_safe_layer_tensor(rt, d, &nd, 16, name, sizeof(name), l,
-                              "linear_attn.out_proj.weight",
+                              "triad_attn.out_proj.weight",
                               (int64_t)pos * 89 + l * 23, psi, 0.022);
         mix_safe_layer_tensor(rt, d, &nd, 16, name, sizeof(name), l,
-                              "linear_attn.in_proj_a.weight",
+                              "triad_attn.in_proj_a.weight",
                               (int64_t)pos * 73 + l * 37, psi, 0.014);
         mix_safe_layer_tensor(rt, d, &nd, 16, name, sizeof(name), l,
-                              "linear_attn.in_proj_b.weight",
+                              "triad_attn.in_proj_b.weight",
                               (int64_t)pos * 71 + l * 41, psi, 0.014);
         mix_safe_layer_tensor(rt, d, &nd, 16, name, sizeof(name), l,
-                              "linear_attn.conv1d.weight",
+                              "triad_attn.conv1d.weight",
                               (int64_t)pos * 67 + l * 43, psi, 0.010);
 
         mix_safe_layer_tensor(rt, d, &nd, 16, name, sizeof(name), l,
@@ -461,7 +445,6 @@ static void apply_safe_layers(TriadSafeSubstrate *rt, TriadCplx *psi,
     }
 }
 
-/* Buffers globais para decode (evita realocação a cada token) */
 static TriadCplx *decode_fft_buf = NULL;
 static double    *decode_pwr     = NULL;
 static double    *decode_kfreq   = NULL;
@@ -480,7 +463,6 @@ static void decode_cleanup(void) {
     free(decode_kfreq);
 }
 
-/* Fallback decode: wavefunction → logits via power spectrum. */
 static void decode_to_logits(const TriadCplx *psi, int32_t N, double L,
                              double *logits, int32_t vocab_size) {
     for (int32_t i = 0; i < N; i++)
@@ -498,7 +480,7 @@ static void decode_to_logits(const TriadCplx *psi, int32_t N, double L,
     double max_l = -1e30;
     for (int32_t i = 0; i < vocab_size; i++) {
         double k_target = (double)i * (TRIAD_PI * 2.0 / L);
-        /* Interpolação linear na potência espectral */
+
         double frac = (k_target - k_min) / k_span;
         int32_t idx = (int32_t)(frac * N);
         if (idx < 0) idx = 0;
@@ -548,7 +530,7 @@ static int32_t observe_next_token(TriadGGUFSubstrate *rt, const TriadTokenizer *
     return result;
 }
 
-static int32_t observe_next_token_full(TriadGGUFSubstrate *rt, const TriadCplx *psi,
+static int32_t observe_next_token_triad(TriadGGUFSubstrate *rt, const TriadCplx *psi,
                                        int32_t N, const TriadSamplerConfig *sampler) {
     if (!rt) return -1;
     psi_to_latent(psi, N, rt->latent_buf, rt->dim);
@@ -606,7 +588,7 @@ static int32_t observe_next_token_safe(TriadSafeSubstrate *rt, const TriadTokeni
     return result;
 }
 
-static int32_t observe_next_token_safe_full(TriadSafeSubstrate *rt, const TriadCplx *psi,
+static int32_t observe_next_token_safe_triad(TriadSafeSubstrate *rt, const TriadCplx *psi,
                                             int32_t N, const TriadSamplerConfig *sampler) {
     if (!rt) return -1;
     psi_to_latent(psi, N, rt->latent_buf, rt->dim);
@@ -637,7 +619,7 @@ static int32_t backend_observe_gguf(TriadChatBackend *backend, const TriadCplx *
                                     const TriadSamplerConfig *sampler) {
     TriadGGUFSubstrate *rt = (TriadGGUFSubstrate*)backend->impl;
     if (candidates <= 0 || candidates >= rt->vocab_size)
-        return observe_next_token_full(rt, psi, N, sampler);
+        return observe_next_token_triad(rt, psi, N, sampler);
     return observe_next_token(rt, backend->tokenizer, psi, N, candidates, sampler);
 }
 
@@ -659,7 +641,7 @@ static int32_t backend_observe_safe(TriadChatBackend *backend, const TriadCplx *
                                     const TriadSamplerConfig *sampler) {
     TriadSafeSubstrate *rt = (TriadSafeSubstrate*)backend->impl;
     if (candidates <= 0 || candidates >= rt->vocab_size)
-        return observe_next_token_safe_full(rt, psi, N, sampler);
+        return observe_next_token_safe_triad(rt, psi, N, sampler);
     return observe_next_token_safe(rt, backend->tokenizer, psi, N, candidates, sampler);
 }
 
@@ -732,8 +714,6 @@ static int64_t get_arch_int(GGUFFile *f, const char *arch, const char *suffix,
     int64_t v = gguf_get_int(f, key, INT64_MIN);
     if (v != INT64_MIN) return v;
 
-    /* Some converters report a new architecture label while keeping older
-       metadata prefixes. Try the known Qwen aliases before falling back. */
     if (strncmp(arch, "qwen", 4) == 0) {
         const char *aliases[] = { "qwen35", "qwen3", "qwen2", "qwen", NULL };
         for (int i = 0; aliases[i]; i++) {
@@ -744,10 +724,6 @@ static int64_t get_arch_int(GGUFFile *f, const char *arch, const char *suffix,
     }
     return def;
 }
-
-/* ═══════════════════════════════
-   Solver config from GGUF metadata
-   ═══════════════════════════════ */
 
 static TriadSolverC build_solver_config(GGUFFile *f) {
     TriadSolverC p;
@@ -927,7 +903,7 @@ static void join_path(char *out, size_t n, const char *dir, const char *file) {
 
 static int run_safetensors_chat(const char *model_path, double temperature,
                                 int32_t top_k, int32_t candidate_count,
-                                int full_vocab, int explicit_full_vocab,
+                                int triad_vocab, int explicit_triad_vocab,
                                 int32_t active_layers, int32_t max_gen) {
     char model_dir[4096], vocab_path[4096], merges_path[4096], tokenizer_config_path[4096];
     struct stat st;
@@ -976,11 +952,11 @@ static int run_safetensors_chat(const char *model_path, double temperature,
         triad_model_index_free(&rt.index);
         return 1;
     }
-    if (full_vocab && !explicit_full_vocab) {
-        full_vocab = 0;
+    if (triad_vocab && !explicit_triad_vocab) {
+        triad_vocab = 0;
         candidate_count = 2048;
     }
-    if (!full_vocab) {
+    if (!triad_vocab) {
         if (candidate_count < 256) candidate_count = 256;
         if (candidate_count > rt.vocab_size) candidate_count = rt.vocab_size;
     } else {
@@ -1019,7 +995,7 @@ static int run_safetensors_chat(const char *model_path, double temperature,
             rt.n_layers, rt.dim, rt.vocab_size);
     fprintf(stderr, "  motor: Triad PDE (P1+P2+P3) em grid %d\n", GRID_N);
     fprintf(stderr, "  modo: safetensors multi-shard BF16; camadas: %d/%d; leitura: %s (%d tokens)\n",
-            active_layers, rt.n_layers, full_vocab ? "vocabulário completo" : "candidatos", candidate_count);
+            active_layers, rt.n_layers, triad_vocab ? "vocabulário completo" : "candidatos", candidate_count);
 
     TriadSolverC scfg = build_safe_solver_config(rt.dim, rt.n_layers);
     fprintf(stderr, "  Λ=%.2f α=%.2f σ=%.1f Γ=%.2f T=%.1f M=%d\n\n",
@@ -1037,7 +1013,7 @@ static int run_safetensors_chat(const char *model_path, double temperature,
         .apply_layers = backend_apply_safe,
         .free = NULL,
     };
-    int observe_candidates = full_vocab ? 0 : candidate_count;
+    int observe_candidates = triad_vocab ? 0 : candidate_count;
     int rc = run_backend_chat_loop(&backend, &scfg, temperature, top_k,
                                    observe_candidates, active_layers, max_gen);
     triad_tokenizer_free(tok);
@@ -1050,13 +1026,9 @@ static int run_safetensors_chat(const char *model_path, double temperature,
     return rc;
 }
 
-/* ═══════════════════════════════
-   Chat principal
-   ═══════════════════════════════ */
-
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "uso: triad-chat <modelo.gguf|models/> [--temp T] [--top-k K] [--full-vocab] [--candidates N] [--layers N] [--max-gen N]\n");
+        fprintf(stderr, "uso: triad-chat <modelo.gguf|models/> [--temp T] [--top-k K] [--triad-vocab] [--candidates N] [--layers N] [--max-gen N]\n");
         return 1;
     }
 
@@ -1064,8 +1036,8 @@ int main(int argc, char **argv) {
     double temperature = 0.7;
     int32_t top_k = 40;
     int32_t candidate_count = DEFAULT_CANDIDATES;
-    int full_vocab = 1;
-    int explicit_full_vocab = 0;
+    int triad_vocab = 1;
+    int explicit_triad_vocab = 0;
     int32_t active_layers = -1;
     int32_t max_gen = 64;
 
@@ -1074,12 +1046,12 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--top-k") == 0 && i + 1 < argc) top_k = atoi(argv[++i]);
         else if (strcmp(argv[i], "--candidates") == 0 && i + 1 < argc) {
             candidate_count = atoi(argv[++i]);
-            full_vocab = (candidate_count <= 0);
+            triad_vocab = (candidate_count <= 0);
         }
-        else if (strcmp(argv[i], "--full-vocab") == 0) {
+        else if (strcmp(argv[i], "--triad-vocab") == 0) {
             candidate_count = 0;
-            full_vocab = 1;
-            explicit_full_vocab = 1;
+            triad_vocab = 1;
+            explicit_triad_vocab = 1;
         }
         else if (strcmp(argv[i], "--layers") == 0 && i + 1 < argc) active_layers = atoi(argv[++i]);
         else if ((strcmp(argv[i], "--max-gen") == 0 || strcmp(argv[i], "--max-new") == 0) &&
@@ -1089,7 +1061,7 @@ int main(int argc, char **argv) {
 
     if (is_safetensors_input(model_path)) {
         return run_safetensors_chat(model_path, temperature, top_k, candidate_count,
-                                    full_vocab, explicit_full_vocab, active_layers, max_gen);
+                                    triad_vocab, explicit_triad_vocab, active_layers, max_gen);
     }
 
     fprintf(stderr, "Lendo %s...\n", model_path);
@@ -1104,7 +1076,7 @@ int main(int argc, char **argv) {
     int32_t n_heads = (int32_t)get_arch_int(f, arch, "attention.head_count", 32);
     int32_t n_kv_heads = (int32_t)get_arch_int(f, arch, "attention.head_count_kv", 8);
     int32_t vocab_size = (int32_t)gguf_get_array_len(f, "tokenizer.ggml.tokens", 32000);
-    if (!full_vocab) {
+    if (!triad_vocab) {
         if (candidate_count < 256) candidate_count = 256;
         if (candidate_count > vocab_size) candidate_count = vocab_size;
     } else {
@@ -1117,7 +1089,7 @@ int main(int argc, char **argv) {
             arch, n_layers, dim, n_heads, n_kv_heads, vocab_size);
     fprintf(stderr, "  motor: Triad PDE (P1+P2+P3) em grid %d\n", GRID_N);
     fprintf(stderr, "  modo: pesos GGUF como memória/substrato; camadas: %d/%d; leitura: %s (%d tokens)\n",
-            active_layers, n_layers, full_vocab ? "vocabulário completo" : "candidatos",
+            active_layers, n_layers, triad_vocab ? "vocabulário completo" : "candidatos",
             candidate_count);
 
     TriadGGUFSubstrate wrt;
@@ -1154,7 +1126,6 @@ int main(int argc, char **argv) {
     }
     init_layers(&wrt);
 
-    /* Carrega tokenizer */
     TriadTokenizer *tok = triad_tokenizer_new();
     {
         const GGUFKeyValue *vocab_kv = gguf_find_kv(f, "tokenizer.ggml.tokens");
@@ -1199,7 +1170,6 @@ int main(int argc, char **argv) {
     snprintf(key, sizeof(key), "tokenizer.ggml.eos_token_id");
     tok->eos_id = (int32_t)gguf_get_int(f, key, 2);
 
-    /* Config solver */
     TriadSolverC scfg = build_solver_config(f);
     fprintf(stderr, "  Λ=%.2f α=%.2f σ=%.1f Γ=%.2f T=%.1f M=%d\n\n",
             scfg.Lambda, scfg.alpha, scfg.sigma, scfg.Gamma, scfg.T, scfg.M);
@@ -1216,7 +1186,7 @@ int main(int argc, char **argv) {
         .apply_layers = backend_apply_gguf,
         .free = NULL,
     };
-    int observe_candidates = full_vocab ? 0 : candidate_count;
+    int observe_candidates = triad_vocab ? 0 : candidate_count;
     int rc = run_backend_chat_loop(&backend, &scfg, temperature, top_k,
                                    observe_candidates, active_layers, max_gen);
     free(wrt.emb_buf);

@@ -1,104 +1,45 @@
 from __future__ import annotations
-import numpy as np
 
-def proj_centroid_density(subs) -> float:
-    num = 0.0
-    den = 0.0
-    for s in subs:
-        if s.D == 1:
-            rho = np.abs(s.psi) ** 2
-            x = s.x
-            num += float((x * rho).sum() * s.dx)
-            den += float(rho.sum() * s.dx)
-        else:
-            rho = np.abs(s.psi) ** 2
-            num += float(rho.sum() * s.dx ** s.D)
-            den += float(rho.sum() * s.dx ** s.D)
-    return num / max(den, 1e-30)
+from triad import ntri as np
 
-def proj_integrated_density(subs) -> float:
-    total = 0.0
-    for s in subs:
-        D = getattr(s, 'D', 1)
-        total += float((np.abs(s.psi) ** 2).sum() * s.dx ** D)
-    return total
 
-def proj_dominant_k_star(subs) -> float:
-    if not subs:
-        return 0.0
-    s0 = subs[0]
-    dx = s0.dx
-    N = s0.params.N
-    L = N * dx
-    k_min = 2.0 * np.pi / L
-    if s0.D == 1:
-        kvec = 2 * np.pi * np.fft.fftfreq(N, d=dx)
-        agg = np.zeros(N)
-        for s in subs:
-            P = np.abs(np.fft.fft(s.psi)) ** 2
-            agg = agg + P
-        mask = np.abs(kvec) >= k_min
-        if not mask.any():
-            return 0.0
-        idx_local = int(np.argmax(agg[mask]))
-        return float(abs(kvec[mask][idx_local]))
-    else:
-        kvec = 2 * np.pi * np.fft.fftfreq(N, d=dx)
-        KX, KY, KZ = np.meshgrid(kvec, kvec, kvec, indexing='ij')
-        kmag = np.sqrt(KX * KX + KY * KY + KZ * KZ)
-        agg = np.zeros(s0.psi.shape)
-        for s in subs:
-            agg = agg + np.abs(np.fft.fftn(s.psi)) ** 2
-        mask = kmag >= k_min
-        return float(kmag[mask][int(np.argmax(agg[mask]))])
+def project_to_subspace(psi, subspace_basis: np.ndarray) -> np.ndarray:
+    if len(subspace_basis) == 0:
+        return np.zeros_like(psi)
+    proj = np.zeros_like(psi, dtype=complex)
+    for basis_vec in subspace_basis:
+        coeff = np.vdot(psi, basis_vec)
+        proj += coeff * basis_vec
+    return proj
 
-def proj_fourier_band(subs, k_lo: float=0.1, k_hi: float=1.0) -> float:
-    if not subs:
-        return 0.0
-    s0 = subs[0]
-    dx = s0.dx
-    N = s0.params.N
-    if s0.D == 1:
-        kvec = 2 * np.pi * np.fft.fftfreq(N, d=dx)
-        total = 0.0
-        for s in subs:
-            P = np.abs(np.fft.fft(s.psi)) ** 2
-            mask = (np.abs(kvec) >= k_lo) & (np.abs(kvec) <= k_hi)
-            total += float(P[mask].sum())
-        return total
-    else:
-        kvec = 2 * np.pi * np.fft.fftfreq(N, d=dx)
-        KX, KY, KZ = np.meshgrid(kvec, kvec, kvec, indexing='ij')
-        kmag = np.sqrt(KX * KX + KY * KY + KZ * KZ)
-        total = 0.0
-        for s in subs:
-            P = np.abs(np.fft.fftn(s.psi)) ** 2
-            mask = (kmag >= k_lo) & (kmag <= k_hi)
-            total += float(P[mask].sum())
-        return total
+def orthogonal_projection(psi, subspace_basis: np.ndarray) -> np.ndarray:
+    proj = project_to_subspace(psi, subspace_basis)
+    return psi - proj
 
-def proj_atoms_of_atoms(subs) -> float:
-    from runtime.physics.observables_atoms import atom_count
-    total = 0
-    for s in subs:
-        if s.D == 1:
-            total += atom_count(s.psi, s.dx)
-        else:
-            rho = np.abs(s.psi) ** 2
-            marginal = rho.sum(axis=tuple(range(1, s.D)))
-            thr = 0.25 * float(marginal.max()) if marginal.max() > 0 else 0
-            above = marginal > thr
-            if above.any():
-                idx0 = int(np.argmin(above)) if not above.all() else 0
-                rolled = np.roll(above, -idx0)
-                total += int((np.diff(rolled.astype(int)) == 1).sum()) or 1
-    return float(total)
+def basis_projection(psi, n_states: int) -> list[complex]:
+    N = len(psi)
+    coefficients = []
+    for i in range(min(n_states, N)):
+        basis = np.zeros(N, dtype=complex)
+        basis[i] = 1.0
+        coeff = np.vdot(psi, basis)
+        coefficients.append(coeff)
+    return coefficients
 
-def proj_none(subs) -> float:
-    return 0.0
-PROJECTOR_REGISTRY = {'centroid_density': proj_centroid_density, 'integrated_density': proj_integrated_density, 'dominant_k_star': proj_dominant_k_star, 'fourier_band': proj_fourier_band, 'atoms_of_atoms': proj_atoms_of_atoms, 'none': proj_none}
+def momentum_projection(psi, k_magnitude: float, L: float = 32.0) -> np.ndarray:
+    N = len(psi)
+    x = np.linspace(-L/2, L/2, N, endpoint=False)
+    k = 2.0 * np.pi * k_magnitude
+    plane_wave = np.exp(1j * k * x)
+    plane_wave /= np.linalg.norm(plane_wave)
+    return project_to_subspace(psi, [plane_wave])
 
-def resolve_projector(name: str):
-    if name not in PROJECTOR_REGISTRY:
-        raise KeyError(f'unknown projection {name!r}; available: {sorted(PROJECTOR_REGISTRY)}')
-    return PROJECTOR_REGISTRY[name]
+def energy_projection(psi, energy: float, hbar: float = 1.0, m: float = 1.0) -> np.ndarray:
+    return psi
+
+def density_projection(psi, target_density: np.ndarray) -> np.ndarray:
+    current_density = np.abs(psi) ** 2
+    overlap = np.vdot(current_density, target_density)
+    if overlap == 0:
+        return psi
+    return psi * np.sqrt(target_density / current_density + 1e-10)

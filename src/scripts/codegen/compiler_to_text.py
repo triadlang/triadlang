@@ -1,6 +1,9 @@
-import os, sys
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from runtime.compiler import TriadCompiler
+
 
 def _f(x: float) -> str:
     return repr(float(x))
@@ -11,7 +14,7 @@ def _tuple(xs) -> str:
         return '(' + parts[0] + ',)'
     return '(' + ', '.join(parts) + ')'
 
-def dump_program(name: str, prog, lines: list) -> None:
+def dump_program(name: str, prog, lines: list[str]) -> None:
     lines.append(f'fixture {name}')
     lines.append(f'T {_f(prog.T)} dt {_f(prog.dt)} backend {prog.backend} n_subs {len(prog.substrates)} n_couplings {len(prog.couplings)}')
     if prog.metadata:
@@ -44,7 +47,7 @@ def run() -> str:
     dump_program('remember_default', comp.compile('remember'), lines)
     dump_program('remember_4ts', comp.compile('remember', timescales=(0.5, 2.0, 8.0, 32.0), N=64), lines)
     dump_program('couple_ring', comp.compile('couple', n_substrates=4, topology='ring'), lines)
-    dump_program('couple_full', comp.compile('couple', n_substrates=3, topology='full'), lines)
+    dump_program('couple_triad', comp.compile('couple', n_substrates=3, topology='triad'), lines)
     dump_program('couple_star', comp.compile('couple', n_substrates=4, topology='star'), lines)
     dump_program('sat_default', comp.compile('sat'), lines)
     dump_program('sat_5vars', comp.compile('sat', n_vars=5, n_clauses=20), lines)

@@ -1,7 +1,3 @@
-/* ═══════════════════════════════════════════════════════════════════
-   TriadLang Native LLM — Tokenizer + Sampling + KV Cache + Transformer
-   ═══════════════════════════════════════════════════════════════════ */
-
 #define _POSIX_C_SOURCE 200809L
 #include "triad_llm.h"
 #include <stdlib.h>
@@ -13,10 +9,6 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-
-/* ═══════════════════════════════
-   RNG (xorshift64)
-   ═══════════════════════════════ */
 
 static uint64_t _llm_xor(uint64_t *s) {
     uint64_t x = *s;
@@ -118,10 +110,6 @@ static int32_t merge_hash_get(const TriadTokenizer *t, const char *left, const c
     return -1;
 }
 
-/* ═══════════════════════════════
-   BPE Tokenizer
-   ═══════════════════════════════ */
-
 TriadTokenizer *triad_tokenizer_new(void) {
     TriadTokenizer *t = calloc(1, sizeof(TriadTokenizer));
     t->bos_id = 1;
@@ -150,7 +138,7 @@ void triad_tokenizer_free(TriadTokenizer *t) {
 }
 
 void triad_tokenizer_add_token(TriadTokenizer *t, int32_t id, const char *token) {
-    /* Grow vocab if needed */
+
     if (id >= t->vocab_size) {
         int32_t new_size = id + 1;
         t->vocab = realloc(t->vocab, new_size * sizeof(TriadVocabEntry));
@@ -173,7 +161,7 @@ void triad_tokenizer_add_merge(TriadTokenizer *t, const char *left,
     TriadMergeRule *m = &t->merges[t->nmerges - 1];
     m->left = strdup(left);
     m->right = strdup(right);
-    /* merged = left + right */
+
     size_t ll = strlen(left), lr = strlen(right);
     m->merged = malloc(ll + lr + 1);
     memcpy(m->merged, left, ll);
@@ -199,8 +187,7 @@ static char *parse_json_string_token(const char **pp) {
             else if (*p == 'r') { out[n++] = '\r'; p++; }
             else if (*p == 't') { out[n++] = '\t'; p++; }
             else if (*p == 'u' && p[1] && p[2] && p[3] && p[4]) {
-                /* Keep unicode escapes as a conservative fallback. Qwen's
-                   vocab.json stores byte-unicode tokens directly in UTF-8. */
+
                 out[n++] = '\\';
                 out[n++] = *p++;
             } else if (*p) {
@@ -361,7 +348,6 @@ int triad_tokenizer_load_added_tokens(TriadTokenizer *t, const char *config_path
     return added > 0 ? 0 : -1;
 }
 
-/* BPE encode: bytes -> GPT-2 byte-unicode symbols -> merges */
 int32_t triad_tokenizer_encode(const TriadTokenizer *t, const char *text,
                                 int32_t *out_ids, int32_t max_tokens) {
     int len = (int)strlen(text);
@@ -379,7 +365,6 @@ int32_t triad_tokenizer_encode(const TriadTokenizer *t, const char *text,
         npieces++;
     }
 
-    /* Apply BPE merges iteratively */
     int changed = 1;
     while (changed) {
         changed = 0;
@@ -387,7 +372,6 @@ int32_t triad_tokenizer_encode(const TriadTokenizer *t, const char *text,
         int best_pos = -1;
         int best_merge = -1;
 
-        /* Find highest priority merge */
         for (int i = 0; i < npieces - 1; i++) {
             int32_t m = merge_hash_get(t, pieces[i].str, pieces[i + 1].str);
             if (m >= 0 && t->merges[m].rank < best_rank) {
@@ -398,11 +382,11 @@ int32_t triad_tokenizer_encode(const TriadTokenizer *t, const char *text,
         }
 
         if (best_pos >= 0) {
-            /* Apply merge at best_pos */
+
             free(pieces[best_pos].str);
             pieces[best_pos].str = strdup(t->merges[best_merge].merged);
             pieces[best_pos].id = token_hash_get(t, pieces[best_pos].str);
-            /* Remove piece at best_pos+1 */
+
             free(pieces[best_pos + 1].str);
             for (int i = best_pos + 1; i < npieces - 1; i++)
                 pieces[i] = pieces[i + 1];
@@ -411,7 +395,6 @@ int32_t triad_tokenizer_encode(const TriadTokenizer *t, const char *text,
         }
     }
 
-    /* Emit token IDs (free every piece regardless of the output cap) */
     int32_t count = 0;
     for (int i = 0; i < npieces; i++) {
         if (pieces[i].id >= 0 && count < max_tokens) {
@@ -424,7 +407,7 @@ int32_t triad_tokenizer_encode(const TriadTokenizer *t, const char *text,
 }
 
 char *triad_tokenizer_decode(const TriadTokenizer *t, const int32_t *ids, int32_t n) {
-    /* Concatenate token strings */
+
     size_t total = 0;
     for (int32_t i = 0; i < n; i++) {
         if (ids[i] >= 0 && ids[i] < t->vocab_size && t->vocab[ids[i]].token)
@@ -445,10 +428,6 @@ const char *triad_tokenizer_id_to_str(const TriadTokenizer *t, int32_t id) {
     return "<unk>";
 }
 
-/* ═══════════════════════════════
-   Sampling
-   ═══════════════════════════════ */
-
 int32_t triad_sample_greedy(const double *logits, int32_t vocab_size) {
     int32_t best = 0;
     double best_val = logits[0];
@@ -465,14 +444,13 @@ int32_t triad_sample_top_k(const double *logits, int32_t vocab_size,
                             int32_t k, double temperature, uint64_t *rng) {
     if (k <= 0 || k > vocab_size) k = vocab_size;
 
-    /* Find top-k indices (partial sort) */
     typedef struct { double val; int32_t idx; } LP;
     LP *pairs = malloc(vocab_size * sizeof(LP));
     for (int32_t i = 0; i < vocab_size; i++) {
         pairs[i].val = logits[i] / (temperature > 0 ? temperature : 1.0);
         pairs[i].idx = i;
     }
-    /* Partial sort: bubble top-k to front */
+
     for (int32_t i = 0; i < k; i++) {
         for (int32_t j = i + 1; j < vocab_size; j++) {
             if (pairs[j].val > pairs[i].val) {
@@ -481,7 +459,6 @@ int32_t triad_sample_top_k(const double *logits, int32_t vocab_size,
         }
     }
 
-    /* Softmax over top-k */
     double max_val = pairs[0].val;
     double sum = 0;
     for (int32_t i = 0; i < k; i++) {
@@ -489,13 +466,15 @@ int32_t triad_sample_top_k(const double *logits, int32_t vocab_size,
         sum += pairs[i].val;
     }
 
-    /* Sample */
     double r = _llm_randf(rng) * sum;
     double cum = 0;
-    int32_t result = pairs[0].idx;
-    for (int32_t i = 0; i < k; i++) {
-        cum += pairs[i].val;
-        if (cum >= r) { result = pairs[i].idx; break; }
+    int32_t result = 0;
+    if (k > 0) {
+        result = pairs[0].idx;
+        for (int32_t i = 0; i < k; i++) {
+            cum += pairs[i].val;
+            if (cum >= r) { result = pairs[i].idx; break; }
+        }
     }
     free(pairs);
     return result;
@@ -512,7 +491,6 @@ int32_t triad_sample_top_p(const double *logits, int32_t vocab_size,
         if (pairs[i].val > max_val) max_val = pairs[i].val;
     }
 
-    /* Softmax */
     double sum = 0;
     for (int32_t i = 0; i < vocab_size; i++) {
         pairs[i].val = exp(pairs[i].val - max_val);
@@ -521,14 +499,12 @@ int32_t triad_sample_top_p(const double *logits, int32_t vocab_size,
     for (int32_t i = 0; i < vocab_size; i++)
         pairs[i].val /= sum;
 
-    /* Sort descending by probability */
     for (int32_t i = 0; i < vocab_size - 1; i++)
         for (int32_t j = i + 1; j < vocab_size; j++)
             if (pairs[j].val > pairs[i].val) {
                 LP tmp = pairs[i]; pairs[i] = pairs[j]; pairs[j] = tmp;
             }
 
-    /* Accumulate until p */
     double cum = 0;
     int32_t cutoff = vocab_size;
     for (int32_t i = 0; i < vocab_size; i++) {
@@ -536,15 +512,17 @@ int32_t triad_sample_top_p(const double *logits, int32_t vocab_size,
         if (cum >= p) { cutoff = i + 1; break; }
     }
 
-    /* Renormalize and sample */
     sum = 0;
     for (int32_t i = 0; i < cutoff; i++) sum += pairs[i].val;
     double r = _llm_randf(rng) * sum;
     cum = 0;
-    int32_t result = pairs[0].idx;
-    for (int32_t i = 0; i < cutoff; i++) {
-        cum += pairs[i].val;
-        if (cum >= r) { result = pairs[i].idx; break; }
+    int32_t result = 0;
+    if (cutoff > 0) {
+        result = pairs[0].idx;
+        for (int32_t i = 0; i < cutoff; i++) {
+            cum += pairs[i].val;
+            if (cum >= r) { result = pairs[i].idx; break; }
+        }
     }
     free(pairs);
     return result;
@@ -561,10 +539,6 @@ int32_t triad_sample(const double *logits, int32_t vocab_size,
         return triad_sample_top_k(logits, vocab_size, cfg->top_k, cfg->temperature, &rng);
     return triad_sample_top_k(logits, vocab_size, vocab_size, cfg->temperature, &rng);
 }
-
-/* ═══════════════════════════════
-   KV Cache
-   ═══════════════════════════════ */
 
 TriadKVCache *triad_kv_cache_new(int32_t max_seq_len, int32_t n_heads,
                                   int32_t head_dim, int32_t n_layers) {
@@ -624,16 +598,11 @@ const double *triad_kv_cache_get_v(const TriadKVCache *kv, int32_t layer) {
 void triad_kv_cache_advance(TriadKVCache *kv) {
     kv->pos++;
     if (kv->pos >= kv->max_seq_len) {
-        /* Ring buffer: wrap around */
+
         kv->pos = 0;
     }
 }
 
-/* ═══════════════════════════════
-   Transformer Ops
-   ═══════════════════════════════ */
-
-/* RMS Norm */
 TriadTensor *triad_rms_norm(TriadTensor *x, TriadTensor *weight, double eps) {
     int64_t dim = x->size;
     double ss = 0;
@@ -647,7 +616,6 @@ TriadTensor *triad_rms_norm(TriadTensor *x, TriadTensor *weight, double eps) {
     return out;
 }
 
-/* RoPE: apply rotary embeddings to q and k */
 void triad_rope(double *q, double *k, int32_t head_dim, int32_t pos,
                 double theta_base) {
     for (int32_t i = 0; i < head_dim; i += 2) {
@@ -655,26 +623,22 @@ void triad_rope(double *q, double *k, int32_t head_dim, int32_t pos,
         double angle = (double)pos * freq;
         double cos_a = cos(angle), sin_a = sin(angle);
 
-        /* Rotate q */
         double q0 = q[i], q1 = q[i + 1];
         q[i]     = q0 * cos_a - q1 * sin_a;
         q[i + 1] = q0 * sin_a + q1 * cos_a;
 
-        /* Rotate k */
         double k0 = k[i], k1 = k[i + 1];
         k[i]     = k0 * cos_a - k1 * sin_a;
         k[i + 1] = k0 * sin_a + k1 * cos_a;
     }
 }
 
-/* Single-head scaled dot-product attention with causal mask */
 static void _sdpa(const double *q, const double *k_cache, const double *v_cache,
                    double *out, int32_t head_dim, int32_t seq_len,
                    int32_t n_heads, int32_t head_idx) {
     double scale = 1.0 / sqrt((double)head_dim);
     double *scores = malloc((seq_len + 1) * sizeof(double));
 
-    /* QK^T */
     double max_score = -1e308;
     for (int32_t t = 0; t <= seq_len; t++) {
         double dot = 0;
@@ -686,7 +650,6 @@ static void _sdpa(const double *q, const double *k_cache, const double *v_cache,
         if (scores[t] > max_score) max_score = scores[t];
     }
 
-    /* Softmax */
     double sum = 0;
     for (int32_t t = 0; t <= seq_len; t++) {
         scores[t] = exp(scores[t] - max_score);
@@ -695,7 +658,6 @@ static void _sdpa(const double *q, const double *k_cache, const double *v_cache,
     for (int32_t t = 0; t <= seq_len; t++)
         scores[t] /= sum;
 
-    /* Weighted sum of V */
     memset(out, 0, head_dim * sizeof(double));
     for (int32_t t = 0; t <= seq_len; t++) {
         for (int32_t d = 0; d < head_dim; d++) {
@@ -706,14 +668,12 @@ static void _sdpa(const double *q, const double *k_cache, const double *v_cache,
     free(scores);
 }
 
-/* Multi-head attention with KV cache (inference, single token) */
 TriadTensor *triad_mha_cached(TriadTensor *q_proj, TriadTensor *k_proj, TriadTensor *v_proj,
                                TriadKVCache *kv, int32_t layer,
                                int32_t n_heads, int32_t head_dim) {
-    /* Write current K/V to cache */
+
     triad_kv_cache_write(kv, layer, k_proj->data, v_proj->data);
 
-    /* Per-head attention */
     int32_t dim = n_heads * head_dim;
     int32_t shape[] = {dim};
     TriadTensor *out = triad_tensor_new(1, shape, 0);
@@ -730,11 +690,9 @@ TriadTensor *triad_mha_cached(TriadTensor *q_proj, TriadTensor *k_proj, TriadTen
     return out;
 }
 
-/* SwiGLU FFN */
 TriadTensor *triad_ffn_swiglu(TriadTensor *x, TriadTensor *gate_w,
                                TriadTensor *up_w, TriadTensor *down_w) {
-    /* gate = x @ gate_w^T */
-    /* up   = x @ up_w^T */
+
     int32_t dim = x->shape[0];
     int32_t hidden = gate_w->shape[0];
 
@@ -748,12 +706,11 @@ TriadTensor *triad_ffn_swiglu(TriadTensor *x, TriadTensor *gate_w,
             gs += x->data[k] * gate_w->data[j * dim + k];
             us += x->data[k] * up_w->data[j * dim + k];
         }
-        /* SiLU activation on gate */
+
         double silu = gs / (1.0 + exp(-gs));
         gate->data[j] = silu * us;
     }
 
-    /* down = hidden @ down_w^T */
     int32_t ds[] = {dim};
     TriadTensor *out = triad_tensor_new(1, ds, 0);
     for (int32_t j = 0; j < dim; j++) {
@@ -768,10 +725,6 @@ TriadTensor *triad_ffn_swiglu(TriadTensor *x, TriadTensor *gate_w,
     return out;
 }
 
-/* ═══════════════════════════════
-   Transformer Model
-   ═══════════════════════════════ */
-
 TriadLLM *triad_llm_new(const TriadLLMConfig *cfg) {
     TriadLLM *m = calloc(1, sizeof(TriadLLM));
     m->config = *cfg;
@@ -781,11 +734,9 @@ TriadLLM *triad_llm_new(const TriadLLMConfig *cfg) {
     int32_t vocab = cfg->vocab_size;
     int32_t head_dim = dim / cfg->n_heads;
 
-    /* Embedding */
     int32_t es[] = {vocab, dim};
     m->tok_emb = triad_tensor_new(2, es, 0);
 
-    /* Layers */
     m->layers = calloc(cfg->n_layers, sizeof(TriadTransformerLayer));
     for (int32_t l = 0; l < cfg->n_layers; l++) {
         TriadTransformerLayer *lay = &m->layers[l];
@@ -806,13 +757,11 @@ TriadLLM *triad_llm_new(const TriadLLMConfig *cfg) {
         lay->ffn_norm  = triad_tensor_ones(1, ns, 0);
     }
 
-    /* Final norm + output */
     int32_t ns[] = {dim};
     m->norm = triad_tensor_ones(1, ns, 0);
     int32_t os[] = {vocab, dim};
     m->output = triad_tensor_new(2, os, 0);
 
-    /* KV cache */
     m->kv_cache = triad_kv_cache_new(cfg->max_seq_len, cfg->n_heads, head_dim, cfg->n_layers);
 
     return m;
@@ -841,25 +790,20 @@ void triad_llm_free(TriadLLM *m) {
     free(m);
 }
 
-/* Forward: single token -> logits */
 TriadTensor *triad_llm_forward(TriadLLM *m, int32_t token_id, int32_t pos) {
     int32_t dim = m->config.dim;
     int32_t n_heads = m->config.n_heads;
     int32_t head_dim = dim / n_heads;
 
-    /* Token embedding */
     int32_t xs[] = {dim};
     TriadTensor *x = triad_tensor_new(1, xs, 0);
     memcpy(x->data, m->tok_emb->data + (int64_t)token_id * dim, dim * sizeof(double));
 
-    /* Transformer layers */
     for (int32_t l = 0; l < m->config.n_layers; l++) {
         TriadTransformerLayer *lay = &m->layers[l];
 
-        /* Pre-attention RMSNorm */
         TriadTensor *xn = triad_rms_norm(x, lay->attn_norm, m->config.norm_eps);
 
-        /* QKV projections */
         TriadTensor *q = triad_tensor_new(1, xs, 0);
         TriadTensor *k = triad_tensor_new(1, xs, 0);
         TriadTensor *v = triad_tensor_new(1, xs, 0);
@@ -875,17 +819,14 @@ TriadTensor *triad_llm_forward(TriadLLM *m, int32_t token_id, int32_t pos) {
             v->data[i] = vs;
         }
 
-        /* RoPE per head */
         for (int32_t h = 0; h < n_heads; h++) {
             triad_rope(q->data + h * head_dim, k->data + h * head_dim,
                        head_dim, pos, m->config.rope_theta);
         }
 
-        /* Multi-head attention with KV cache */
         TriadTensor *attn_out = triad_mha_cached(q, k, v, m->kv_cache, l,
                                                   n_heads, head_dim);
 
-        /* Output projection */
         TriadTensor *proj = triad_tensor_new(1, xs, 0);
         for (int32_t i = 0; i < dim; i++) {
             double s = 0;
@@ -894,7 +835,6 @@ TriadTensor *triad_llm_forward(TriadLLM *m, int32_t token_id, int32_t pos) {
             proj->data[i] = s;
         }
 
-        /* Residual */
         for (int32_t i = 0; i < dim; i++)
             x->data[i] += proj->data[i];
 
@@ -905,13 +845,10 @@ TriadTensor *triad_llm_forward(TriadLLM *m, int32_t token_id, int32_t pos) {
         triad_tensor_free(attn_out);
         triad_tensor_free(proj);
 
-        /* Pre-FFN RMSNorm */
         xn = triad_rms_norm(x, lay->ffn_norm, m->config.norm_eps);
 
-        /* SwiGLU FFN */
         TriadTensor *ffn_out = triad_ffn_swiglu(xn, lay->w_gate, lay->w_up, lay->w_down);
 
-        /* Residual */
         for (int32_t i = 0; i < dim; i++)
             x->data[i] += ffn_out->data[i];
 
@@ -919,10 +856,8 @@ TriadTensor *triad_llm_forward(TriadLLM *m, int32_t token_id, int32_t pos) {
         triad_tensor_free(ffn_out);
     }
 
-    /* Final RMSNorm */
     TriadTensor *xn = triad_rms_norm(x, m->norm, m->config.norm_eps);
 
-    /* Output projection -> logits */
     int32_t ls[] = {m->config.vocab_size};
     TriadTensor *logits = triad_tensor_new(1, ls, 0);
     for (int32_t i = 0; i < m->config.vocab_size; i++) {
@@ -932,7 +867,6 @@ TriadTensor *triad_llm_forward(TriadLLM *m, int32_t token_id, int32_t pos) {
         logits->data[i] = s;
     }
 
-    /* Advance KV cache */
     triad_kv_cache_advance(m->kv_cache);
 
     triad_tensor_free(x);
@@ -940,35 +874,29 @@ TriadTensor *triad_llm_forward(TriadLLM *m, int32_t token_id, int32_t pos) {
     return logits;
 }
 
-/* Generate text from prompt */
 char *triad_llm_generate(TriadLLM *m, const char *prompt, int32_t max_tokens,
                           const TriadSamplerConfig *cfg) {
     if (!m->tokenizer) return strdup("");
 
-    /* Encode prompt */
     int32_t prompt_ids[4096];
     int32_t prompt_len = triad_tokenizer_encode(m->tokenizer, prompt, prompt_ids, 4096);
 
-    /* Output buffer */
     int32_t *out_ids = malloc((prompt_len + max_tokens) * sizeof(int32_t));
     memcpy(out_ids, prompt_ids, prompt_len * sizeof(int32_t));
     int32_t total = prompt_len;
 
-    /* Clear KV cache */
     triad_kv_cache_clear(m->kv_cache);
 
-    /* Process prompt (prefill) */
     for (int32_t i = 0; i < prompt_len; i++) {
         TriadTensor *logits = triad_llm_forward(m, prompt_ids[i], i);
         if (i == prompt_len - 1) {
-            /* Sample from last token's logits */
+
             int32_t next = triad_sample(logits->data, m->config.vocab_size, cfg);
             out_ids[total++] = next;
         }
         triad_tensor_free(logits);
     }
 
-    /* Autoregressive generation */
     for (int32_t i = 0; i < max_tokens - 1 && total < prompt_len + max_tokens; i++) {
         int32_t pos = prompt_len + i;
         TriadTensor *logits = triad_llm_forward(m, out_ids[total - 1], pos);
@@ -979,7 +907,6 @@ char *triad_llm_generate(TriadLLM *m, const char *prompt, int32_t max_tokens,
         out_ids[total++] = next;
     }
 
-    /* Decode output (skip prompt) */
     char *result = triad_tokenizer_decode(m->tokenizer, out_ids + prompt_len,
                                            total - prompt_len);
     free(out_ids);

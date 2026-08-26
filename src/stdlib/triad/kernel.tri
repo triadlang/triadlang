@@ -1,9 +1,18 @@
 fn to_solver_input(regime_name, T, seed) {
-    return {"regime": regime_name, "T": T, "seed": seed, "mode": "full"};
+    return {"regime": regime_name, "T": T, "seed": seed, "mode": "triad"};
 }
 
-fn run_equation(regime_name, T, seed) {
+fn run_Triad(regime_name, T, seed) {
     import triad;
+    let r = triad.regime(regime_name);
+    let result = triad.solve(r, T=T);
+    return result;
+}
+
+fn run(params) {
+    import triad;
+    let regime_name = params["regime"];
+    let T = params["T"];
     let r = triad.regime(regime_name);
     let result = triad.solve(r, T=T);
     return result;
@@ -29,8 +38,27 @@ fn read_norm(result) {
     return triad.norm(result);
 }
 
+fn extract(result, metrics) {
+    let out = {};
+    for m in metrics {
+        if m == "crystallinity" {
+            out["crystallinity"] = read_crystallinity(result);
+        }
+        if m == "k_star" {
+            out["k_star"] = read_k_star(result);
+        }
+        if m == "peak" {
+            out["peak"] = read_peak(result);
+        }
+        if m == "norm" {
+            out["norm"] = read_norm(result);
+        }
+    }
+    return out;
+}
+
 fn run_and_observe(regime_name, T, seed) {
-    let result = run_equation(regime_name, T, seed);
+    let result = run_Triad(regime_name, T, seed);
     return {
         "crystallinity": read_crystallinity(result),
         "k_star": read_k_star(result),

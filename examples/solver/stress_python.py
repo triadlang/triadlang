@@ -7,7 +7,7 @@ def stress_solver():
     lam = [-0.3, -0.2, -0.1]
     total = 0.0
     for i in range(10):
-        p = TriadParams(N=128, L=32.0, dt=0.005, T=1.0, hbar=1.0, m=1.0, omega=0.05, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=nu, lam=lam, mode='full', seed=i, V_ext='harmonic')
+        p = TriadParams(N=128, L=32.0, dt=0.005, T=1.0, hbar=1.0, m=1.0, omega=0.05, Lambda=-0.5, alpha=0.15, sigma=1.5, Gamma=0.05, f_FDT=0.002, nu=nu, lam=lam, mode='triad', seed=i, V_ext='harmonic')
         r = fast_integrate(p)
         total += np.sum(r['density_final']) * r['dx']
     return total

@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 import sys
 from pathlib import Path
+
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from frontend.parser_universal import parse
 from compiler.formatter import format_universal
+from frontend.parser_universal import parse
+
 
 def main(argv):
     if len(argv) < 2:

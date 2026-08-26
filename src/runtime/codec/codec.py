@@ -1,8 +1,12 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional
-import numpy as np
-from runtime.physics import observables as obs
+
+from runtime.physics.observables import (
+    crystallinity,
+)
+from triad import ntri as np
+
 DEFAULT_K_MIN = 0.0
 DEFAULT_K_STEP = 0.196349541
 
@@ -51,8 +55,8 @@ def encode_bool(value: bool, L: float, N: int) -> np.ndarray:
     psi /= np.sqrt((np.abs(psi) ** 2).sum() * dx)
     return psi
 
-def decode_bool(psi: np.ndarray, dx: float) -> Optional[bool]:
-    c = obs.crystallinity(psi, dx)
+def decode_bool(psi: np.ndarray, dx: float) -> bool | None:
+    c = crystallinity(psi, dx)
     if c > 0.5:
         return True
     if c < 0.2:

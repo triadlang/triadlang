@@ -55,11 +55,6 @@ make -C native/c all
 Use `make -C native/c rebuild` for a clean rebuild. Optional dependencies are
 detected by the Makefile.
 
-## Project status
-
-Version 1.0 stabilization is in progress. The release gate is documented in
-[`docs/RELEASE_CRITERIA.md`](docs/RELEASE_CRITERIA.md).
-
 ## License
 
 See [LICENSE](LICENSE).

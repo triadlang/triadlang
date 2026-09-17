@@ -54,7 +54,3 @@ make -C native/c all
 
 Use `make -C native/c rebuild` for a clean rebuild. Optional dependencies are
 detected by the Makefile.
-
-## License
-
-See [LICENSE](LICENSE).

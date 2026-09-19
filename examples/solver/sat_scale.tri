@@ -1,0 +1,122 @@
+import triad.sat as sat;
+
+fn planted_bit(v) {
+    if v % 2 == 1 {
+        return 1;
+    }
+    return 0;
+}
+
+fn build_planted(n, m) {
+    let clauses = [];
+    let i = 0;
+    while len(clauses) < m {
+        let a = (i % n) + 1;
+        let b = ((i * 5 + 3) % n) + 1;
+        if b == a {
+            b = (b % n) + 1;
+        }
+        let c = ((i * 11 + 7) % n) + 1;
+        if c == a {
+            c = (c % n) + 1;
+        }
+        if c == b {
+            c = (c % n) + 1;
+        }
+        let la = a;
+        if i % 2 == 0 {
+            la = 0 - a;
+        }
+        let lb = b;
+        if i % 3 == 0 {
+            lb = 0 - b;
+        }
+        let lc = c;
+        if i % 5 == 0 {
+            lc = 0 - c;
+        }
+        let ok = false;
+        if la > 0 {
+            if planted_bit(a) == 1 {
+                ok = true;
+            }
+        } else {
+            if planted_bit(a) == 0 {
+                ok = true;
+            }
+        }
+        if lb > 0 {
+            if planted_bit(b) == 1 {
+                ok = true;
+            }
+        } else {
+            if planted_bit(b) == 0 {
+                ok = true;
+            }
+        }
+        if lc > 0 {
+            if planted_bit(c) == 1 {
+                ok = true;
+            }
+        } else {
+            if planted_bit(c) == 0 {
+                ok = true;
+            }
+        }
+        if ok {
+            clauses.push([la, lb, lc]);
+        }
+        i = i + 1;
+    }
+    return clauses;
+}
+
+fn count_violations(clauses, assignment) {
+    let bad = 0;
+    for i in range(len(clauses)) {
+        let cl = clauses[i];
+        let s = false;
+        for j in range(len(cl)) {
+            let lit = cl[j];
+            let v = lit;
+            if v < 0 {
+                v = 0 - v;
+            }
+            let bit = assignment[v - 1];
+            if lit > 0 {
+                if bit == 1 {
+                    s = true;
+                }
+            } else {
+                if bit == 0 {
+                    s = true;
+                }
+            }
+        }
+        if s == false {
+            bad = bad + 1;
+        }
+    }
+    return bad;
+}
+
+fn run_case(n, m) {
+    let clauses = build_planted(n, m);
+    let inst = sat.SATInstance(n, clauses);
+    let r = sat.solve_sat(inst, "interference", 10.0);
+    let mine = count_violations(clauses, r["assignment"]);
+    print("n=" + str(n) + " m=" + str(m));
+    print("  assignment: " + str(r["assignment"]));
+    print("  solver violations: " + str(r["violations"]));
+    print("  independent violations: " + str(mine));
+    print("  satisfiable: " + str(r["is_satisfiable"]) + " n_solutions: " + str(r["n_solutions"]));
+}
+
+run_case(6, 26);
+run_case(10, 43);
+run_case(14, 60);
+
+let u = sat.SATInstance(1, [[1], [-1]]);
+let ru = sat.solve_sat(u, "interference", 10.0);
+print("unsat1 satisfiable: " + str(ru["is_satisfiable"]));
+print("unsat1 violations: " + str(ru["violations"]));

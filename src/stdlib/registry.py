@@ -100,10 +100,19 @@ def _install_git(url: str, modules_dir: str, name: str | None=None) -> str:
     if name is None:
         name = url.rstrip('/').split('/')[-1].removesuffix('.git')
     target = os.path.join(modules_dir, name)
-    if os.path.exists(target):
+    staging = target + '.__staging__'
+    if os.path.islink(staging) or os.path.exists(staging):
+        if os.path.islink(staging):
+            os.unlink(staging)
+        else:
+            shutil.rmtree(staging)
+    subprocess.run(['git', 'clone', '--depth', '1', url, staging], check=True, capture_output=True, timeout=120)
+    _clean_git_meta(staging)
+    if os.path.islink(target):
+        os.unlink(target)
+    elif os.path.exists(target):
         shutil.rmtree(target)
-    subprocess.run(['git', 'clone', '--depth', '1', url, target], check=True, capture_output=True)
-    _clean_git_meta(target)
+    os.rename(staging, target)
     return name
 
 def _install_path(source: str, modules_dir: str, name: str | None=None) -> str:
@@ -175,8 +184,12 @@ def publish_package(project_dir: str='.', registry_dir: str | None=None) -> str:
     reg = registry_dir or GLOBAL_REGISTRY
     pkg_dir = os.path.join(reg, manifest.name, manifest.version)
     os.makedirs(pkg_dir, exist_ok=True)
+    _SENSITIVE_NAMES = ('.env', '.env.local', '.env.production', 'secrets.json', '.secrets')
+    _SENSITIVE_SUFFIXES = ('.pem', '.key', '.p12', '.pfx')
     for item in os.listdir(project_dir):
         if item in (MODULES_DIR, '.git', '__pycache__', '__triadcache__', MANIFEST_FILE, '.gitignore'):
+            continue
+        if item.startswith('.') or item in _SENSITIVE_NAMES or item.endswith(_SENSITIVE_SUFFIXES):
             continue
         s = os.path.join(project_dir, item)
         d = os.path.join(pkg_dir, item)

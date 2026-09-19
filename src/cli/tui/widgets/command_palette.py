@@ -87,13 +87,13 @@ class CommandPalette(ModalScreen[str | None]):
 
     def _refresh_list(self) -> None:
 
+        from rich.markup import escape as _escape
         lv = self.query_one("#palette-list", ListView)
         lv.clear()
         for cmd in self._filtered[:50]:
-            title = f"{cmd.title}"
+            label = Text(_escape(cmd.title))
             if cmd.keybinding:
-                title = f"{title:<40} [dim]{cmd.keybinding}[/dim]"
-            label = Text.from_markup(title)
+                label.append_text(Text(f"  {cmd.keybinding}", style="dim"))
             if cmd.description:
                 label.append_text(Text(f"  {cmd.description}", style="dim"))
             item = ListItem(Label(label), id=f"cmd-{cmd.id}")

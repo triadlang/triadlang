@@ -43,8 +43,9 @@ def _apply_repetition_penalty(logits: np.ndarray, token_ids: list[int],
         return logits
     recent = token_ids[-window:]
     seen = set()
+    n = logits.shape[0]
     for tid in recent:
-        if tid not in seen:
+        if tid not in seen and 0 <= int(tid) < n:
             seen.add(tid)
             if logits[tid] > 0:
                 logits[tid] = logits[tid] / penalty

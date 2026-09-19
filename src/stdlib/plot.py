@@ -3,12 +3,7 @@ from __future__ import annotations
 import math as _math
 import os
 
-try:
-    from PIL import Image, ImageDraw, ImageFont
-except ImportError as exc:
-    raise RuntimeError(
-        'triad.plot needs Pillow (pip install pillow).'
-    ) from exc
+from stdlib._canvas import Image, ImageDraw, ImageFont
 
 _DEFAULT_FONT_CANDIDATES = [
     '/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf',
@@ -124,15 +119,19 @@ _NAMED_COLORS = {
     'C8': '#bcbd22', 'C9': '#17becf',
 }
 
+def _clamp_rgb(v: int) -> int:
+    return 0 if v < 0 else (255 if v > 255 else v)
+
+
 def _to_rgb(value):
     if value is None:
         return None
     if isinstance(value, (tuple, list)) and len(value) in (3, 4):
         if len(value) == 4 and value[3] == 0.0:
             return None
-        return (int(round(value[0] * 255)) if value[0] <= 1.0 else int(value[0]),
-                int(round(value[1] * 255)) if value[1] <= 1.0 else int(value[1]),
-                int(round(value[2] * 255)) if value[2] <= 1.0 else int(value[2]))
+        return (_clamp_rgb(int(round(value[0] * 255)) if value[0] <= 1.0 else int(value[0])),
+                _clamp_rgb(int(round(value[1] * 255)) if value[1] <= 1.0 else int(value[1])),
+                _clamp_rgb(int(round(value[2] * 255)) if value[2] <= 1.0 else int(value[2])))
     if isinstance(value, str):
         s = value.strip()
         if s in _NAMED_COLORS:
@@ -157,7 +156,7 @@ def _to_rgb(value):
         if s.startswith('rgb('):
             inside = s[4:].rstrip(')').split(',')
             try:
-                vals = [int(float(x.strip())) for x in inside[:3]]
+                vals = [_clamp_rgb(int(float(x.strip()))) for x in inside[:3]]
                 return tuple(vals)
             except ValueError:
                 return None
@@ -815,6 +814,53 @@ class Text(_Artist):
 
     def measure(self):
         return _measure(self._cached_font, self.text)
+
+    def draw(self, axes, draw_ctx):
+        draw = draw_ctx['draw']
+        rgba = _rgba(self.color, self.alpha)
+        if rgba is None or self.text is None or str(self.text) == '':
+            return
+        x = axes._proj_x(self.x)
+        y = axes._proj_y(self.y)
+        if self.rotation:
+            self._draw_rotated(axes, draw_ctx, str(self.text), rgba, x, y)
+            return
+        anchor = {'left': 'l', 'center': 'm', 'right': 'r'}.get(self.ha, 'l') + \
+            {'baseline': 'a', 'center': 'm', 'top': 'a', 'bottom': 'b'}.get(self.va, 'a')
+        try:
+            draw.text((x, y), str(self.text), fill=rgba, font=self._cached_font, anchor=anchor)
+        except (TypeError, AttributeError):
+            draw.text((x, y), str(self.text), fill=rgba, font=self._cached_font)
+
+    def _draw_rotated(self, axes, draw_ctx, text, rgba, x, y):
+        try:
+            from stdlib._canvas import Image as _PILImage
+            tw, th = _measure(self._cached_font, text)
+            try:
+                ascent = self._cached_font.getmetrics()[0]
+            except (AttributeError, TypeError):
+                ascent = int(th * 0.8)
+            ax = {'left': 0.0, 'center': tw / 2.0, 'right': float(tw)}.get(self.ha, 0.0)
+            ay = {'top': 0.0, 'center': th / 2.0, 'bottom': float(th),
+                  'baseline': float(ascent)}.get(self.va, float(ascent))
+            import math as _math
+            side = int(2 * _math.ceil(_math.hypot(tw or 1, th or 1)) + 8)
+            c = side // 2
+            layer = _PILImage.new('RGBA', (side, side), (0, 0, 0, 0))
+            d = _PILImage.Draw(layer)
+            d.text((c - ax, c - ay), text, fill=rgba, font=self._cached_font)
+            try:
+                rs = _PILImage.Resampling.BICUBIC
+            except AttributeError:
+                rs = _PILImage.BICUBIC
+            rot = layer.rotate(self.rotation, resample=rs)
+            img = draw_ctx.get('image') if isinstance(draw_ctx, dict) else None
+            if img is None:
+                return
+            img.paste(rot, (int(x - c), int(y - c)), rot)
+        except Exception:
+            draw = draw_ctx['draw']
+            draw.text((x, y), text, fill=rgba, font=self._cached_font)
 
 class _ErrorBarV(_Artist):
     def __init__(self, x, ylo, yhi, color='black', elinewidth=1.0, capsize=3):
@@ -1684,6 +1730,9 @@ class Figure:
         if not ext:
             fname = fname + '.png'
             ext = '.png'
+        parent = os.path.dirname(os.path.abspath(fname))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         if ext == '.png':
             canvas.save(fname, format='PNG')
         elif ext in ('.jpg', '.jpeg'):

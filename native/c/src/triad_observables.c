@@ -197,10 +197,11 @@ double triad_obs_energy(const TriadCplx *psi, int32_t N, double dx,
                         double hbar, double m, double Lambda,
                         const double *V_ext, const double *V_mem) {
 
-    TriadCplx *psi_k = malloc(sizeof(TriadCplx) * N);
+    TriadCplx *psi_k = malloc(sizeof(TriadCplx) * (size_t)N);
+    double *kvec = malloc(sizeof(double) * (size_t)N);
+    if (!psi_k || !kvec) { free(psi_k); free(kvec); return 0.0; }
     triad_fft_fn(N, psi, psi_k);
 
-    double *kvec = malloc(sizeof(double) * N);
     triad_fftfreq(N, dx, kvec);
 
 
@@ -225,13 +226,12 @@ double triad_obs_energy(const TriadCplx *psi, int32_t N, double dx,
     if (V_ext != NULL) {
         for (int32_t i = 0; i < N; i++)
             pot += V_ext[i] * _cabs2(psi[i]);
-        pot *= dx;
     }
     if (V_mem != NULL) {
         for (int32_t i = 0; i < N; i++)
             pot += V_mem[i] * _cabs2(psi[i]);
-        pot *= dx;
     }
+    pot *= dx;
 
     free(psi_k);
     free(kvec);

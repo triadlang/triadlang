@@ -32,8 +32,8 @@ class TriadEngine:
 
     def run_source(self, text: str, file: str = '<triad>') -> dict:
         policy = self._policy()
-        if policy is not None:
-            policy.safe = self._safe
+        if policy is not None and policy.safe != self._safe:
+            policy = SecurityPolicy(safe=self._safe, sandbox=policy.sandbox, capabilities=policy.capabilities)
         mod = parse(text, file)
         compiler = TriadCompiler()
         compiler._search_paths = self._search_paths

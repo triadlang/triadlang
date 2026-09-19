@@ -33,16 +33,6 @@ static int ata_wait_bsy(uint16_t io) {
     return -1;
 }
 
-static int ata_wait_drq(uint16_t io) {
-    for (uint32_t i = 0; i < 100000; i++) {
-        uint8_t st = inb(io + ATA_STATUS);
-        if (st == 0xFF) return -1;              /* floating bus: no device */
-        if (st & ATA_STATUS_ERR) return -1;
-        if (st & ATA_STATUS_DRQ) return 0;
-    }
-    return -1;
-}
-
 static void ata_soft_reset(uint16_t ctrl) {
     outb(ctrl, 0x04);
     for (int i = 0; i < 1000; i++) {
@@ -96,7 +86,6 @@ void triad_ata_init(void) {
 
             uint8_t status = inb(io + ATA_STATUS);
             if (status == 0 || status == 0xFF) {
-                /* 0xFF = floating bus: no device on this channel */
                 d->present = false;
                 continue;
             }

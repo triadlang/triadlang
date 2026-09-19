@@ -192,26 +192,27 @@ class Segment:
     links: list[CouplingLink] = field(default_factory=list)
     active_ids: set[int] | Callable | None = None
     v_ext_override: dict[int, Callable[[np.ndarray], np.ndarray]] = field(default_factory=dict)
-    probes: list = field(default_factory=list)
-
     router: object = None
-
-@dataclass
-class ProbeRecord:
-    t: float
-    label: str
-    substrate_name: str
-    psi: np.ndarray
-    k_star: float
-    ipr: float
-    crystallinity: float
-    peak: float
 
 import ctypes as _ct
 
 
 class _CCplx(_ct.Structure):
     _fields_ = [('re', _ct.c_double), ('im', _ct.c_double)]
+
+
+def _ct_f64(a):
+    flat = np.ascontiguousarray(np.asarray(a, dtype=np.float64)).ravel().tolist()
+    if not isinstance(flat, list):
+        flat = [flat]
+    return (_ct.c_double * len(flat))(*[float(v) for v in flat])
+
+
+def _ct_cplx(a):
+    flat = np.ascontiguousarray(np.asarray(a, dtype=np.complex128)).ravel().tolist()
+    if not isinstance(flat, list):
+        flat = [flat]
+    return (_CCplx * len(flat))(*[_CCplx(float(v.real), float(v.imag)) for v in flat])
 
 class _CLink(_ct.Structure):
     _fields_ = [('src_id', _ct.c_int), ('dst_id', _ct.c_int),
@@ -437,7 +438,6 @@ class MultiRuntime:
         self._next_id = 0
         self.global_t = 0.0
         self.norm_threshold = 100.0
-        self.probe_log: list[ProbeRecord] = []
         self.on_segment_end: Callable[[Segment, int], None] | None = None
         self._coupling_links: list[CouplingLink] = []
         self._router_type: str = 'precision_weighted'
@@ -541,12 +541,6 @@ class MultiRuntime:
         for sid, fn in seg.v_ext_override.items():
             if sid in self.substrates:
                 self.substrates[sid].V_ext_static = np.asarray(fn(self.substrates[sid].x), dtype=np.float64)
-        for sid, label in seg.probes:
-            sub = self.substrates.get(sid)
-            if sub is None:
-                continue
-            self.probe_log.append(ProbeRecord(t=self.global_t, label=label, substrate_name=sub.name, psi=asnumpy(sub.psi).copy(), k_star=float(dominant_wavenumber(asnumpy(sub.psi), sub.dx, k_min=2 * np.pi / sub.params.L)), ipr=float(ipr(asnumpy(sub.psi), sub.dx)), crystallinity=float(crystallinity(asnumpy(sub.psi), sub.dx)), peak=float(peak_density(asnumpy(sub.psi)))))
-
     def _apply_router_gating(self, seg: Segment):
 
         from runtime.core.field_router import gather_observables
@@ -590,8 +584,6 @@ class MultiRuntime:
         for seg in self.segments:
             if callable(seg.active_ids):
                 return False
-            if seg.probes:
-                return False
             for e in seg.links:
                 if e.coupling_mode not in _COUPLING_MODES:
                     return False
@@ -613,10 +605,10 @@ class MultiRuntime:
             for sid in range(n_subs):
                 sub = self.substrates[sid]
                 p = sub.params
-                nu = np.ascontiguousarray(np.asarray(p.nu, dtype=np.float64))
-                lam = np.ascontiguousarray(np.asarray(p.lam, dtype=np.float64))
-                M = int(nu.shape[0])
-                psi = np.ascontiguousarray(asnumpy(sub.psi).astype(np.complex128).ravel())
+                nu = _ct_f64(p.nu)
+                lam = _ct_f64(p.lam)
+                M = len(p.nu)
+                psi = _ct_cplx(sub.psi)
                 name_b = sub.name.encode()
                 vext_b = b'harmonic' if p.V_ext == 'harmonic' else b'none'
                 keep.extend([nu, lam, psi, name_b, vext_b])
@@ -627,15 +619,15 @@ class MultiRuntime:
                     float(p.Gamma), float(sub.f_FDT_e),
                     1 if getattr(p, 'fdt_couple', False) else 0,
                     float(getattr(p, 'kT', 1.0)), M,
-                    nu.ctypes.data_as(_ct.POINTER(_ct.c_double)),
-                    lam.ctypes.data_as(_ct.POINTER(_ct.c_double)),
+                    _ct.cast(nu, _ct.POINTER(_ct.c_double)),
+                    _ct.cast(lam, _ct.POINTER(_ct.c_double)),
                     2, int(p.seed) & 0xFFFFFFFFFFFFFFFF, vext_b,
-                    psi.ctypes.data_as(_ct.POINTER(_CCplx)))
+                    _ct.cast(psi, _ct.POINTER(_CCplx)))
                 if rid != sid:
                     raise RuntimeError(f'ponte nativa: substrato id {rid} != {sid}')
-                vex = np.ascontiguousarray(asnumpy(sub.V_ext_static), dtype=np.float64).ravel()
+                vex = _ct_f64(sub.V_ext_static)
                 keep.append(vex)
-                rc = lib.triad_mr_set_v_ext(rt, sid, vex.ctypes.data_as(_ct.POINTER(_ct.c_double)))
+                rc = lib.triad_mr_set_v_ext(rt, sid, _ct.cast(vex, _ct.POINTER(_ct.c_double)))
                 if rc != 0:
                     raise RuntimeError(f'ponte nativa: set_v_ext falhou para substrato {sid}')
             for seg in self.segments:

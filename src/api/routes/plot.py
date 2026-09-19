@@ -82,6 +82,10 @@ def _run_plot_sync(req: PlotRequest) -> dict:
         p.L = req.L
         p.dt = req.dt
         p.T = req.T
+        _set = req.model_fields_set if hasattr(req, 'model_fields_set') else set()
+        for _k in ('Lambda', 'Gamma', 'sigma', 'alpha', 'f_FDT', 'V_ext'):
+            if _k in _set:
+                setattr(p, _k, getattr(req, _k))
     else:
         p = TriadParams(
             N=req.N, L=req.L, dt=req.dt, T=req.T,

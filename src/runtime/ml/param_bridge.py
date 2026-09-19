@@ -17,12 +17,16 @@ class ParamBridge:
 
     def register(self, field_name: str, param: TriadTensor, reducer: str = 'mean'):
 
+        from dataclasses import fields as _dc_fields
+        _valid = {f.name for f in _dc_fields(TriadParams)}
+        if field_name not in _valid:
+            raise ValueError(f'unknown TriadParams field {field_name!r}; valid: {sorted(_valid)}')
         if callable(reducer):
             fn = reducer
         elif reducer == 'mean':
             fn = lambda d: float(np.mean(d))
         elif reducer == 'first':
-            fn = lambda d: float(d.flat[0])
+            fn = lambda d: float(np.asarray(d).reshape(-1)[0])
         elif reducer == 'tuple':
             fn = lambda d: tuple(float(v) for v in np.asarray(d).reshape(-1))
         elif reducer == 'array':

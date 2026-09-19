@@ -5,10 +5,13 @@
 #include <math.h>
 
 TriadTuple *triad_tuple_new(int32_t len) {
+    if (len < 0) return NULL;
     TriadTuple *t = calloc(1, sizeof(TriadTuple));
+    if (!t) return NULL;
     t->refcount = 1;
     t->len = len;
-    t->items = len > 0 ? calloc(len, sizeof(TriadValue)) : NULL;
+    t->items = len > 0 ? calloc((size_t)len, sizeof(TriadValue)) : NULL;
+    if (len > 0 && !t->items) { free(t); return NULL; }
     if (t->items) {
         for (int32_t i = 0; i < len; i++) t->items[i] = TRIAD_NONE_VAL;
     }
@@ -59,11 +62,14 @@ int32_t triad_tuple_hash(TriadTuple *t) {
 }
 
 TriadBytes *triad_bytes_new(const uint8_t *data, int32_t len) {
+    if (len < 0) return NULL;
     TriadBytes *b = calloc(1, sizeof(TriadBytes));
+    if (!b) return NULL;
     b->refcount = 1;
     b->len = len;
-    b->data = len > 0 ? malloc(len) : NULL;
-    if (b->data && data) memcpy(b->data, data, len);
+    b->data = len > 0 ? malloc((size_t)len) : NULL;
+    if (len > 0 && !b->data) { free(b); return NULL; }
+    if (b->data && data) memcpy(b->data, data, (size_t)len);
     return b;
 }
 
@@ -115,6 +121,7 @@ TriadString *triad_bytes_repr(TriadBytes *b) {
 
 TriadComplex *triad_complex_new(double re, double im) {
     TriadComplex *c = calloc(1, sizeof(TriadComplex));
+    if (!c) return NULL;
     c->refcount = 1;
     c->re = re;
     c->im = im;
@@ -131,20 +138,25 @@ double triad_complex_abs(TriadComplex *c) {
 }
 
 TriadComplex *triad_complex_add(TriadComplex *a, TriadComplex *b) {
+    if (!a || !b) return NULL;
     return triad_complex_new(a->re + b->re, a->im + b->im);
 }
 
 TriadComplex *triad_complex_sub(TriadComplex *a, TriadComplex *b) {
+    if (!a || !b) return NULL;
     return triad_complex_new(a->re - b->re, a->im - b->im);
 }
 
 TriadComplex *triad_complex_mul(TriadComplex *a, TriadComplex *b) {
+    if (!a || !b) return NULL;
     return triad_complex_new(a->re * b->re - a->im * b->im,
                              a->re * b->im + a->im * b->re);
 }
 
 TriadComplex *triad_complex_div(TriadComplex *a, TriadComplex *b) {
+    if (!a || !b) return NULL;
     double denom = b->re * b->re + b->im * b->im;
+    if (denom == 0.0) return NULL;
     return triad_complex_new((a->re * b->re + a->im * b->im) / denom,
                              (a->im * b->re - a->re * b->im) / denom);
 }
@@ -184,10 +196,12 @@ static int32_t _set_hash_value(TriadValue v) {
 
 TriadSet *triad_set_new(void) {
     TriadSet *s = calloc(1, sizeof(TriadSet));
+    if (!s) return NULL;
     s->refcount = 1;
     s->len = 0;
     s->cap = TRIAD_SET_INIT_CAP;
-    s->entries = calloc(s->cap, sizeof(TriadSetEntry));
+    s->entries = calloc((size_t)s->cap, sizeof(TriadSetEntry));
+    if (!s->entries) { free(s); return NULL; }
     return s;
 }
 
@@ -203,10 +217,13 @@ void triad_set_free(TriadSet *s) {
 }
 
 static void _set_grow(TriadSet *s) {
+    if (!s || !s->entries || s->cap < 1) return;
     int32_t old_cap = s->cap;
     TriadSetEntry *old = s->entries;
+    TriadSetEntry *fresh = calloc((size_t)old_cap * 2, sizeof(TriadSetEntry));
+    if (!fresh) return;
     s->cap = old_cap * 2;
-    s->entries = calloc(s->cap, sizeof(TriadSetEntry));
+    s->entries = fresh;
     s->len = 0;
     for (int32_t i = 0; i < old_cap; i++) {
         if (old[i].used) {
@@ -217,20 +234,21 @@ static void _set_grow(TriadSet *s) {
 }
 
 void triad_set_add(TriadSet *s, TriadValue v) {
-    if (!s) return;
+    if (!s || !s->entries || s->cap < 1) return;
     if (s->len * 2 >= s->cap) _set_grow(s);
+    if (!s->entries || s->cap < 1) return;
     int32_t h = _set_hash_value(v);
     int32_t idx = h & (s->cap - 1);
     for (int32_t i = 0; i < s->cap; i++) {
-        int32_t probe = (idx + i) & (s->cap - 1);
-        if (!s->entries[probe].used) {
-            s->entries[probe].key = v;
-            s->entries[probe].hash = h;
-            s->entries[probe].used = true;
+        int32_t slot = (idx + i) & (s->cap - 1);
+        if (!s->entries[slot].used) {
+            s->entries[slot].key = v;
+            s->entries[slot].hash = h;
+            s->entries[slot].used = true;
             s->len++;
             return;
         }
-        if (s->entries[probe].hash == h && triad_value_eq(s->entries[probe].key, v)) {
+        if (s->entries[slot].hash == h && triad_value_eq(s->entries[slot].key, v)) {
 
             return;
         }
@@ -238,13 +256,13 @@ void triad_set_add(TriadSet *s, TriadValue v) {
 }
 
 bool triad_set_has(TriadSet *s, TriadValue v) {
-    if (!s) return false;
+    if (!s || !s->entries || s->cap < 1) return false;
     int32_t h = _set_hash_value(v);
     int32_t idx = h & (s->cap - 1);
     for (int32_t i = 0; i < s->cap; i++) {
-        int32_t probe = (idx + i) & (s->cap - 1);
-        if (!s->entries[probe].used) return false;
-        if (s->entries[probe].hash == h && triad_value_eq(s->entries[probe].key, v))
+        int32_t slot = (idx + i) & (s->cap - 1);
+        if (!s->entries[slot].used) return false;
+        if (s->entries[slot].hash == h && triad_value_eq(s->entries[slot].key, v))
             return true;
     }
     return false;
@@ -277,6 +295,7 @@ bool triad_set_eq(TriadSet *a, TriadSet *b) {
 
 TriadGenerator *triad_generator_new(void) {
     TriadGenerator *g = calloc(1, sizeof(TriadGenerator));
+    if (!g) return NULL;
     g->refcount = 1;
     g->state = 0;
     g->current = TRIAD_NONE_VAL;
@@ -296,7 +315,9 @@ TriadValue triad_generator_next(TriadGenerator *g) {
         return TRIAD_NONE_VAL;
     }
     TriadValue v = g->next_fn(g);
+    triad_release(&g->current);
     g->current = v;
+    triad_retain(&g->current);
     return v;
 }
 
@@ -326,6 +347,9 @@ static _ClassMetaEntry *_class_meta_registry = NULL;
 TriadClassMeta *triad_class_meta_new(const char *name, TriadClassMeta *parent,
                                       const char **fields, int32_t fields_len) {
     TriadClassMeta *cm = (TriadClassMeta *)calloc(1, sizeof(TriadClassMeta));
+    if (!cm) return NULL;
+    if (!name) { free(cm); return NULL; }
+    if (fields_len < 0 || (fields_len > 0 && !fields)) { free(cm); return NULL; }
     cm->name = name;
     cm->parent = parent;
     cm->fields = fields;
@@ -348,6 +372,7 @@ void triad_class_meta_free(TriadClassMeta *cm) {
 void triad_class_meta_register(TriadClassMeta *cm) {
     if (!cm) return;
     _ClassMetaEntry *entry = (_ClassMetaEntry *)calloc(1, sizeof(_ClassMetaEntry));
+    if (!entry) return;
     entry->meta = cm;
     entry->next = _class_meta_registry;
     _class_meta_registry = entry;
@@ -355,8 +380,9 @@ void triad_class_meta_register(TriadClassMeta *cm) {
 
 TriadClassMeta *triad_class_meta_lookup(const char *name) {
     _ClassMetaEntry *cur = _class_meta_registry;
+    if (!name) return NULL;
     while (cur) {
-        if (cur->meta->name && strcmp(cur->meta->name, name) == 0)
+        if (cur->meta && cur->meta->name && strcmp(cur->meta->name, name) == 0)
             return cur->meta;
         cur = cur->next;
     }
@@ -383,14 +409,16 @@ TriadClassMeta *triad_class_meta_get_parent(TriadClassMeta *cm) {
 
 TriadValue triad_object_new_typed(const char *type_name, TriadClassMeta *cm) {
     TriadObject *o = triad_object_new(type_name);
+    if (!o) return TRIAD_NONE_VAL;
     o->class_meta = cm;
     return (TriadValue){.tag = TRIAD_OBJECT, .as = {.oval = o}};
 }
 
 TriadValue _triad_super(int32_t nargs, TriadValue *args) {
 
-    if (nargs >= 2 && args[0].tag == TRIAD_OBJECT && args[1].tag == TRIAD_STRING) {
+    if (nargs >= 2 && args && args[0].tag == TRIAD_OBJECT && args[1].tag == TRIAD_STRING) {
         TriadObject *self_obj = args[0].as.oval;
+        if (!self_obj || !args[1].as.sval || !args[1].as.sval->data) return TRIAD_NONE_VAL;
         const char *cls_name = args[1].as.sval->data;
         TriadClassMeta *cm = triad_class_meta_lookup(cls_name);
         if (cm && cm->parent) {

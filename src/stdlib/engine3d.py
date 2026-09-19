@@ -141,7 +141,7 @@ class Engine3D:
             return 0
         from runtime.backend import asnumpy
         psi = asnumpy(self._sub.psi)
-        return int(atom_count_nd(psi, self.dx, threshold_frac=threshold_frac))
+        return int(atom_count_nd(psi, self.dx, threshold_frac=threshold_frac, dim=3))
 
     def mass_in_sphere(self, center, radius: float) -> float:
         cx, cy, cz = (float(v) for v in center)

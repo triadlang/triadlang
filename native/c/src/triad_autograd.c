@@ -40,14 +40,21 @@ static void _ctx_free_plain(void *ctx) {
 }
 
 TriadTensor *triad_tensor_new(int32_t ndim, const int32_t *shape, int requires_grad) {
+    if (ndim < 1 || !shape) return NULL;
+    for (int i = 0; i < ndim; i++) {
+        if (shape[i] < 1) return NULL;
+    }
     TriadTensor *t = calloc(1, sizeof(TriadTensor));
+    if (!t) return NULL;
     t->ndim = ndim;
-    t->shape = malloc(ndim * sizeof(int32_t));
-    memcpy(t->shape, shape, ndim * sizeof(int32_t));
+    t->shape = malloc((size_t)ndim * sizeof(int32_t));
+    if (!t->shape) { free(t); return NULL; }
+    memcpy(t->shape, shape, (size_t)ndim * sizeof(int32_t));
     int64_t sz = 1;
     for (int i = 0; i < ndim; i++) sz *= shape[i];
     t->size = sz;
-    t->data = calloc(sz, sizeof(double));
+    t->data = calloc((size_t)sz, sizeof(double));
+    if (!t->data) { free(t->shape); free(t); return NULL; }
     t->grad = NULL;
     t->requires_grad = requires_grad;
     t->grad_fn = NULL;
@@ -66,7 +73,8 @@ TriadTensor *triad_tensor_from_data(int32_t ndim, const int32_t *shape,
 
 TriadTensor *triad_tensor_scalar(double val, int requires_grad) {
     int32_t shape[] = {1};
-    TriadTensor *t = triad_tensor_new(0, shape, requires_grad);
+    TriadTensor *t = triad_tensor_new(1, shape, requires_grad);
+    if (!t) return NULL;
     t->size = 1;
     t->data[0] = val;
 
@@ -327,7 +335,7 @@ static void _add_backward(TriadTensor *out) {
 }
 
 TriadTensor *triad_tensor_add(TriadTensor *a, TriadTensor *b) {
-
+    if (!a || !b) return NULL;
     int32_t ndim = a->ndim > b->ndim ? a->ndim : b->ndim;
     int32_t shape[32];
 
@@ -335,6 +343,7 @@ TriadTensor *triad_tensor_add(TriadTensor *a, TriadTensor *b) {
     for (int i = 0; i < ndim; i++) {
         int32_t as = (i >= a_pad && a->shape) ? a->shape[i - a_pad] : 1;
         int32_t bs = (i >= b_pad && b->shape) ? b->shape[i - b_pad] : 1;
+        if (as != bs && as != 1 && bs != 1) return NULL;
         shape[i] = as > bs ? as : bs;
     }
     TriadTensor *out = triad_tensor_new(ndim, shape, 0);
@@ -389,12 +398,14 @@ static void _sub_backward(TriadTensor *out) {
 }
 
 TriadTensor *triad_tensor_sub(TriadTensor *a, TriadTensor *b) {
+    if (!a || !b) return NULL;
     int32_t ndim = a->ndim > b->ndim ? a->ndim : b->ndim;
     int32_t shape[32];
     int32_t a_pad = ndim - a->ndim, b_pad = ndim - b->ndim;
     for (int i = 0; i < ndim; i++) {
         int32_t as = (i >= a_pad && a->shape) ? a->shape[i - a_pad] : 1;
         int32_t bs = (i >= b_pad && b->shape) ? b->shape[i - b_pad] : 1;
+        if (as != bs && as != 1 && bs != 1) return NULL;
         shape[i] = as > bs ? as : bs;
     }
     TriadTensor *out = triad_tensor_new(ndim, shape, 0);
@@ -472,12 +483,14 @@ static void _mul_backward(TriadTensor *out) {
 }
 
 TriadTensor *triad_tensor_mul(TriadTensor *a, TriadTensor *b) {
+    if (!a || !b) return NULL;
     int32_t ndim = a->ndim > b->ndim ? a->ndim : b->ndim;
     int32_t shape[32];
     int32_t a_pad = ndim - a->ndim, b_pad = ndim - b->ndim;
     for (int i = 0; i < ndim; i++) {
         int32_t as = (i >= a_pad && a->shape) ? a->shape[i - a_pad] : 1;
         int32_t bs = (i >= b_pad && b->shape) ? b->shape[i - b_pad] : 1;
+        if (as != bs && as != 1 && bs != 1) return NULL;
         shape[i] = as > bs ? as : bs;
     }
     TriadTensor *out = triad_tensor_new(ndim, shape, 0);
@@ -552,12 +565,14 @@ static void _div_backward(TriadTensor *out) {
 }
 
 TriadTensor *triad_tensor_div(TriadTensor *a, TriadTensor *b) {
+    if (!a || !b) return NULL;
     int32_t ndim = a->ndim > b->ndim ? a->ndim : b->ndim;
     int32_t shape[32];
     int32_t a_pad = ndim - a->ndim, b_pad = ndim - b->ndim;
     for (int i = 0; i < ndim; i++) {
         int32_t as = (i >= a_pad && a->shape) ? a->shape[i - a_pad] : 1;
         int32_t bs = (i >= b_pad && b->shape) ? b->shape[i - b_pad] : 1;
+        if (as != bs && as != 1 && bs != 1) return NULL;
         shape[i] = as > bs ? as : bs;
     }
     TriadTensor *out = triad_tensor_new(ndim, shape, 0);
@@ -668,7 +683,8 @@ static void _matmul_backward(TriadTensor *out) {
 }
 
 TriadTensor *triad_tensor_matmul(TriadTensor *a, TriadTensor *b) {
-
+    if (!a || !b || a->ndim != 2 || b->ndim != 2) return NULL;
+    if (a->shape[1] != b->shape[0]) return NULL;
     int32_t M = a->shape[0], K = a->shape[1], N = b->shape[1];
     int32_t shape[] = {M, N};
     TriadTensor *out = triad_tensor_new(2, shape, 0);

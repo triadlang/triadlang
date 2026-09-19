@@ -19,6 +19,6 @@ typedef struct {
 } StackFrame;
 
 int triad_stack_check_frame(StackFrame *frame);
-void triad_stack_panic(const char *msg);
+void triad_stack_panic(const char *msg) __attribute__((noreturn));
 
 #endif

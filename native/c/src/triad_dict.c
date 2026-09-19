@@ -26,7 +26,7 @@ void triad_dict_free(TriadDict *d) {
     free(d);
 }
 
-static int32_t dict_probe(TriadDict *d, TriadString *key, int32_t hash, bool *found) {
+static int32_t dict_locate(TriadDict *d, TriadString *key, int32_t hash, bool *found) {
     int32_t idx = hash % d->cap;
     if (idx < 0) idx += d->cap;
     int32_t first_tomb = -1;
@@ -60,7 +60,7 @@ static void dict_grow(TriadDict *d) {
     for (int32_t i = 0; i < oldcap; i++) {
         if (old[i].key && !is_tombstone(old[i].key)) {
             bool found;
-            int32_t pos = dict_probe(d, old[i].key, old[i].hash, &found);
+            int32_t pos = dict_locate(d, old[i].key, old[i].hash, &found);
             d->entries[pos] = old[i];
             d->len++;
         }
@@ -72,7 +72,7 @@ TriadValue triad_dict_get(TriadDict *d, TriadString *key) {
     if (!d || !key) return TRIAD_NONE_VAL;
     int32_t hash = triad_str_hash(key);
     bool found;
-    int32_t pos = dict_probe(d, key, hash, &found);
+    int32_t pos = dict_locate(d, key, hash, &found);
     if (!found || pos < 0) return TRIAD_NONE_VAL;
     return d->entries[pos].value;
 }
@@ -84,9 +84,10 @@ void triad_dict_set(TriadDict *d, TriadString *key, TriadValue val) {
 
     int32_t hash = triad_str_hash(key);
     bool found;
-    int32_t pos = dict_probe(d, key, hash, &found);
+    int32_t pos = dict_locate(d, key, hash, &found);
 
-    if (pos < 0) { dict_grow(d); pos = dict_probe(d, key, hash, &found); }
+    if (pos < 0) { dict_grow(d); pos = dict_locate(d, key, hash, &found); }
+    if (pos < 0) return;
 
     if (found) {
         triad_release(&d->entries[pos].value);
@@ -109,7 +110,7 @@ bool triad_dict_has(TriadDict *d, TriadString *key) {
     if (!d || !key) return false;
     int32_t hash = triad_str_hash(key);
     bool found;
-    dict_probe(d, key, hash, &found);
+    dict_locate(d, key, hash, &found);
     return found;
 }
 
@@ -117,7 +118,7 @@ void triad_dict_del(TriadDict *d, TriadString *key) {
     if (!d || !key) return;
     int32_t hash = triad_str_hash(key);
     bool found;
-    int32_t pos = dict_probe(d, key, hash, &found);
+    int32_t pos = dict_locate(d, key, hash, &found);
     if (!found || pos < 0) return;
     triad_str_free(d->entries[pos].key);
     triad_release(&d->entries[pos].value);

@@ -1,16 +1,21 @@
 #include "triad_rt.h"
+#include <limits.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
 void triad_print(int32_t nargs, TriadValue *args) {
+    if (nargs < 0) nargs = 0;
+    if (nargs > 0 && !args) nargs = 0;
     for (int32_t i = 0; i < nargs; i++) {
         if (i > 0) printf(" ");
         TriadString *s = triad_value_to_string(args[i]);
-        printf("%s", s->data);
-        triad_str_free(s);
+        if (s && s->data) printf("%s", s->data);
+        else printf("<error>");
+        if (s) triad_str_free(s);
     }
     printf("\n");
 }
@@ -38,7 +43,7 @@ double triad_math_log10(double x)   { return log10(x); }
 double triad_math_floor(double x)   { return floor(x); }
 double triad_math_ceil(double x)    { return ceil(x); }
 double triad_math_abs(double x)     { return fabs(x); }
-int64_t triad_math_abs_int(int64_t x) { return x < 0 ? -x : x; }
+int64_t triad_math_abs_int(int64_t x) { return (x < 0 && x != INT64_MIN) ? -x : (x == INT64_MIN ? INT64_MAX : x); }
 int64_t triad_math_clamp(int64_t x, int64_t lo, int64_t hi) { return x < lo ? lo : (x > hi ? hi : x); }
 double triad_math_pow(double b, double e) { return pow(b, e); }
 int64_t triad_math_min(int64_t a, int64_t b) { return a < b ? a : b; }

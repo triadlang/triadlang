@@ -8,7 +8,6 @@ static int interface_count = 0;
 static NetSocket sockets[NET_MAX_SOCKETS];
 static int socket_count = 0;
 static ArpEntry arp_table[64];
-static int arp_count = 0;
 
 static uint16_t ip_id = 0;
 static uint32_t tcp_seq = 0;
@@ -31,6 +30,7 @@ NetIp4 net_u32_to_ip4(uint32_t u) {
 
 void net_ip4_to_str(NetIp4 ip, char *buf) {
     int pos = 0;
+    if (!buf) return;
     for (int i = 0; i < 4; i++) {
         int v = ip.bytes[i];
         if (v == 0) {
@@ -46,16 +46,25 @@ void net_ip4_to_str(NetIp4 ip, char *buf) {
 }
 
 int net_str_to_ip4(const char *str, NetIp4 *ip) {
+    if (!str || !ip) return -1;
     int p = 0;
     for (int i = 0; i < 4; i++) {
         int v = 0;
+        int digits = 0;
         while (str[p] >= '0' && str[p] <= '9') {
             v = v * 10 + (str[p] - '0');
+            if (v > 255) return -1;
+            p++;
+            digits++;
+        }
+        if (digits == 0) return -1;
+        ip->bytes[i] = (uint8_t)v;
+        if (i < 3) {
+            if (str[p] != '.') return -1;
             p++;
         }
-        ip->bytes[i] = (uint8_t)v;
-        if (str[p] == '.') p++;
     }
+    if (str[p] != 0) return -1;
     return 0;
 }
 
@@ -229,7 +238,6 @@ void triad_net_arp_process(const uint8_t *data, uint16_t len) {
 
     uint16_t htype = (data[0] << 8) | data[1];
     uint16_t ptype = (data[2] << 8) | data[3];
-    uint16_t oper = (data[6] << 8) | data[7];
 
     if (htype != 1 || ptype != 0x0800) return;
 
@@ -542,6 +550,7 @@ int triad_net_tcp_recv(int sock_id, uint8_t *buf, uint16_t max) {
 }
 
 void triad_net_tcp_process(const uint8_t *data, uint16_t len, NetIp4 src, int if_id) {
+    (void)if_id;
     if (len < 20) return;
 
     uint16_t src_port = (data[0] << 8) | data[1];
@@ -655,6 +664,7 @@ int triad_net_udp_recv(int sock_id, uint8_t *buf, uint16_t max, NetIp4 *src, uin
 }
 
 void triad_net_udp_process(const uint8_t *data, uint16_t len, NetIp4 src, int if_id) {
+    (void)if_id;
     if (len < 8) return;
 
     uint16_t src_port = (data[0] << 8) | data[1];

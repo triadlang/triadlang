@@ -3,12 +3,12 @@ from __future__ import annotations
 from triad import ntri as np
 
 
-def atom_count_nd(psi, dx: float, threshold_frac: float | None = None) -> float:
+def atom_count_nd(psi, dx: float, threshold_frac: float | None = None, dim: int = 1) -> float:
     density = np.abs(psi) ** 2
     if threshold_frac is not None and threshold_frac > 0:
         threshold = density.max() * threshold_frac
         density = density * (density > threshold)
-    return float(np.sum(density) * dx)
+    return float(np.sum(density) * (dx ** dim))
 
 def atom_distribution(psi, dx: float = 0.1) -> np.ndarray:
     density = np.abs(psi) ** 2

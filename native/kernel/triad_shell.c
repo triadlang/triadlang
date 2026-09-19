@@ -169,7 +169,6 @@ static void shell_run(const char *path) {
     }
     buf[n] = 0;
 
-    /* TriadInterp is ~600 KiB: heap, not the 16 KiB kernel stack. */
     TriadInterp *interp = (TriadInterp *)triad_mm_alloc(sizeof(TriadInterp));
     if (!interp) {
         triad_serial_puts("out of memory\n");

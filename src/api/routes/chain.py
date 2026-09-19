@@ -24,10 +24,11 @@ class WalletReq(BaseModel):
 @router.get('/')
 def get_chain():
     ch = _chain()
+    head = ch.blocks[-1].hash if ch.blocks else None
     return {
         'blocks': len(ch.blocks),
         'difficulty': ch.difficulty,
-        'head': ch.blocks[-1].hash,
+        'head': head,
         'mempool': len(_state['mempool']),
         'chain': [{'index': b.index, 'hash': b.hash, 'nonce': b.nonce,
                    'seal': b.seal, 'txs': len(b.txs)} for b in ch.blocks],

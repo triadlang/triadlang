@@ -10,8 +10,14 @@ from triad import ntri as np
 def _serialize_param(data: np.ndarray) -> dict:
     return {'shape': list(data.shape), 'dtype': str(data.dtype), 'data': data.tolist()}
 
+_SAFE_DTYPES = ('float64', 'float32', 'float16', 'int64', 'int32')
+
 def _deserialize_param(d: dict) -> np.ndarray:
-    return np.array(d['data'], dtype=np.float64).reshape(d['shape'])
+    dtype = d.get('dtype', 'float64')
+    if dtype not in _SAFE_DTYPES:
+        dtype = 'float64'
+    arr = np.array(d['data'], dtype=getattr(np, dtype)).reshape(d['shape'])
+    return arr
 
 def save_weights(model: Module, path: str):
     Path(path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
@@ -25,12 +31,19 @@ def save_weights(model: Module, path: str):
 
 def load_weights(model: Module, path: str):
     payload = json.loads(Path(path).read_text())
+    if payload.get('meta', {}).get('format_version') != 1:
+        raise ValueError('unsupported weights format version')
     state = payload['state']
     params = model.parameters()
+    if len(state) != len(params):
+        raise ValueError(f'weights mismatch: file has {len(state)} params, model has {len(params)}')
     for i, p in enumerate(params):
         key = f'param_{i}'
         if key in state:
-            p._data = _deserialize_param(state[key])
+            arr = _deserialize_param(state[key])
+            if arr.shape != p._data.shape:
+                raise ValueError(f'weights mismatch for {key}: file {arr.shape} vs model {p._data.shape}')
+            p._data = arr.astype(p._data.dtype, copy=False)
 
 def save_checkpoint(model: Module, optimizer, path: str, extra: dict | None=None):
     params = model.parameters()

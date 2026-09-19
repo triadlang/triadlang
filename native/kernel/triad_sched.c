@@ -37,6 +37,7 @@ TriadThread *triad_sched_current(void) {
 }
 
 int triad_sched_spawn(TriadThread *t) {
+    if (!t) return -1;
     for (int i = 0; i < MAX_THREADS; i++) {
         if (threads[i].state == THREAD_DEAD) {
             threads[i] = *t;
@@ -65,9 +66,6 @@ static int find_next_thread(void) {
 void triad_sched_tick(void) {
     global_ticks++;
 
-    /* Never touch current_tid here: the actual switch happens on the IRQ
-     * frame path (isr_handler -> triad_sched_do_switch), which is the only
-     * place that can also switch stacks. */
     TriadThread *current = &threads[current_tid];
     if (current->state != THREAD_RUNNING) {
         needs_context_switch = 1;
@@ -118,7 +116,6 @@ void triad_sched_exit(int thread_id) {
     threads[thread_id].state = THREAD_DEAD;
     if (n_threads > 0) n_threads--;
     if (thread_id == current_tid) {
-        /* The next timer tick sees a non-RUNNING current and switches away. */
         needs_context_switch = 1;
     }
 }
@@ -139,32 +136,29 @@ int triad_thread_create(TriadThread *t, void (*entry)(void *), void *arg) {
     t->quantum_ticks = TIMER_HZ / 10;
     t->total_ticks = 0;
 
-    /* Synthetic IRQ frame on the thread's own stack: the timer epilogue
-     * pops GPRs, skips int/err and iretq's into thread_entry_wrapper.
-     * SysV ABI: rdi = entry (1st arg), rsi = arg (2nd arg). */
     uint64_t *sp = (uint64_t *)((uint8_t *)stack + STACK_SIZE);
-    *--sp = 0x10;                                        // ss
-    *--sp = (uint64_t)((uint8_t *)stack + STACK_SIZE) - 8; // rsp (entry rsp%16 == 8)
-    *--sp = 0x202;                                       // rflags: IF=1
-    *--sp = 0x08;                                        // cs
-    *--sp = (uint64_t)thread_entry_wrapper;              // rip
-    *--sp = 0;                                           // err
-    *--sp = 0;                                           // int_no
-    *--sp = 0;                                           // rax
-    *--sp = 0;                                           // rbx
-    *--sp = 0;                                           // rcx
-    *--sp = 0;                                           // rdx
-    *--sp = 0;                                           // rbp
-    *--sp = (uint64_t)arg;                               // rsi
-    *--sp = (uint64_t)entry;                             // rdi
-    *--sp = 0;                                           // r8
-    *--sp = 0;                                           // r9
-    *--sp = 0;                                           // r10
-    *--sp = 0;                                           // r11
-    *--sp = 0;                                           // r12
-    *--sp = 0;                                           // r13
-    *--sp = 0;                                           // r14
-    *--sp = 0;                                           // r15
+    *--sp = 0x10;
+    *--sp = (uint64_t)((uint8_t *)stack + STACK_SIZE) - 8;
+    *--sp = 0x202;
+    *--sp = 0x08;
+    *--sp = (uint64_t)thread_entry_wrapper;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = (uint64_t)arg;
+    *--sp = (uint64_t)entry;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
 
     t->ctx.rsp = (uint64_t)sp;
     t->ctx.rip = (uint64_t)thread_entry_wrapper;
@@ -239,7 +233,6 @@ void triad_sched_do_switch(void) {
         return;
     }
 
-    /* Only a still-running thread becomes READY; DEAD/BLOCKED stay as-is. */
     if (threads[current_tid].state == THREAD_RUNNING)
         threads[current_tid].state = THREAD_READY;
     current_tid = next;

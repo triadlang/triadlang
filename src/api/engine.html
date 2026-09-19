@@ -90,7 +90,6 @@ const $ = id => document.getElementById(id);
 for (const k of ['sx','sy','sz','svx','svy'])
   $(k).addEventListener('input', () => $(k + 'v').textContent = $(k).value);
 
-// ── three ───────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x07090d);
 const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 400);
@@ -110,7 +109,6 @@ let box = new THREE.LineSegments(
   new THREE.LineBasicMaterial({ color: 0x22304a }));
 scene.add(box);
 
-// nuvem de densidade
 let cloud = null, potCloud = null;
 const atomMeshes = new THREE.Group(); scene.add(atomMeshes);
 const atomGeo = new THREE.SphereGeometry(0.42, 18, 14);
@@ -168,7 +166,6 @@ function setAtoms(atoms) {
   });
 }
 
-// ── api ─────────────────────────────────────────────────────────────
 let SID = null, playing = false, busy = false;
 const api = (path, body, method) =>
   fetch('/engine3d' + path, {
@@ -193,6 +190,7 @@ async function refreshField() {
 async function newWorld(preset) {
   playing = false; $('btnPlay').textContent = 'play';
   $('msg').textContent = 'creating world…';
+  try {
   if (SID) api(`/${SID}`, undefined, 'DELETE').catch(() => {});
   const st = await api('/create', { N: +$('wN').value, L: 16.0, seed: +$('wSeed').value });
   SID = st.session;
@@ -211,6 +209,7 @@ async function newWorld(preset) {
   hud(await api(`/${SID}/state`));
   await refreshField();
   $('msg').textContent = `session ${SID} · drag to orbit, scroll to zoom`;
+  } catch (e) { $('msg').textContent = 'error: ' + (e && e.message || e); }
 }
 
 async function doStep() {
@@ -219,7 +218,8 @@ async function doStep() {
   try {
     hud(await api(`/${SID}/step`, { dt: 0.1 }));
     await refreshField();
-  } finally { busy = false; }
+  } catch (e) { $('msg').textContent = 'error: ' + (e && e.message || e); }
+  finally { busy = false; }
 }
 
 $('btnNew').onclick   = () => newWorld();

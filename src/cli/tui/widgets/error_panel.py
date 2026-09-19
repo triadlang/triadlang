@@ -16,13 +16,18 @@ def format_error(msg: str, source: str = "", file_path: str = "") -> Panel:
 
     lex_match = re.search(r'error\[LEX\]:\s*(.*)', msg, re.IGNORECASE)
     parse_match = re.search(r'ERROR\[PARSE\]:\s*(.*)', msg, re.IGNORECASE)
-    line_match = re.search(r'L(\d+)', msg)
-    col_match = re.search(r'C(\d+)', msg)
+    pos_match = re.search(r'L(\d+):C(\d+)', msg)
+    line_match = re.search(r'line:\s*(\d+)', msg, re.IGNORECASE)
+    col_match = re.search(r'col:\s*(\d+)', msg, re.IGNORECASE)
 
-    if line_match:
-        err_line = int(line_match.group(1))
-    if col_match:
-        err_col = int(col_match.group(1))
+    if pos_match:
+        err_line = int(pos_match.group(1))
+        err_col = int(pos_match.group(2))
+    else:
+        if line_match:
+            err_line = int(line_match.group(1))
+        if col_match:
+            err_col = int(col_match.group(1))
 
     if lex_match:
         err_type = "LexError"

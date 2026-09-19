@@ -14,13 +14,21 @@ PY_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.pat
 if PY_ROOT not in sys.path:
     sys.path.insert(0, PY_ROOT)
 
-_REGIMES = [
-    'B0', 'dispersive', 'anti_collapse', 'R5_crystal', '_pure',
-    'B0_3d', 'B0_2d', 'memory_heavy', 'HodgkinHuxley', 'ENSO_recharge',
-    'England_autopoietic', 'Eigen_hypercycle', 'Belousov_Zhabotinsky',
-    'LSV_market', 'MaxwellWiechert', 'Cepheid_pulsator',
-    'DarkMatter_halo', 'Cosmological_inflation',
-]
+def _default_regimes() -> list[str]:
+    try:
+        from stdlib.regimes import list_regimes
+        return list_regimes()
+    except Exception:
+        return [
+            'B0', 'dispersive', 'anti_collapse', 'R5_crystal', '_pure',
+            'B0_3d', 'HodgkinHuxley', 'ENSO_recharge',
+            'England_autopoietic', 'Eigen_hypercycle', 'Belousov_Zhabotinsky',
+            'LSV_market', 'MaxwellWiechert', 'Cepheid_pulsator',
+            'DarkMatter_halo', 'Cosmological_inflation',
+        ]
+
+
+_REGIMES = _default_regimes()
 
 _OBSERVABLES = ['k_star', 'crystallinity', 'peak', 'atom_count', 'norm', 'ipr', 'fwhm']
 
@@ -56,8 +64,8 @@ class SolverScreen(Screen):
                     yield Input(placeholder="T", value="18.0", id="solver-t")
                     yield Input(placeholder="dt", value="0.005", id="solver-dt")
                     yield Input(placeholder="L", value="32.0", id="solver-l")
-                    yield Input(placeholder="Lambda", value="0.5", id="solver-lambda")
-                    yield Input(placeholder="Gamma", value="0.01", id="solver-gamma")
+                    yield Input(placeholder="Lambda (manual mode only)", value="", id="solver-lambda")
+                    yield Input(placeholder="Gamma (manual mode only)", value="", id="solver-gamma")
                     with Horizontal():
                         yield Button("+ Region", variant="success", id="solver-add-reg")
                         yield Button("Remove", variant="error", id="solver-rm-reg")
@@ -189,6 +197,12 @@ class SolverScreen(Screen):
                 params.T = T
             else:
                 params = TriadParams(N=N, T=T, L=L, dt=dt)
+                lam_str = self.query_one("#solver-lambda", Input).value.strip()
+                gam_str = self.query_one("#solver-gamma", Input).value.strip()
+                if lam_str:
+                    params.Lambda = float(lam_str)
+                if gam_str:
+                    params.Gamma = float(gam_str)
             result = integrate(params)
             psi = result['psi_final'].ravel()
             dx = float(result.get('dx', L / N))

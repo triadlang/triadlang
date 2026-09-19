@@ -1,7 +1,3 @@
-/* Minimal freestanding string/memory declarations for kernel cross-compiles.
- * The implementation is provided by triad_string.c.
- */
-
 #ifndef TRIAD_KERNEL_STRING_H
 #define TRIAD_KERNEL_STRING_H
 

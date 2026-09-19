@@ -8,6 +8,7 @@ from compiler.ir import (
     IRBool,
     IRCall,
     IRConst,
+    IRElvis,
     IRExprStmt,
     IRField,
     IRFloat,
@@ -19,6 +20,10 @@ from compiler.ir import (
     IRLet,
     IRList,
     IRModule,
+    IRNullish,
+    IROptChain,
+    IRCompoundAssign,
+    IRRegex,
     IRReturn,
     IRString,
     IRUnaryOp,
@@ -105,6 +110,19 @@ def fold_expr(node):
         return IRIndex(obj=fold_expr(node.obj), index=fold_expr(node.index))
     if isinstance(node, IRField):
         return IRField(obj=fold_expr(node.obj), field=node.field)
+    if isinstance(node, IRNullish):
+        return IRNullish(left=fold_expr(node.left), right=fold_expr(node.right))
+    if isinstance(node, IRElvis):
+        return IRElvis(cond=fold_expr(node.cond), else_val=fold_expr(node.else_val))
+    if isinstance(node, IROptChain):
+        return IROptChain(obj=fold_expr(node.obj), kind=node.kind, name=node.name,
+                          args=[fold_expr(a) for a in node.args],
+                          kwargs={k: fold_expr(v) for k, v in node.kwargs.items()},
+                          index=fold_expr(node.index) if node.index is not None else None)
+    if isinstance(node, IRRegex):
+        return node
+    if isinstance(node, IRCompoundAssign):
+        return IRCompoundAssign(target=fold_expr(node.target), op=node.op, value=fold_expr(node.value))
     return node
 
 def _fold_stmt(stmt):

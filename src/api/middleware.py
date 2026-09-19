@@ -62,6 +62,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         hist = [t for t in hist if now - t < self.window]
         hist.append(now)
         self._history[key] = hist
+        if len(self._history) > 10000:
+            oldest = sorted(self._history, key=lambda k: self._history[k][-1] if self._history[k] else 0)[:1000]
+            for k in oldest:
+                self._history.pop(k, None)
         if len(hist) > self.max_requests:
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,

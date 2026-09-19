@@ -52,6 +52,7 @@ typedef struct TriadBytes   TriadBytes;
 typedef struct TriadComplex TriadComplex;
 typedef struct TriadSet     TriadSet;
 typedef struct TriadGenerator TriadGenerator;
+typedef struct TriadRegex TriadRegex;
 
 typedef enum {
     TRIAD_NONE = 0,
@@ -73,6 +74,7 @@ typedef enum {
     TRIAD_COMPLEX,
     TRIAD_SET,
     TRIAD_GENERATOR,
+    TRIAD_REGEX,
 } TriadTag;
 
 struct TriadString {
@@ -105,6 +107,7 @@ struct TriadValue {
         TriadComplex  *cvalp;
         TriadSet      *sset;
         TriadGenerator *gval;
+        TriadRegex *rxval;
     } as;
 };
 
@@ -114,6 +117,7 @@ struct TriadValue {
 #define TRIAD_FLOAT(v)    ((TriadValue){.tag = TRIAD_FLOAT, .as = {.fval = (v)}})
 #define TRIAD_PTR_VAL(p)  ((TriadValue){.tag = TRIAD_PTR, .as = {.ptr = (void*)(p)}})
 #define TRIAD_PYOBJ_VAL(p) ((TriadValue){.tag = TRIAD_PYOBJ, .as = {.ptr = (void*)(p)}})
+#define TRIAD_REGEX_VAL(p) ((TriadValue){.tag = TRIAD_REGEX, .as = {.rxval = (p)}})
 
 extern TriadString *(*triad_pyobj_str_hook)(void *pyobj);
 extern bool (*triad_pyobj_y_hook)(void *pyobj);
@@ -306,6 +310,15 @@ bool         triad_str_ends_with(TriadString *s, const char *suffix);
 bool         triad_str_contains(TriadString *s, const char *sub);
 int32_t      triad_str_len(TriadString *s);
 TriadString *triad_str_format(const char *fmt, ...);
+
+TriadRegex *triad_regex_compile(const char *pattern, const char *flags);
+void        triad_regex_free(TriadRegex *rx);
+bool        triad_regex_test(TriadRegex *rx, const char *s);
+TriadValue  triad_regex_search(TriadRegex *rx, const char *s);
+TriadValue  triad_regex_match(TriadRegex *rx, const char *s);
+TriadValue  triad_regex_findall(TriadRegex *rx, const char *s);
+const char *triad_regex_pattern(const TriadRegex *rx);
+const char *triad_regex_flags(const TriadRegex *rx);
 
 TriadList  *triad_list_new(void);
 TriadList  *triad_list_new_cap(int32_t cap);

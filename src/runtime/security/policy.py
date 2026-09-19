@@ -24,7 +24,15 @@ class SecurityPolicy:
             raise PermissionError(
                 f'{feature} is disabled in safe mode. use --unsafe to enable it.')
 
+    _KNOWN_CAPABILITIES = frozenset({
+        'py.native', 'ccall', 'process.exec', 'process.spawn',
+        'net.http_get', 'net.http_post', 'net.socket',
+        'env.read', 'env.write', 'fs.remove', 'ml.remote',
+    })
+
     def require_capability(self, name: str, detail: str = ''):
+        if name not in self._KNOWN_CAPABILITIES:
+            raise PermissionError(f'unknown capability {name!r}')
         if name == 'py.native' and not self.capabilities.py_native:
             raise PermissionError('py_native capability not granted' +
                                   (f': {detail}' if detail else ''))
@@ -64,7 +72,6 @@ def default_policy(project_dir: str = '.') -> SecurityPolicy:
 
 
 def set_policy(policy: SecurityPolicy) -> Token:
-    """Set the policy for the current thread/async context only."""
     return _POLICY.set(policy)
 
 
@@ -82,7 +89,6 @@ def reset_policy():
 
 @contextmanager
 def use_policy(policy: SecurityPolicy):
-    """Temporarily activate *policy* without leaking it to other executions."""
     token = _POLICY.set(policy)
     try:
         yield policy

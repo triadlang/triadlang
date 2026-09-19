@@ -56,9 +56,6 @@ from stdlib.templates import (
 )
 
 
-# These nodes belonged to the pre-universal parser and are retained only so
-# old compiler entry points fail with CompileError instead of NameError. New
-# source compilation uses parser_universal + compiler.lower/c_codegen.
 class _RemovedLegacyNode:
     pass
 
@@ -110,11 +107,10 @@ class Compiler:
     def compile(self, prog: Program) -> CompiledProgram:
         try:
             from compiler.typecheck_universal import typecheck
+            from frontend.errors import TypeCheckError
             typecheck(prog)
-        except Exception as e:
-            if e.__class__.__name__ == 'TypeCheckError':
-                raise CompileError('\n'.join(['typecheck errors:'] + e.errors))
-            raise
+        except TypeCheckError as e:
+            raise CompileError('\n'.join(['typecheck errors:'] + list(e.errors)))
         self._apply_annotations(prog)
         self._setup_constants()
         self._walk(prog)
@@ -174,7 +170,7 @@ class Compiler:
                 if k not in allowed:
                     raise CompileError(f'unknown regime override field {k!r} for {name}; allowed: {sorted(allowed)}')
                 if k == 'V_ext' and isinstance(v, str) and v.startswith('__from_file__:'):
-                    arr = np.load(v[len('__from_file__:'):])
+                    arr = np.load(v[len('__from_file__:'):], allow_pickle=False)
 
                     def _vext_from_array(*_coords, _arr=arr):
                         return _arr
@@ -199,11 +195,11 @@ class Compiler:
             enc_type = 'int'
         elif isinstance(value, str) and value.startswith('__from_file__:'):
             path = value[len('__from_file__:'):]
-            psi = np.load(path).astype(np.complex128)
+            psi = np.load(path, allow_pickle=False).astype(np.complex128)
             enc_type = 'int'
         elif isinstance(value, str) and value.startswith('__from_checkpoint__:'):
             path = value[len('__from_checkpoint__:'):]
-            data = np.load(path)
+            data = np.load(path, allow_pickle=False)
             psi = (data.get('psi') if 'psi' in data else data['psi_final']).astype(np.complex128)
             enc_type = 'int'
         elif value is None:
@@ -245,7 +241,10 @@ class Compiler:
     def _gate_kappa(self, gate_type: str) -> float:
         if self.cfg.default_kappa is not None:
             return float(self.cfg.default_kappa)
-        return float(GATE_CATALOGUE[gate_type]['kappa'])
+        try:
+            return float(GATE_CATALOGUE[gate_type]['kappa'])
+        except KeyError:
+            raise CompileError(f"unknown gate {gate_type!r}; available: {sorted(GATE_CATALOGUE)}")
 
     def _gate_bump_amp(self, gate_type: str, fallback: float=-1.0) -> float:
         return float(GATE_CATALOGUE[gate_type].get('bump_amp', fallback))
@@ -359,9 +358,7 @@ class Compiler:
             self._op_arith(op, 'MUL_K')
             return
         if op.opcode == 'DIV':
-            self.op_log.append("DIV placeholder: sem gate DIV_K em GATE_CATALOGUE; usando SUB_K ate definicao fisica")
-            self._op_arith(op, 'SUB_K')
-            return
+            raise CompileError('DIV not implemented: no DIV_K gate in GATE_CATALOGUE; refusing silent SUB substitution')
         if op.opcode == 'AND':
             self._op_logic(op, 'AND_C')
             return
@@ -388,9 +385,6 @@ class Compiler:
             return
         if op.opcode in ('SHIFT_LEFT', 'SHIFT_RIGHT'):
             self._op_shift(op)
-            return
-        if op.opcode == 'PROBE':
-            self._op_probe(op)
             return
         raise CompileError(f'unknown opcode: {op.opcode}')
 
@@ -612,29 +606,6 @@ class Compiler:
         dst_name, dst_id = self._resolve_arg(op.args[0], role='dst')
         src_name, src_id = self._resolve_arg(op.args[1], role='src')
         self._compile_shift_real(op.opcode, dst_name, dst_id, src_name, src_id)
-
-    def _op_probe(self, op: ExprStmt):
-        if not op.args:
-            raise CompileError('PROBE expects (reg [, "label"])')
-        reg_expr = op.args[0]
-        if not isinstance(reg_expr, IdentRef):
-            raise CompileError('PROBE first arg must be an identifier')
-        reg_name = reg_expr.name
-        if reg_name not in self.mm.slots:
-            raise CompileError(f'PROBE: unknown register {reg_name!r}')
-        slot = self.mm.get(reg_name)
-        label = reg_name
-        if len(op.args) >= 2:
-            lbl_expr = op.args[1]
-            if isinstance(lbl_expr, StrLit):
-                label = lbl_expr.value
-            elif isinstance(lbl_expr, IdentRef):
-                label = lbl_expr.name
-        seg = Segment(t_start=self.runtime.global_t, t_end=self.runtime.global_t + self.cfg.dt, links=[], active_ids=set(), probes=[(slot.substrate_id, label)])
-        self.runtime.add_segment(seg)
-        self.runtime.global_t = seg.t_end
-        self._seg_counter += 1
-        self.op_log.append(f'PROBE {reg_name} "{label}"')
 
     def _compile_shift_real(self, opcode: str, dst_name: str, dst_id: int, src_name: str, src_id: int):
         cat = GATE_CATALOGUE[opcode]

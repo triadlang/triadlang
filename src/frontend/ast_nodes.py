@@ -255,7 +255,7 @@ class ThrowStmt:
 
 @dataclass
 class WithStmt:
-    expr: Expr = None
+    expr: Expr | None = None
     var: str | None = None
     body: list[Stmt] = field(default_factory=list)
     pos: Pos = field(default_factory=Pos)
@@ -472,7 +472,7 @@ class AsyncForStmt:
 
 @dataclass
 class AsyncWithStmt:
-    expr: Expr = None
+    expr: Expr | None = None
     var: str | None = None
     body: list[Stmt] = field(default_factory=list)
     pos: Pos = field(default_factory=Pos)
@@ -490,7 +490,7 @@ class UnionType:
 
 @dataclass
 class OptionalType:
-    inner: TypeExpr = None
+    inner: TypeExpr | None = None
     pos: Pos = field(default_factory=Pos)
 
 TypeExpr = Union[str, GenericType, UnionType, OptionalType]

@@ -9,9 +9,9 @@ from textual.widgets import Button, Static, TextArea
 
 try:
     from pygments.lexers import get_lexer_by_name
+    from pygments.util import ClassNotFound
     get_lexer_by_name("triad")
-except (ImportError, AttributeError):
-
+except (ImportError, AttributeError, ClassNotFound):
     from pygments.lexers import _mapping
 
     from cli.tui.syntax.triad_lexer import TriadLexer

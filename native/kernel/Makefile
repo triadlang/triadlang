@@ -4,21 +4,21 @@ AS = as
 LD = ld
 
 ifeq ($(UNAME_S),Darwin)
-  KERNEL_CC_X86_ELF := $(shell command -v x86_64-none-elf-gcc 2>/dev/null)
+  KERNEL_CC_X86_ELF := $(shell command -v x86_64-none-elf-gcc)
   ifeq ($(KERNEL_CC_X86_ELF),)
-    KERNEL_CC_X86_ELF := $(shell command -v x86_64-elf-gcc 2>/dev/null)
+    KERNEL_CC_X86_ELF := $(shell command -v x86_64-elf-gcc)
   endif
-  KERNEL_AS_X86_ELF := $(shell command -v x86_64-none-elf-as 2>/dev/null)
+  KERNEL_AS_X86_ELF := $(shell command -v x86_64-none-elf-as)
   ifeq ($(KERNEL_AS_X86_ELF),)
-    KERNEL_AS_X86_ELF := $(shell command -v x86_64-elf-as 2>/dev/null)
+    KERNEL_AS_X86_ELF := $(shell command -v x86_64-elf-as)
   endif
-  KERNEL_LD_X86_ELF := $(shell command -v x86_64-none-elf-ld 2>/dev/null)
+  KERNEL_LD_X86_ELF := $(shell command -v x86_64-none-elf-ld)
   ifeq ($(KERNEL_LD_X86_ELF),)
-    KERNEL_LD_X86_ELF := $(shell command -v x86_64-elf-ld 2>/dev/null)
+    KERNEL_LD_X86_ELF := $(shell command -v x86_64-elf-ld)
   endif
-  KERNEL_OBJCOPY_X86_ELF := $(shell command -v x86_64-none-elf-objcopy 2>/dev/null)
+  KERNEL_OBJCOPY_X86_ELF := $(shell command -v x86_64-none-elf-objcopy)
   ifeq ($(KERNEL_OBJCOPY_X86_ELF),)
-    KERNEL_OBJCOPY_X86_ELF := $(shell command -v x86_64-elf-objcopy 2>/dev/null)
+    KERNEL_OBJCOPY_X86_ELF := $(shell command -v x86_64-elf-objcopy)
   endif
 
   ifneq ($(KERNEL_CC_X86_ELF),)
@@ -33,7 +33,7 @@ ifeq ($(UNAME_S),Darwin)
   ifneq ($(KERNEL_OBJCOPY_X86_ELF),)
     OBJCOPY := $(KERNEL_OBJCOPY_X86_ELF)
   else
-    OBJCOPY := $(shell command -v objcopy 2>/dev/null)
+    OBJCOPY := $(shell command -v objcopy)
   endif
 
   ifeq ($(CC),gcc)
@@ -45,7 +45,7 @@ ifeq ($(UNAME_S),Darwin)
 endif
 
 CFLAGS = -ffreestanding -nostdlib -fno-stack-protector \
-         -fno-pic \
+         -fno-pic -Wa,--noexecstack \
          -Wall -Wextra -O2 \
          -I include -D__KERNEL__
 
@@ -111,6 +111,12 @@ iso: kernel.bin
 	grub-mkrescue -o triados.iso isodir
 
 clean:
-	rm -rf $(OBJDIR) kernel.bin triados.iso isodir
+	rm -rf $(OBJDIR) kernel.bin triados.iso isodir tests/test_aes_host tests/test_sha256_host
 
-.PHONY: all run debug iso clean
+test: tests/test_aes_host.c tests/test_sha256_host.c triad_crypto.c
+	cc -arch x86_64 -Wall -Wextra -O2 -I include tests/test_aes_host.c triad_crypto.c -o tests/test_aes_host
+	./tests/test_aes_host
+	cc -arch x86_64 -Wall -Wextra -O2 -I include tests/test_sha256_host.c triad_crypto.c -o tests/test_sha256_host
+	./tests/test_sha256_host
+
+.PHONY: all run debug iso clean test

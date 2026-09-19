@@ -386,4 +386,34 @@ class IRYieldExpr:
 class IRAwait:
     value: IRNode = None
 
-IRNode = Union[IRModule, IRImport, IRLet, IRConst, IRAssign, IRBinOp, IRUnaryOp, IRCall, IRInt, IRFloat, IRBool, IRString, IRNone, IRIdent, IRIndex, IRField, IRList, IRMap, IRLambda, IRFunction, IRReturn, IRIf, IRFor, IRWhile, IRBreak, IRContinue, IRExprStmt, IRTypeDecl, IREntityDecl, IRWorldDecl, IRRegDecl, IRSubstrateDecl, IRObserve, IRRun, IRCouple, IRPair, IRRing, IRAnnotation, IRSequence, IRWith, IRAssert, IRPass, IRDel, IRAsyncFor, IRAsyncWith, IRMethodCall, IRSlice, IRFString, IRListComp, IRCatchBlock, IRTryCatch, IRThrow, IRDestructLet, IRMapDestruct, IRAssignExpr, IRMatchCase, IRMatch, IRClassDecl, IRYield, IRComplex, IRBytes, IRTuple, IRSet, IRTernary, IRChainCmp, IRSuper, IRDictComp, IRSetComp, IRGenComp, IRYieldExpr, IRAwait, IRCompClause]
+@dataclass
+class IRNullish:
+    left: IRNode = None
+    right: IRNode = None
+
+@dataclass
+class IRElvis:
+    cond: IRNode = None
+    else_val: IRNode = None
+
+@dataclass
+class IROptChain:
+    obj: IRNode = None
+    kind: str = 'attr'
+    name: str | None = None
+    args: list[IRNode] = field(default_factory=list)
+    kwargs: dict[str, IRNode] = field(default_factory=dict)
+    index: IRNode | None = None
+
+@dataclass
+class IRRegex:
+    pattern: str = ''
+    flags: str = ''
+
+@dataclass
+class IRCompoundAssign:
+    target: IRNode = None
+    op: str = ''
+    value: IRNode = None
+
+IRNode = Union[IRModule, IRImport, IRLet, IRConst, IRAssign, IRBinOp, IRUnaryOp, IRCall, IRInt, IRFloat, IRBool, IRString, IRNone, IRIdent, IRIndex, IRField, IRList, IRMap, IRLambda, IRFunction, IRReturn, IRIf, IRFor, IRWhile, IRBreak, IRContinue, IRExprStmt, IRTypeDecl, IREntityDecl, IRWorldDecl, IRRegDecl, IRSubstrateDecl, IRObserve, IRRun, IRCouple, IRPair, IRRing, IRAnnotation, IRSequence, IRWith, IRAssert, IRPass, IRDel, IRAsyncFor, IRAsyncWith, IRMethodCall, IRSlice, IRFString, IRListComp, IRCatchBlock, IRTryCatch, IRThrow, IRDestructLet, IRMapDestruct, IRAssignExpr, IRMatchCase, IRMatch, IRClassDecl, IRYield, IRComplex, IRBytes, IRTuple, IRSet, IRTernary, IRChainCmp, IRSuper, IRDictComp, IRSetComp, IRGenComp, IRYieldExpr, IRAwait, IRCompClause, IRNullish, IRElvis, IROptChain, IRRegex, IRCompoundAssign]

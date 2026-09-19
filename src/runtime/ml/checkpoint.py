@@ -37,8 +37,12 @@ def save_safetensors(tensors: dict, path: str, metadata: dict = None):
     for name in order:
         a = arrays[name]
         nbytes = a.nbytes
+        try:
+            st_dtype = _DTYPE_TO_ST[str(a.dtype)]
+        except KeyError:
+            raise TypeError(f'safetensors: dtype {a.dtype} of tensor {name!r} not supported')
         header[name] = {
-            'dtype': _DTYPE_TO_ST[str(a.dtype)],
+            'dtype': st_dtype,
             'shape': list(a.shape),
             'data_offsets': [offset, offset + nbytes],
         }

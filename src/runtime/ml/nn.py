@@ -4,6 +4,7 @@ from runtime.ml.tensor import (
     TriadTensor,
     bmm,
     layer_norm,
+    mse_loss,
     relu,
     sigmoid,
     softmax,
@@ -32,17 +33,27 @@ class Module:
 
     def parameters(self) -> list[Parameter]:
         params = []
-        for v in self.__dict__.values():
+        seen: set[int] = set()
+
+        def _collect(v):
             if isinstance(v, Parameter):
-                params.append(v)
+                if id(v) not in seen:
+                    seen.add(id(v))
+                    params.append(v)
             elif isinstance(v, Module):
-                params.extend(v.parameters())
+                for p in v.parameters():
+                    if id(p) not in seen:
+                        seen.add(id(p))
+                        params.append(p)
             elif isinstance(v, (list, tuple)):
                 for item in v:
-                    if isinstance(item, Parameter):
-                        params.append(item)
-                    elif isinstance(item, Module):
-                        params.extend(item.parameters())
+                    _collect(item)
+            elif isinstance(v, dict):
+                for item in v.values():
+                    _collect(item)
+
+        for v in self.__dict__.values():
+            _collect(v)
         return params
 
     def zero_grad(self):
@@ -51,7 +62,7 @@ class Module:
 
     def to(self, device: str) -> Module:
 
-        import numpy as _onp
+        from triad import ntri as _onp
 
         from runtime.ml.tensor import _coerce, _is_cuda_array
 
@@ -346,7 +357,10 @@ class Embedding(Module):
 
             def _back(g):
                 wg = np.zeros_like(w._data)
-                np.add.at(wg, ids, g)
+                D = wg.shape[1] if wg.ndim > 1 else 1
+                idx_f = ids.ravel() if isinstance(ids, np.ndarray) else np.asarray(ids).ravel()
+                g_f = g.reshape((g.size // D, D)) if isinstance(g, np.ndarray) and g.ndim > 2 else g
+                np.add.at(wg, idx_f, g_f)
                 w._grad = wg if w._grad is None else w._grad + wg
             out._grad_fn = _back
         return out
@@ -1274,8 +1288,8 @@ def rope_apply(x: TriadTensor, positions, base: float = 10000.0) -> TriadTensor:
     freqs = 1.0 / (base ** (xp.arange(0, head_dim, 2, dtype=xp.float64) / head_dim))
     theta = xp.asarray(positions)[:, None].astype(xp.float64) * freqs[None, :]
 
-    cos_t = xp.cos(theta).astype(xp.float32)[None, :, None, :]
-    sin_t = xp.sin(theta).astype(xp.float32)[None, :, None, :]
+    cos_t = xp.cos(theta).astype(xp.float64)[None, :, None, :]
+    sin_t = xp.sin(theta).astype(xp.float64)[None, :, None, :]
     cos_f = TriadTensor(xp.concatenate([cos_t, cos_t], axis=-1))
     sin_f = TriadTensor(xp.concatenate([sin_t, sin_t], axis=-1))
     x1 = _slice_lastdim(x, 0, half)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from frontend.errors import LexError as _BaseLexError
+
 KEYWORDS = {'let', 'const', 'fn', 'return', 'if', 'else', 'elif', 'for', 'in', 'while', 'break', 'continue', 'type', 'class', 'super', 'import', 'from', 'as', 'true', 'false', 'none', 'and', 'or', 'not', 'try', 'catch', 'finally', 'throw', 'self', 'match', 'case', 'yield', 'async', 'await', 'with', 'reg', 'entity', 'world', 'couple', 'pair', 'ring', 'observe', 'OBSERVE', 'run', 'evolve', 'sequence', 'via', 'each_for', 'substrate', 'composed_of', 'assert', 'persistent', 'extended', 'structurally_open', 'mem_memory', 'atomic', 'anti_collapsed', 'over_seeds', 'is', 'pass', 'del', 'inherits'}
 
 @dataclass
@@ -14,25 +16,8 @@ class Token:
     def __repr__(self):
         return f'Token({self.kind}, {self.value!r}, L{self.line}:C{self.col})'
 
-class LexError(Exception):
-
-    def __init__(self, msg, line=0, col=0, file=''):
-        self.msg = msg
-        self.line = line
-        self.col = col
-        self.file = file
-        super().__init__(self._format())
-
-    def _format(self):
-        parts = ['error[LEX]:']
-        parts.append(f' {self.msg}')
-        if self.file:
-            parts.append(f'\n  file: {self.file}')
-        if self.line:
-            parts.append(f'\n  line: {self.line}')
-        if self.col:
-            parts.append(f'\n  col: {self.col}')
-        return ''.join(parts)
+class LexError(_BaseLexError):
+    pass
 
 _REGEX_PREVENT_TOKENS = {'IDENT', 'NUMBER', 'STRING', 'BYTES', 'REGEX'}
 

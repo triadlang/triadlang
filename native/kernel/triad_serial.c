@@ -34,6 +34,7 @@ void triad_serial_putc(char c) {
 }
 
 void triad_serial_puts(const char *s) {
+    if (!s) return;
     while (*s) {
         triad_serial_putc(*s);
         s++;

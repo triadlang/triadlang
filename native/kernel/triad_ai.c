@@ -32,6 +32,8 @@ void triad_ai_init(void) {
 void triad_ai_observe(uint32_t proc_id, const char *source, const char *text) {
     uint64_t idx = obs_count % AI_MAX_OBSERVATIONS;
     AiObservation *o = &observations[idx];
+    if (!source) source = "";
+    if (!text) text = "";
     o->proc_id = proc_id;
     o->tick = triad_sched_get_ticks();
     int k = 0;
@@ -49,6 +51,7 @@ void triad_ai_observe(uint32_t proc_id, const char *source, const char *text) {
 }
 
 int triad_ai_embed(const char *text, float *out, uint32_t dim) {
+    if (!text || !out) return -1;
     if (dim < AI_EMBED_DIM) return -1;
     uint64_t h = simple_hash(text);
     for (int i = 0; i < AI_EMBED_DIM; i++) {
@@ -59,7 +62,8 @@ int triad_ai_embed(const char *text, float *out, uint32_t dim) {
 
 int triad_ai_recall(const char *query, AiObservation *out, int max_n) {
     float q_emb[AI_EMBED_DIM];
-    triad_ai_embed(query, q_emb, AI_EMBED_DIM);
+    if (!query || !out || max_n <= 0) return 0;
+    if (triad_ai_embed(query, q_emb, AI_EMBED_DIM) < 0) return 0;
     int found = 0;
     for (int i = 0; i < AI_MAX_OBSERVATIONS && found < max_n; i++) {
         if (observations[i].source[0] == 0) continue;
@@ -77,6 +81,7 @@ int triad_ai_recall(const char *query, AiObservation *out, int max_n) {
 
 int triad_ai_query(const char *query, char *out, uint32_t out_len) {
     AiObservation results[8];
+    if (!query || !out || out_len == 0) return -1;
     int n = triad_ai_recall(query, results, 8);
     if (n == 0) {
         const char fallback[] = "no observations match this query";
@@ -104,6 +109,7 @@ int triad_ai_query(const char *query, char *out, uint32_t out_len) {
 int triad_ai_tool_use(uint32_t proc_id, const char *tool, const char *args,
                       char *out, uint32_t out_len, bool require_confirm) {
     (void)proc_id;
+    if (!tool || !out || out_len == 0) return -1;
     if (require_confirm) {
         const char msg[] = "confirmation required for destructive tool use";
         int k = 0;

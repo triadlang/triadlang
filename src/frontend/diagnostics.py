@@ -75,8 +75,9 @@ class Diagnostic:
             parts.append(f"{dim}{gutter} |{reset}")
             parts.append(f"{dim}{line_num_str} |{reset} {line_content}")
 
-            col_start = max(0, self.span.col_start - 1)
+            col_start = min(max(0, self.span.col_start - 1), len(line_content))
             col_end = self.span.col_end - 1 if self.span.is_single_line else len(line_content)
+            col_end = min(max(col_end, col_start + 1), len(line_content) + 1)
             pointer_len = max(1, col_end - col_start)
             pointer = ' ' * col_start + color + '^' * pointer_len + reset
             parts.append(f"{dim}{gutter} |{reset} {pointer}")

@@ -103,10 +103,10 @@ class TriadLSP:
         if sc == ec:
             sr = min(sr, len(sc_line))
             er = min(er, len(sc_line))
-            return sc_line[:sr] + new_text + sc_line[er:]
+            replaced = sc_line[:sr] + new_text + sc_line[er:]
+            return '\n'.join(lines[:sc] + [replaced] + lines[sc + 1:])
         prefix = sc_line[:sr] if sr <= len(sc_line) else sc_line
         suffix = ec_line[er:] if er <= len(ec_line) else ''
-        middle_lines = lines[sc + 1:ec]
         new_lines = [prefix + new_text + suffix] if new_text else [prefix, suffix]
         if new_text and '\n' in new_text:
             new_lines = [prefix] + new_text.split('\n')
@@ -150,21 +150,28 @@ class TriadLSP:
         symbols = []
         for i, line in enumerate(text.split('\n')):
             stripped = line.lstrip()
+            if stripped.startswith(('@', '//', '#')):
+                continue
+            col = len(line) - len(stripped)
             m_kw = re.match('^(let|const)\\s+(\\w+)', stripped)
             if m_kw:
-                symbols.append({'name': m_kw.group(2), 'kind': 'variable', 'line': i, 'col': len(line) - len(stripped)})
+                symbols.append({'name': m_kw.group(2), 'kind': 'variable', 'line': i, 'col': col})
                 continue
-            m_fn = re.match('^fn\\s+(\\w+)', stripped)
+            m_fn = re.match('^(?:async\\s+)?fn\\s+(\\w+)', stripped)
             if m_fn:
-                symbols.append({'name': m_fn.group(1), 'kind': 'function', 'line': i, 'col': len(line) - len(stripped)})
+                symbols.append({'name': m_fn.group(1), 'kind': 'function', 'line': i, 'col': col})
                 continue
             m_cls = re.match('^class\\s+(\\w+)', stripped)
             if m_cls:
-                symbols.append({'name': m_cls.group(1), 'kind': 'class', 'line': i, 'col': len(line) - len(stripped)})
+                symbols.append({'name': m_cls.group(1), 'kind': 'class', 'line': i, 'col': col})
                 continue
             m_type = re.match('^type\\s+(\\w+)', stripped)
             if m_type:
-                symbols.append({'name': m_type.group(1), 'kind': 'class', 'line': i, 'col': len(line) - len(stripped)})
+                symbols.append({'name': m_type.group(1), 'kind': 'class', 'line': i, 'col': col})
+                continue
+            m_triad = re.match('^(?:reg|substrate|entity|world)\\s+(\\w+)', stripped)
+            if m_triad:
+                symbols.append({'name': m_triad.group(1), 'kind': 'field', 'line': i, 'col': col})
                 continue
         return symbols
 
@@ -232,11 +239,13 @@ class TriadLSP:
             col = len(line) - len(stripped)
             if re.match(f'^(let|const)\\s+{re.escape(word)}\\b', stripped):
                 return {'uri': uri, 'range': {'start': {'line': i, 'character': col}, 'end': {'line': i, 'character': col + len(stripped)}}}
-            if re.match(f'^fn\\s+{re.escape(word)}\\b', stripped):
+            if re.match(f'^(?:async\\s+)?fn\\s+{re.escape(word)}\\b', stripped):
                 return {'uri': uri, 'range': {'start': {'line': i, 'character': col}, 'end': {'line': i, 'character': col + len(stripped)}}}
             if re.match(f'^class\\s+{re.escape(word)}\\b', stripped):
                 return {'uri': uri, 'range': {'start': {'line': i, 'character': col}, 'end': {'line': i, 'character': col + len(stripped)}}}
             if re.match(f'^type\\s+{re.escape(word)}\\b', stripped):
+                return {'uri': uri, 'range': {'start': {'line': i, 'character': col}, 'end': {'line': i, 'character': col + len(stripped)}}}
+            if re.match(f'^(?:reg|substrate|entity|world)\\s+{re.escape(word)}\\b', stripped):
                 return {'uri': uri, 'range': {'start': {'line': i, 'character': col}, 'end': {'line': i, 'character': col + len(stripped)}}}
         return None
 

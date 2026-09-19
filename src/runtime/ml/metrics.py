@@ -21,7 +21,12 @@ def top_k_accuracy(pred: TriadTensor, target: TriadTensor, k: int=5) -> float:
     tgt_idx = target._data.astype(int).reshape(-1)
     flat = pred._data.reshape(-1, pred._data.shape[-1])
     n = flat.shape[0]
-    top_k_idx = np.argpartition(-flat, k, axis=-1)[:, :k]
+    if n == 0:
+        return 0.0
+    if tgt_idx.shape[0] != n:
+        raise ValueError(f'top_k_accuracy target/pred size mismatch: {tgt_idx.shape[0]} vs {n}')
+    k = max(1, min(int(k), flat.shape[-1]))
+    top_k_idx = np.argpartition(-flat, k - 1, axis=-1)[:, :k]
     correct = sum(1 for i in range(n) if tgt_idx[i] in top_k_idx[i])
     return correct / n
 
@@ -36,7 +41,9 @@ def confusion_matrix(pred: TriadTensor, target: TriadTensor, num_classes: int | 
     if tgt_idx.ndim > 1:
         tgt_idx = tgt_idx.squeeze(-1)
     pred_flat = pred_idx.reshape(-1)
-    tgt_flat = tgt_idx.reshape(-1)[:len(pred_flat)]
+    tgt_flat = tgt_idx.reshape(-1)
+    if tgt_flat.shape[0] != pred_flat.shape[0]:
+        raise ValueError(f'confusion_matrix pred/target size mismatch: {pred_flat.shape[0]} vs {tgt_flat.shape[0]}')
     if num_classes is None:
         num_classes = max(pred_flat.max(), tgt_flat.max()) + 1
     cm = np.zeros((num_classes, num_classes), dtype=int)

@@ -14,21 +14,19 @@ static uint8_t *tss_mem = NULL;
 static void tss_init(void) {
     tss_mem = (uint8_t *)triad_mm_alloc_aligned(0x68, 16);
     memset(tss_mem, 0, 0x68);
-    /* IOPB offset = sizeof(TSS): no I/O permission bitmap. */
     *(uint16_t *)(tss_mem + 0x66) = 0x68;
 }
 
 static void gdt_set_tss(int sel, uint64_t base, uint64_t limit) {
-    /* 64-bit TSS descriptor is 16 bytes: two GDT entries. */
     uint64_t *entry = (uint64_t *)&gdt[sel / 8];
     uint64_t lo = 0;
     lo |= (uint64_t)(limit & 0xFFFF);
-    lo |= (uint64_t)(base & 0xFFFFFFULL) << 16;        /* base 0-23  */
-    lo |= (uint64_t)0x89 << 40;                        /* P | type=available TSS64 */
-    lo |= (uint64_t)((limit >> 16) & 0xFULL) << 48;    /* limit 16-19 */
-    lo |= (uint64_t)((base >> 24) & 0xFFULL) << 56;    /* base 24-31 */
+    lo |= (uint64_t)(base & 0xFFFFFFULL) << 16;
+    lo |= (uint64_t)0x89 << 40;
+    lo |= (uint64_t)((limit >> 16) & 0xFULL) << 48;
+    lo |= (uint64_t)((base >> 24) & 0xFFULL) << 56;
     entry[0] = lo;
-    entry[1] = (base >> 32) & 0xFFFFFFFFULL;           /* base 32-63 */
+    entry[1] = (base >> 32) & 0xFFFFFFFFULL;
 }
 
 static void load_tss(void) {

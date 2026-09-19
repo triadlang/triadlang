@@ -131,11 +131,25 @@ def create_vm_state(N: int=128, L: float=32.0, Lambda: float=-0.5, Gamma: float=
     M = len(nu)
     alpha = kwargs.get('alpha', 0.15)
     sigma = kwargs.get('sigma', 1.5)
-    hbar = 1.0
-    H_lin = hbar ** 2 * k ** 2 / 2.0 + alpha * np.abs(k) ** sigma
+    hbar = float(kwargs.get('hbar', 1.0))
+    mass = float(kwargs.get('m', 1.0))
+    omega = float(kwargs.get('omega', 0.05))
+    kT = float(kwargs.get('kT', 1.0))
+    fdt_couple = bool(kwargs.get('fdt_couple', True))
+    k_abs = np.abs(k)
+    k_abs = np.where(k_abs > 0, k_abs, 1e-30)
+    H_lin = hbar ** 2 * k ** 2 / (2.0 * mass) + alpha * k_abs ** sigma
 
     half_lin = np.exp(-1j * H_lin * dt / hbar)
-    V_ext = 0.5 * 1.0 * 0.05 ** 2 * x ** 2
-    noise_amp = np.sqrt(f_FDT * dt / dx) if f_FDT > 0 else 0.0
+    V_ext_spec = kwargs.get('V_ext', 'harmonic')
+    if V_ext_spec is None or V_ext_spec == 'none':
+        V_ext = np.zeros_like(x)
+    else:
+        V_ext = 0.5 * mass * omega ** 2 * x ** 2
+    f_eff = f_FDT
+    if fdt_couple and Gamma > 0:
+        f_eff = 2.0 * Gamma * dx * kT / hbar
+    f_eff = max(f_eff, 1e-12)
+    noise_amp = np.sqrt(f_eff * dt / dx)
     state = VMState(psi=psi, y=np.zeros((M, N)), V_ext=V_ext, half_lin=half_lin, noise_amp=noise_amp, Gamma=Gamma, Lambda=Lambda, dt=dt, hbar=hbar, nu=nu, lam=lam, rng=rng)
     return TriadVM(state)

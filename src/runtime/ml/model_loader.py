@@ -196,6 +196,12 @@ def _detect_arch(config: dict) -> str:
     mt = config.get("model_type", "").lower()
     if "qwen3_5" in mt or "qwen3.5" in mt:
         return "qwen3_5"
+    if "moe" in mt:
+        if "qwen3" in mt:
+            return "qwen3moe"
+        if "qwen2" in mt:
+            return "qwen2moe"
+        return "unknown"
     if "qwen3" in mt:
         return "qwen3"
     if "qwen2" in mt:

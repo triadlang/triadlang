@@ -1,10 +1,3 @@
-/* Direct smoke test for the native CUDA kernels (triad_cuda.cu):
- *  1. cuda_init / device probe
- *  2. cuda_matvec_f32         — exact 3x4 reference
- *  3. cuda_matvec_f32_batched — 64x256 vs CPU reference
- *  4. cuda_dequant_matvec     — Q6_K all-ones block (w=31 everywhere),
- *                               Q4_K/Q5_K zero blocks (y=0)
- */
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -39,7 +32,6 @@ int main(void) {
     }
     check("cuda_init", 1);
 
-    /* 1) exact f32 matvec: W(3x4) row-major, x=[1,1,1,1] */
     {
         float W[12] = {1,2,3,4, 5,6,7,8, 9,10,11,12};
         float x[4]  = {1,1,1,1};
@@ -52,7 +44,6 @@ int main(void) {
         if (!ok) printf("    got y=[%f %f %f]\n", y[0], y[1], y[2]);
     }
 
-    /* 2) batched f32 matvec vs CPU reference: 64x256 */
     {
         enum { R = 64, C = 256 };
         static float W[R * C], x[C], y[R], ref[R];
@@ -70,19 +61,16 @@ int main(void) {
         check("matvec_f32_batched 64x256", ok);
     }
 
-    /* 3) Q6_K all-ones: d=1.0, sc=1, ql/qh=0xFF -> every weight = 31 */
     {
         enum { R = 4, C = 256 };
         static uint8_t W[R * 210];
         float x[C], y[R];
         memset(W, 0xFF, sizeof(W));
         for (int r = 0; r < R; r++) {
-            W[r * 210 + 192] = 1;          /* int8 scale = 1 (rest stay -1 -> see below) */
+            W[r * 210 + 192] = 1;
         }
-        /* scales are int8 at bp+192..207; 0xFF = -1. Set all to +1: */
         for (int r = 0; r < R; r++)
             for (int i = 0; i < 16; i++) W[r * 210 + 192 + i] = 1;
-        /* d (fp16 1.0 = 0x3C00) at bp+208 */
         for (int r = 0; r < R; r++) { W[r * 210 + 208] = 0x00; W[r * 210 + 209] = 0x3C; }
         float sx = 0;
         for (int i = 0; i < C; i++) { x[i] = (float)(i + 1); sx += x[i]; }
@@ -94,7 +82,6 @@ int main(void) {
         if (!ok) printf("    got y=[%f %f %f %f], ref %f\n", y[0], y[1], y[2], y[3], ref);
     }
 
-    /* 4) Q4_K / Q5_K zero blocks -> y = 0 */
     {
         enum { R = 2, C = 256 };
         static uint8_t W4[R * 144], W5[R * 176];

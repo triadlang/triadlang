@@ -49,8 +49,6 @@ def train():
     all_text = ''
     for ex in train_data:
         all_text += 'Q: ' + ex['question'] + ' A: ' + ex['answer'] + '\n\n'
-    for ex in test_data[:200]:
-        all_text += 'Q: ' + ex['question'] + ' A: ' + ex['answer'] + '\n\n'
 
     tok = CharTokenizer(all_text)
     tokens = tok.encode(all_text)

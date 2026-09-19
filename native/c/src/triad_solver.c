@@ -392,6 +392,13 @@ static bool _validate_triad_input(const TriadSolverC *p) {
     if (p->Gamma <= 0.0) return false;
     if (p->f_FDT <= 0.0) return false;
     if (p->kT <= 0.0) return false;
+    if (p->N < 8) return false;
+    if (!(p->L > 0.0)) return false;
+    if (!(p->dt > 0.0)) return false;
+    if (!(p->T > 0.0)) return false;
+    if (!(p->hbar > 0.0)) return false;
+    if (!(p->m > 0.0)) return false;
+    if (!p->nu || !p->lam) return false;
     return true;
 }
 

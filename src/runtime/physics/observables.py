@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from runtime.backend import asnumpy as _asnumpy
+from runtime.backend import select_mask as _select_mask
 from runtime.backend import to_xp as _to_xp
 from runtime.backend import xp as _default_xp
 from runtime.backend import xp_of as _xp_of
@@ -13,6 +14,8 @@ def _xp(arr):
     return _xp_of(arr) if arr is not None else _default_xp
 
 def norm(psi, dx: float) -> float:
+    if not dx > 0:
+        raise ValueError(f'norm requires dx > 0, got {dx!r}')
     np = _xp(psi)
     return float(_asnumpy((np.abs(psi) ** 2).sum() * dx))
 
@@ -64,9 +67,9 @@ def dominant_wavenumber(psi, dx: float, k_min: float = 0.0) -> float:
     mask = np.abs(k) >= k_min
     if not bool(_asnumpy(mask.any())):
         return 0.0
-    k_m = k[mask]
-    P_m = P[mask]
-    return float(abs(float(_asnumpy(k_m[int(_asnumpy(np.argmax(P_m)))]))))
+    k_m = _select_mask(k, mask)
+    P_m = _select_mask(P, mask)
+    return float(abs(float(_asnumpy(k_m[int(_asnumpy(_np.argmax(_asnumpy(P_m))))]))))
 
 def crystallinity(psi, dx: float, k_cutoff: float | None = None) -> float:
     np = _xp(psi)
@@ -77,7 +80,7 @@ def crystallinity(psi, dx: float, k_cutoff: float | None = None) -> float:
     if k_cutoff is None:
         L = psi.shape[-1] * dx
         k_cutoff = 2.0 * _np.pi / L
-    structured = float(_asnumpy(P[np.abs(k) > k_cutoff].sum()))
+    structured = float(_asnumpy(_select_mask(P, np.abs(k) > k_cutoff).sum()))
     return structured / total
 
 def stabilization_score(observable_t) -> float:
@@ -158,7 +161,7 @@ def correlation_dimension(series, dim: int = 4, tau: int = 1,
         M = n_points
     d = _np.sqrt(((emb[:, None, :] - emb[None, :, :]) ** 2).sum(-1))
     dist = d[_np.triu_indices(M, k=1)]
-    dist = dist[dist > 0]
+    dist = _select_mask(dist, dist > 0)
     if dist.size < 10:
         return 0.0
     rmin, rmax = _np.percentile(dist, 5), _np.percentile(dist, 50)
@@ -169,7 +172,7 @@ def correlation_dimension(series, dim: int = 4, tau: int = 1,
     good = C > 0
     if good.sum() < 3:
         return 0.0
-    coef = _np.polyfit(_np.log(rs[good]), _np.log(C[good]), 1)
+    coef = _np.polyfit(_np.log(_select_mask(rs, good)), _np.log(_select_mask(C, good)), 1)
     return float(coef[0])
 
 def attractor_geometry_invariants(series, dim: int = 4, tau: int = 1) -> dict:
@@ -298,7 +301,7 @@ def spectral_flux(psi, dx: float, n_shells: int = 20,
     for s in range(n_shells):
         sel = (abs_k_h >= links[s]) & (abs_k_h < links[s + 1])
         if sel.any():
-            flux[s] = float(P_h[sel].sum())
+            flux[s] = float(_select_mask(P_h, sel).sum())
     return flux
 
 def memory_overlap(y_a, y_b) -> float:

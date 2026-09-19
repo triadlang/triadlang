@@ -24,31 +24,51 @@ class SafetensorsFile:
 
     def __init__(self, path: str):
         self.path = path
+        size = os.path.getsize(path)
         with open(path, 'rb') as f:
             header_len = int.from_bytes(f.read(8), 'little')
+            if header_len <= 0 or header_len > 64 * 1024 * 1024:
+                raise ValueError(f'safetensors header size invalid: {header_len}')
+            if 8 + header_len > size:
+                raise ValueError('safetensors header exceeds file size')
             self.header = json.loads(f.read(header_len))
         self._data_start = 8 + header_len
+        self._file_size = size
         self._mm = np.memmap(path, dtype=np.uint8, mode='r')
         self.names = [k for k in self.header if k != '__metadata__']
 
+    def _check_range(self, name: str, start: int, end: int):
+        if start < 0 or end < start or self._data_start + end > self._file_size:
+            raise ValueError(f'{name}: data range [{start}, {end}) outside file')
+
     def get(self, name: str, dtype=np.float32) -> np.ndarray:
+        if name not in self.header:
+            raise KeyError(f'unknown tensor {name!r}')
         info = self.header[name]
         start, end = info['data_offsets']
+        self._check_range(name, start, end)
         raw = self._mm[self._data_start + start:self._data_start + end]
         st_dt = info['dtype']
         shape = tuple(info['shape'])
         if st_dt == 'BF16':
             arr = _bf16_to_f32(raw.view(np.uint16)).reshape(shape)
-        else:
+        elif st_dt in _DTYPES and _DTYPES[st_dt] is not None:
             arr = raw.view(_DTYPES[st_dt]).reshape(shape)
+        else:
+            raise TypeError(f'{name}: safetensors dtype {st_dt!r} not supported')
         return np.ascontiguousarray(arr, dtype=dtype)
+
+    _ITEMSIZE = {'BF16': 2, 'F16': 2, 'F64': 8, 'F32': 4, 'I64': 8, 'I32': 4,
+                 'I16': 2, 'I8': 1, 'U8': 1, 'BOOL': 1}
 
     def _rows_raw(self, name: str, r0: int, r1: int):
         info = self.header[name]
         start, _ = info['data_offsets']
         st_dt = info['dtype']
         n_cols = int(info['shape'][-1])
-        isz = 2 if st_dt in ('BF16', 'F16') else 4
+        isz = self._ITEMSIZE.get(st_dt)
+        if isz is None:
+            raise TypeError(f'{name}: safetensors dtype {st_dt!r} not supported for rows')
         base = self._data_start + start
         raw = self._mm[base + r0 * n_cols * isz:base + r1 * n_cols * isz]
         if st_dt == 'BF16':

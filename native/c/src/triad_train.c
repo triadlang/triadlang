@@ -14,6 +14,7 @@ TriadDataset *triad_dataset_new(TriadTensor *x, TriadTensor *y) {
     if (!x || x->ndim < 1) return NULL;
     if (y && y->shape[0] != x->shape[0]) return NULL;
     TriadDataset *d = malloc(sizeof(TriadDataset));
+    if (!d) return NULL;
     d->x = x; d->y = y; d->n = x->shape[0];
     return d;
 }
@@ -29,13 +30,15 @@ int64_t triad_dataset_len(const TriadDataset *d) { return d ? d->n : 0; }
 
 TriadDataLoader *triad_dataloader_new(TriadDataset *ds, int32_t batch_size,
                                       int shuffle, uint64_t seed) {
-    if (!ds || batch_size < 1) return NULL;
+    if (!ds || batch_size < 1 || ds->n < 1) return NULL;
     TriadDataLoader *dl = malloc(sizeof(TriadDataLoader));
+    if (!dl) return NULL;
     dl->ds = ds;
     dl->batch_size = batch_size;
     dl->shuffle = shuffle;
     dl->rng = seed ? seed : 0x123456789ABCDEF;
     dl->order = malloc((size_t)ds->n * sizeof(int64_t));
+    if (!dl->order) { free(dl); return NULL; }
     dl->cursor = 0;
     triad_dataloader_reset(dl);
     return dl;

@@ -60,7 +60,8 @@ def solver_grad_step(psi_in, grad_out, dt: float = 0.01,
     return asnumpy(grad_in)
 
 def wrap_grad_fn_with_solver(grad_fn: Callable, tensor_shape: tuple[int, ...],
-                              is_field_output: bool = False) -> Callable:
+                              is_field_output: bool = False,
+                              psi_provider: Callable | None = None) -> Callable:
 
     if not _IS_NATIVE_GRAD:
         return grad_fn
@@ -68,8 +69,10 @@ def wrap_grad_fn_with_solver(grad_fn: Callable, tensor_shape: tuple[int, ...],
         return grad_fn
 
     def _solver_back(g):
-
-        grad_fn(g)
+        out = grad_fn(g)
+        if psi_provider is not None and is_field_output:
+            return solver_grad_step(psi_provider(), out)
+        return out
 
     return _solver_back
 

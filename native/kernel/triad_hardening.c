@@ -73,7 +73,6 @@ void triad_hardening_init(void) {
     uint32_t ebx, edx;
     __asm__ volatile ("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(eax), "c"(ecx));
     hardening_features[HARDEN_RDSEED] = (ebx >> 18) & 1;
-    /* SMEP = CPUID.07:EBX bit 7, SMAP = CPUID.07:EBX bit 20 */
     hardening_features[HARDEN_SMEP] = (ebx >> 7) & 1;
     hardening_features[HARDEN_SMAP] = (ebx >> 20) & 1;
 
@@ -192,9 +191,6 @@ void triad_mark_bss_zero(void) {
     uint64_t start = (uint64_t)_bss_start;
     uint64_t end = (uint64_t)_bss_end;
 
-    /* .bss is zeroed by the multiboot loader before _start; re-zeroing here
-     * would wipe live state (the kernel stack itself lives in .bss).
-     * The hardening step is only the W^X marking below. */
     for (uint64_t addr = start; addr < end; addr += PAGE_SIZE) {
         triad_paging_set_flags(addr, PTE_PRESENT | PTE_WRITABLE | PTE_NX);
     }

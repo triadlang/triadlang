@@ -60,6 +60,15 @@ class MLScreen(Screen):
         except ValueError:
             output.write(Text("Invalid parameters", style="red"))
             return
+        if not 1 <= epochs <= 10000:
+            output.write(Text("Epochs must be 1..10000", style="red"))
+            return
+        if not 0 < lr <= 1.0:
+            output.write(Text("LR must be in (0, 1]", style="red"))
+            return
+        if not 1 <= hidden <= 4096:
+            output.write(Text("Hidden dim must be 1..4096", style="red"))
+            return
 
         from cli.tui.widgets.viz_canvas import bar, model_arch_ascii, sparkline
 

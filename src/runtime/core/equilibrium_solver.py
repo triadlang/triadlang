@@ -58,6 +58,33 @@ def _compute_observable_vec(psi: np.ndarray, dx: float,
         obs["energy"] = float('nan')
     return obs
 
+def _anderson_step(xk: np.ndarray, fk: np.ndarray,
+                   x_hist: list, f_hist: list,
+                   m: int, mixing: float) -> np.ndarray:
+    rk = fk - xk
+    if m <= 0 or len(x_hist) < 2:
+        return xk + mixing * rk
+    try:
+        xs = x_hist[-(m + 1):]
+        fs = f_hist[-(m + 1):]
+        k = len(xs) - 1
+        DX = np.stack([xs[i + 1] - xs[i] for i in range(k)], axis=1)
+        DF = np.stack([fs[i + 1] - fs[i] for i in range(k)], axis=1)
+        DFH = DF.conj().T
+        G = DFH @ DF
+        reg = 1e-8 * (float(np.abs(G).mean()) + 1e-30)
+        A = G + reg * np.eye(k)
+        rhs = DFH @ rk.reshape((rk.shape[0], 1))
+        gamma = np.linalg.solve(A, rhs)
+        step = ((DX - DF) + mixing * DF) @ gamma
+        out = xk + mixing * rk - step.reshape((rk.shape[0],))
+        s = float(np.abs(out).sum())
+        if s != s or s == float('inf'):
+            return xk + mixing * rk
+        return out
+    except Exception:
+        return xk + mixing * rk
+
 def _observable_distance(obs_a: dict, obs_b: dict) -> float:
 
     keys = [k for k in obs_a if k in obs_b]
@@ -111,6 +138,9 @@ class FixedPointSolver:
         residual_norm = float("inf")
         window_size = 3
         obs_window: list[dict] = []
+        x_hist: list = []
+        f_hist: list = []
+        m = max(int(self.m_anderson), 0)
 
         for it in range(self.max_iter):
 
@@ -148,7 +178,12 @@ class FixedPointSolver:
                     y = y_next
                     break
 
-            psi = psi_next
+            x_hist.append(psi)
+            f_hist.append(psi_next)
+            if len(x_hist) > m + 1:
+                x_hist.pop(0)
+                f_hist.pop(0)
+            psi = _anderson_step(psi, psi_next, x_hist, f_hist, m, self.mixing)
             y = y_next
 
         final_obs = _compute_observable_vec(psi, dx, p)

@@ -14,23 +14,21 @@ PY_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.pat
 if PY_ROOT not in sys.path:
     sys.path.insert(0, PY_ROOT)
 
-_REGIMES = [
-    ('B0', 'B0 — Neutral baseline'),
-    ('HodgkinHuxley', 'HodgkinHuxley — Neuron dynamics'),
-    ('ENSO_recharge', 'ENSO_recharge — El Nino oscillation'),
-    ('England_autopoietic', 'England_autopoietic — Autopoietic systems'),
-    ('Eigen_hypercycle', 'Eigen_hypercycle — Hypercycle dynamics'),
-    ('Belousov_Zhabotinsky', 'Belousov_Zhabotinsky — BZ reaction'),
-    ('LSV_market', 'LSV_market — Financial market'),
-    ('MaxwellWiechert', 'MaxwellWiechert — Viscoelastic'),
-    ('Cepheid_pulsator', 'Cepheid_pulsator — Stellar pulsation'),
-    ('DarkMatter_halo', 'DarkMatter_halo — Dark matter'),
-    ('Cosmological_inflation', 'Cosmological_inflation — Inflation'),
-    ('dispersive', 'dispersive — Wave propagation'),
-    ('anti_collapse', 'anti_collapse — Anti-collapse'),
-    ('R5_crystal', 'R5_crystal — Crystal formation'),
-    ('_pure', '_pure —  equilibrium'),
-]
+def _default_regimes() -> list[tuple[str, str]]:
+    try:
+        from stdlib.regimes import list_regimes
+        return [(r, r) for r in list_regimes()]
+    except Exception:
+        return [
+            ('B0', 'B0'),
+            ('dispersive', 'dispersive'),
+            ('anti_collapse', 'anti_collapse'),
+            ('R5_crystal', 'R5_crystal'),
+            ('_pure', '_pure'),
+        ]
+
+
+_REGIMES = _default_regimes()
 
 _OBSERVABLES = ['k_star', 'crystallinity', 'peak', 'atom_count']
 

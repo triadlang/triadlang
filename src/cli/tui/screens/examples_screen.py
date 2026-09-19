@@ -54,13 +54,14 @@ class ExamplesScreen(Screen):
             if not os.path.isdir(cat_dir) or cat.startswith('_'):
                 continue
             for fname in sorted(os.listdir(cat_dir)):
-                if fname.endswith('.tri'):
-                    fpath = os.path.join(cat_dir, fname)
-                    try:
-                        size = os.path.getsize(fpath)
-                    except OSError:
-                        size = 0
-                    self._all_examples.append({"cat": cat, "file": fname, "path": fpath, "size": size})
+                if not fname.lower().endswith('.tri') or fname.startswith(('.', '__')):
+                    continue
+                fpath = os.path.join(cat_dir, fname)
+                try:
+                    size = os.path.getsize(fpath)
+                except OSError:
+                    size = 0
+                self._all_examples.append({"cat": cat, "file": fname, "path": fpath, "size": size})
         self._filtered = list(self._all_examples)
         self._populate_table()
 

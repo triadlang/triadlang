@@ -123,7 +123,7 @@ int triad_stack_check_frame(StackFrame *frame) {
 void triad_stack_panic(const char *msg) {
     triad_serial_puts("\n!!! KERNEL PANIC !!!\n");
     triad_serial_puts("Stack protection: ");
-    triad_serial_puts(msg);
+    triad_serial_puts(msg ? msg : "(no message)");
     triad_serial_puts("\n");
 
     triad_serial_puts("Canary value: 0x");

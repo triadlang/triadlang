@@ -40,13 +40,13 @@ class TriadMemory:
             cfg = json.load(open(self.config_path))
             N, D, seed = cfg['N'], cfg['D'], cfg['seed']
         self.cfg = {'N': N, 'D': D, 'seed': seed}
-        self.mem = CrystalMemory(N=N, D=D, seed=seed, backend=backend)
+        self.mem = CrystalMemory(N=N, D=D, seed=seed)
         self.n_sites = len(self.mem.sites)
         rng = np.random.default_rng(seed)
         self._proj = rng.standard_normal((256, self.n_sites))
         self._k = max(8, self.n_sites // 8)
         if os.path.exists(self.field_path):
-            data = np.load(self.field_path)
+            data = np.load(self.field_path, allow_pickle=False)
             self.mem.psi = data['psi']
             self.mem.y = data['y']
 

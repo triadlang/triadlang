@@ -147,6 +147,7 @@ char triad_keyboard_getc(void) {
 
 int triad_keyboard_read(char *buf, int max) {
     int count = 0;
+    if (!buf || max <= 0) return 0;
     while (count < max && keyboard_head != keyboard_tail) {
         buf[count] = keyboard_buffer[keyboard_tail];
         keyboard_tail = (keyboard_tail + 1) % KEYBOARD_BUFFER_SIZE;

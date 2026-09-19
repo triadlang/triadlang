@@ -9,6 +9,7 @@ static uint32_t vfs_next_inode = 1;
 static uint32_t fd_offset[VFS_MAX_FILES];
 
 static int vfs_find_exact(const char *path) {
+    if (!path) return -1;
     for (int i = 0; i < VFS_MAX_FILES; i++) {
         if (vfs_nodes[i].used) {
             int k = 0;
@@ -39,6 +40,7 @@ static int vfs_alloc_node(void) {
 }
 
 static int str_eq(const char *a, const char *b) {
+    if (!a || !b) return 0;
     int k = 0;
     while (a[k] && b[k]) {
         if (a[k] != b[k]) return 0;
@@ -48,6 +50,7 @@ static int str_eq(const char *a, const char *b) {
 }
 
 static int str_starts(const char *s, const char *prefix) {
+    if (!s || !prefix) return 0;
     int k = 0;
     while (prefix[k]) {
         if (s[k] != prefix[k]) return 0;

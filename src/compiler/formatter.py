@@ -412,7 +412,7 @@ def _fmt_u_stmt(s, indent: int=0) -> str:
             lines.append(f'{pad}    }}')
         lines.append(f'{pad}}}')
         return '\n'.join(lines)
-    return f'{pad}/* unhandled: {type(s).__name__} */'
+    return f'{pad}pass'
 
 def format_universal(mod: Module) -> str:
     lines = []

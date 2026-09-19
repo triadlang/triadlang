@@ -89,7 +89,7 @@ def _dead_code_elimination(lines: list[str]) -> list[str]:
     while i < len(lines):
         line = lines[i]
         stripped = line.lstrip()
-        if stripped == 'return' or stripped.startswith(('return ', 'break', 'continue', 'raise ')):
+        if stripped in ('return', 'break', 'continue', 'raise') or stripped.startswith(('return ', 'break ', 'break;', 'continue ', 'continue;', 'raise ', 'raise;')):
             result.append(line)
             i += 1
             indent = len(line) - len(stripped)

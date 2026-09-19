@@ -236,11 +236,21 @@ class GGUFFile:
             return _bf16_to_f32(np.asarray(raw).view(np.uint16))
         return _DEQUANT[ttype](np.asarray(raw), n)
 
+    def _n_rows(self, name: str) -> int:
+        t = self.tensors[name]
+        n = 1
+        for d in list(t['ne'])[1:]:
+            n *= int(d)
+        return max(n, 1)
+
     def get_rows(self, name: str, rows, dtype=np.float32) -> np.ndarray:
 
         t, n_cols, row_bytes, ttype = self._row_layout(name)
+        n_rows = self._n_rows(name)
         start = self._data_start + t['offset']
         rows = np.asarray(rows, dtype=np.int64).reshape(-1)
+        if rows.size and (int(rows.min()) < 0 or int(rows.max()) >= n_rows):
+            raise IndexError(f'{name}: row index out of range [0, {n_rows})')
         out = np.empty((rows.size, n_cols), dtype=np.float32)
         for j, r in enumerate(rows):
             a = start + int(r) * row_bytes
@@ -251,6 +261,9 @@ class GGUFFile:
                       dtype=np.float32) -> np.ndarray:
 
         t, n_cols, row_bytes, ttype = self._row_layout(name)
+        n_rows = self._n_rows(name)
+        if r0 < 0 or r1 < r0 or r1 > n_rows:
+            raise IndexError(f'{name}: row block [{r0}, {r1}) out of range [0, {n_rows}]')
         start = self._data_start + t['offset']
         raw = self._mm[start + r0 * row_bytes:start + r1 * row_bytes]
         arr = self._decode_raw(raw, ttype, (r1 - r0) * n_cols)

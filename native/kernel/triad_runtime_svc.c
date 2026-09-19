@@ -77,7 +77,6 @@ int triad_rt_svc_run(int program_id) {
         buf[n] = 0;
         triad_ai_observe(programs[program_id].proc_id,
                          programs[program_id].source_path, buf);
-        /* TriadInterp is ~600 KiB: heap, not the 16 KiB kernel stack. */
         TriadInterp *interp = (TriadInterp *)triad_mm_alloc(sizeof(TriadInterp));
         if (!interp) {
             programs[program_id].exit_code = -1;

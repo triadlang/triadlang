@@ -47,6 +47,7 @@ static void *bitmap_alloc_page(void) {
 
 static void bitmap_free_page(void *page) {
     uint64_t addr = (uint64_t)page;
+    if (!page_bitmap) return;
     if (addr < 0x1000000ULL) return;
     uint64_t idx = (addr - 0x1000000ULL) / PAGE_SIZE;
     if (idx >= total_pages) return;
@@ -81,8 +82,6 @@ void triad_paging_init(uint64_t mem_size) {
         triad_paging_map(addr, addr, PTE_KERNEL);
     }
 
-    /* Bump heap lives at physical [16M, 16M+mem_size): keep it mapped
-     * after the CR3 switch so post-init allocations don't fault. */
     for (uint64_t addr = 0x1000000ULL; addr < 0x1000000ULL + mem_size; addr += PAGE_SIZE) {
         triad_paging_map(addr, addr, PTE_KERNEL);
     }
@@ -162,9 +161,6 @@ int triad_paging_map_as(PML4E *pml4, uint64_t virt, uint64_t phys, uint32_t flag
     return 0;
 }
 
-/* Update PTE flags in place, keeping the physical address. Unlike
- * unmap+map there is no not-present window, so it is safe to call on
- * the currently executing page. */
 int triad_paging_set_flags(uint64_t virt, uint64_t flags) {
     PTE *pte = walk_page_tables(kernel_pml4, virt, false);
     if (!pte || !(*pte & PTE_PRESENT)) return -1;

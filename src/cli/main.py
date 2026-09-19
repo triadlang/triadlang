@@ -153,16 +153,21 @@ def cmd_compile(args):
                 libdir = sysconfig.get_config_var('LIBDIR')
                 pyver = sysconfig.get_config_var('LDVERSION') or sysconfig.get_config_var('VERSION')
                 if libdir:
-                    py_libs.extend(['-L', libdir, f'-Wl,-rpath,{libdir}'])
+                    if os.name == 'nt':
+                        py_libs.extend(['-L', libdir])
+                    else:
+                        py_libs.extend(['-L', libdir, f'-Wl,-rpath,{libdir}'])
                 py_libs.append(f'-lpython{pyver}')
                 for extra in (sysconfig.get_config_var('LIBS') or '').split():
                     py_libs.append(extra)
 
             static_lib = os.path.join(rt_dir, 'libtriad_rt.a')
             if os.path.exists(static_lib):
-                libs = [static_lib, '-lm', '-lpthread']
+                libs = [static_lib, '-lm']
             else:
                 libs = ['-L', rt_dir, '-ltriad_rt', '-lm']
+            if os.name != 'nt':
+                libs.append('-lpthread')
             _fftw_inc = os.path.join(os.path.expanduser('~'), '.local', 'include', 'fftw3.h')
             if os.path.exists('/usr/include/fftw3.h'):
                 cflags.append('-DUSE_FFTW')
@@ -220,13 +225,28 @@ def cmd_doctor(args):
             checks.append((f'import {mod_name}', True))
         except Exception as e:
             checks.append((f'import {mod_name}: {e}', False))
+    _saved_path = list(sys.path)
+    try:
+        sys.path = [p for p in sys.path if os.path.abspath(p or '.') != os.path.abspath(PY_ROOT)]
+        sys.modules.pop('numpy', None)
+        import numpy as _np
+        _origin = os.path.abspath(getattr(_np, '__file__', '') or '')
+        _ver = getattr(_np, '__version__', '?')
+        if _origin.startswith(os.path.abspath(PY_ROOT)):
+            checks.append(('numpy upstream (sombreado pelo shim triad-native)', False))
+        else:
+            checks.append((f'numpy upstream ({_ver})', True))
+    except ImportError:
+        checks.append(('numpy (optional, needed for triad-native)', False))
+    finally:
+        sys.path = _saved_path
     try:
         from triad import ntri as _ntri
 
         assert _ntri is not None
-        checks.append(('numpy available', True))
+        checks.append(('ntri fallback', True))
     except ImportError:
-        checks.append(('numpy (optional, needed for triad-native)', False))
+        checks.append(('ntri fallback', False))
     ex_dir = os.path.join(REPO_ROOT, 'examples', 'basic')
     checks.append(('examples/basic/ exists', os.path.isdir(ex_dir)))
     for label, ok in checks:
@@ -463,7 +483,14 @@ def cmd_play(args):
     port = 8000
     for i, a in enumerate(args):
         if a == '--port' and i + 1 < len(args):
-            port = int(args[i + 1])
+            try:
+                port = int(args[i + 1])
+            except ValueError:
+                print(f'error: invalid --port {args[i + 1]!r}', file=sys.stderr)
+                return 1
+            if not 1 <= port <= 65535:
+                print(f'error: --port must be 1..65535, got {port}', file=sys.stderr)
+                return 1
         elif a == '--host' and i + 1 < len(args):
             host = args[i + 1]
     url = f'http://{host}:{port}/engine'
@@ -487,7 +514,14 @@ def cmd_serve(args):
             host = args[i + 1]
             i += 2
         elif args[i] == '--port' and i + 1 < len(args):
-            port = int(args[i + 1])
+            try:
+                port = int(args[i + 1])
+            except ValueError:
+                print(f'error: invalid --port {args[i + 1]!r}', file=sys.stderr)
+                return 1
+            if not 1 <= port <= 65535:
+                print(f'error: --port must be 1..65535, got {port}', file=sys.stderr)
+                return 1
             i += 2
         elif args[i] == '--reload':
             reload = True
@@ -659,6 +693,11 @@ def cmd_plot(args):
             base = os.path.splitext(os.path.basename(path))[0]
             out_path = os.path.join(os.path.dirname(os.path.abspath(path)),
                                     f'{base}.png')
+            print(f'plot: {path} -> {out_path}')
+            return 0
+        if not os.path.exists(out_path):
+            print(f'plot error: expected artifact missing: {out_path}', file=sys.stderr)
+            return 1
         print(f'plot: {path} -> {out_path}')
         return 0
     except (LexError, ParseError) as e:
@@ -728,7 +767,7 @@ def cmd_memory(args):
 
     from cli.triad_memory import main as _memory_main
     saved = sys.argv[:]
-    sys.argv = ['triad', 'memory'] + list(args)
+    sys.argv = ['triad memory'] + list(args)
     try:
         _memory_main()
     finally:

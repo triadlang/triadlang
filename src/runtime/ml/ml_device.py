@@ -32,7 +32,7 @@ def _sync_state():
 
     global _state
     _state['xp'] = _backend.get_xp('auto')
-    _state['device'] = _backend.BACKEND if _backend.BACKEND in {'cuda', 'metal'} else 'cpu'
+    _state['device'] = _backend.BACKEND if _backend.BACKEND in {'cuda', 'metal', 'hip'} else 'cpu'
     prev = _state.get('fdtype')
     try:
         _state['fdtype'] = _resolve_fdtype(_state['xp'], prev)
@@ -41,7 +41,9 @@ def _sync_state():
 
 def set_device(device: str='cpu', dtype='float32'):
     dev = device.lower()
-    _backend.set_global_backend(dev if dev in {'cuda', 'metal', 'mlx', 'gpu'} else 'cpu')
+    if dev in {'hip', 'rocm', 'amd'}:
+        dev = 'hip'
+    _backend.set_global_backend(dev if dev in {'cuda', 'metal', 'mlx', 'gpu', 'hip', 'torch'} else 'cpu')
     _sync_state()
     mod = _state['xp']
     _state['fdtype'] = _resolve_fdtype(mod, dtype)
@@ -56,10 +58,16 @@ def fdtype():
 
 def is_gpu() -> bool:
     _sync_state()
-    return _state['device'] in {'cuda', 'metal'}
+    return _state['device'] in {'cuda', 'metal', 'hip'}
 
 def cuda_available() -> bool:
     return _backend.cuda_available()
+
+def hip_available() -> bool:
+    return _backend.hip_available()
+
+def torch_available() -> bool:
+    return _backend.torch_available()
 
 def metal_available() -> bool:
     return _backend.metal_available()
@@ -74,7 +82,8 @@ def get_array_module(*arrays):
     _sync_state()
     xp_local = _state['xp']
     for a in arrays:
-        if hasattr(a, 'device') and 'cuda' in str(getattr(a, 'device', '')):
+        dev = str(getattr(a, 'device', ''))
+        if 'cuda' in dev or 'hip' in dev or 'rocm' in dev:
             return xp_local
     return xp_local
 
@@ -93,7 +102,7 @@ def coerce(data):
 
 def sync():
     _sync_state()
-    if _state['device'] == 'cuda':
+    if _state['device'] in {'cuda', 'hip'}:
         import cupy as _cp
         _cp.cuda.runtime.deviceSynchronize()
     elif _state['device'] == 'metal':
@@ -101,7 +110,7 @@ def sync():
 
 def mem_info():
     _sync_state()
-    if _state['device'] == 'cuda':
+    if _state['device'] in {'cuda', 'hip'}:
         import cupy as _cp
         free, total = _cp.cuda.runtime.memGetInfo()
         used = _cp.get_default_memory_pool().used_bytes()

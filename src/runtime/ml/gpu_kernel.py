@@ -176,12 +176,18 @@ def gpu_info() -> dict:
         return {'available': False, 'device': None}
     try:
         dev = _cp.cuda.Device(0)
+        try:
+            is_hip = bool(_cp.cuda.runtime.is_hip)
+        except Exception:
+            is_hip = False
+        mem = getattr(dev, 'mem_info', (0, 0))
         return {
             'available': True,
             'device': dev.name.decode() if isinstance(dev.name, bytes) else dev.name,
-            'compute_capability': dev.compute_capability,
-            'memory_total_mb': dev.mem_info[1] // (1024 * 1024),
-            'memory_free_mb': dev.mem_info[0] // (1024 * 1024),
+            'hip_rocm': is_hip,
+            'compute_capability': getattr(dev, 'compute_capability', None),
+            'memory_total_mb': mem[1] // (1024 * 1024),
+            'memory_free_mb': mem[0] // (1024 * 1024),
         }
     except Exception as e:
         return {'available': True, 'device': 'unknown', 'error': str(e)}

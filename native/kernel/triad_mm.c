@@ -22,8 +22,6 @@ void triad_mm_init(uint64_t mem_size) {
     heap_ptr = heap_base;
     heap_used = 0;
     free_list = NULL;
-    /* Guard pages need the paging machinery (bitmap + page tables).
-     * Enabled by triad_mm_enable_guard_pages() after triad_paging_init. */
     heap_guard_enabled = 0;
 }
 
@@ -92,6 +90,7 @@ void *triad_mm_alloc(size_t n) {
 
 void *triad_mm_alloc_aligned(size_t n, size_t align) {
     if (n == 0) return NULL;
+    if (align == 0 || (align & (align - 1)) != 0) align = 16;
     n = (n + (align - 1)) & ~(align - 1);
 
     uintptr_t p = (uintptr_t)heap_ptr;
@@ -146,7 +145,6 @@ void *triad_mm_realloc(void *p, size_t n) {
 void triad_mm_free(void *p) {
     if (!p) return;
     MmBlock *blk = (MmBlock *)((uint8_t *)p - sizeof(MmBlock));
-    blk->free_flag = 1;
 
     MmBlock *prev = NULL;
     MmBlock *cur = free_list;
@@ -155,6 +153,7 @@ void triad_mm_free(void *p) {
         cur = cur->next;
     }
     if (!cur) return;
+    blk->free_flag = 1;
 
     if (cur->next && cur->next->free_flag) {
         cur->size += cur->next->size + sizeof(MmBlock);

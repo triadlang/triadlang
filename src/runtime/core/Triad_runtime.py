@@ -1,11 +1,38 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
+from runtime.core.equilibrium_solver import DriveSpec as _DriveSpec
 from runtime.core.equilibrium_solver import FixedPointSolver as _FixedPointSolver
 from runtime.core.fast_solver import equilibrate as _equilibrate
+from runtime.core.fast_solver import fast_integrate as _fast_integrate
 from runtime.core.multi_runtime import CouplingLink, MultiRuntime, Segment
-from runtime.core.solver import TriadParams, integrate_adaptive
+from runtime.core.solver import TriadParams, integrate as _integrate
+from runtime.core.solver import integrate_adaptive
+
+SOLVERS = ('integrate', 'fast', 'fixedpoint')
+
+_FIXEDPOINT_CTOR_KEYS = ('m_anderson', 'mixing', 'tol', 'max_iter')
+
+
+def solve_with(p: TriadParams, solver: str = 'integrate', **kw) -> dict:
+    if solver == 'integrate':
+        return _integrate(p, **kw)
+    if solver == 'fast':
+        return _fast_integrate(p, **kw)
+    if solver == 'fixedpoint':
+        ctor = {k: kw.pop(k) for k in _FIXEDPOINT_CTOR_KEYS if k in kw}
+        drive = _as_drive(kw.pop('drive', None), p)
+        n_substeps = kw.pop('n_substeps', 50)
+        verbose = kw.pop('verbose', False)
+        if kw:
+            raise TypeError(f'fixedpoint got unexpected keywords: {sorted(kw)}')
+        res = _FixedPointSolver(**ctor).solve_equilibrium(
+            p, drive=drive, n_substeps=n_substeps, verbose=verbose)
+        out = asdict(res)
+        out['psi_final'] = res.psi
+        return out
+    raise ValueError(f'solver must be one of {SOLVERS}, got {solver!r}')
 from runtime.observers import ConvergenceObserver, SelfVerifier
 from runtime.physics.observables import (
     crystallinity,
@@ -20,11 +47,23 @@ from runtime.physics.observables import norm as field_norm
 from triad import ntri as np
 
 
+def _as_drive(drive, p):
+    if drive is None or isinstance(drive, _DriveSpec):
+        return drive
+    if isinstance(drive, dict):
+        return _DriveSpec(**drive)
+    arr = np.asarray(drive, dtype=float).reshape(-1)
+    if arr.shape[0] != p.N:
+        raise ValueError(f'array drive needs {p.N} samples, got {arr.shape[0]}')
+    x_src = np.linspace(-p.L / 2, p.L / 2, arr.shape[0])
+    return _DriveSpec(drive_type='custom',
+                      custom_fn=lambda xa: np.interp(np.asarray(xa, dtype=float), x_src, arr))
+
 def _solve_equilibrium(p, drive=None, tol=0.01, max_iter=200,
                        anderson_m=5, anderson_beta=0.8,
                        substeps=10, verbose=False):
     solver = _FixedPointSolver(m_anderson=anderson_m, mixing=anderson_beta, tol=tol)
-    return solver.solve_equilibrium(p, drive=drive, n_substeps=substeps, verbose=verbose)
+    return solver.solve_equilibrium(p, drive=_as_drive(drive, p), n_substeps=substeps, verbose=verbose)
 from runtime.backend import asnumpy, get_xp
 
 
@@ -35,7 +74,9 @@ class ReadoutConfig:
 
 class TriadRuntime:
 
-    def __init__(self, n_substrates: int=4, regime: str='B0', N: int=128, coupling: str='ring', kappa: float=-3.0, seed: int=0, backend: str='auto', readout: ReadoutConfig | None=None):
+    def __init__(self, n_substrates: int=4, regime: str='B0', N: int=128, coupling: str='ring', kappa: float=-3.0, seed: int=0, backend: str='auto', readout: ReadoutConfig | None=None, solver: str='integrate'):
+        if solver not in SOLVERS:
+            raise ValueError(f'solver must be one of {SOLVERS}, got {solver!r}')
         self.n_substrates = n_substrates
         self.regime = regime
         self.N = N
@@ -44,6 +85,7 @@ class TriadRuntime:
         self.seed = seed
         self.backend = backend
         self.readout = readout or ReadoutConfig()
+        self.solver = solver
         self._substrate_ids = []
         self._mr = None
         self._input_buffer = []
@@ -55,6 +97,9 @@ class TriadRuntime:
     def inject_batch(self, signals: list[np.ndarray]):
         for i, s in enumerate(signals):
             self.inject(s, substrate_idx=i % self.n_substrates)
+
+    def solve(self, p: TriadParams, **kw) -> dict:
+        return solve_with(p, self.solver, **kw)
 
     def run(self, T: float=5.0, dt: float=0.005, verbose: bool=False) -> dict:
         import time as _time
@@ -201,7 +246,6 @@ class TriadRuntime:
         elapsed = _time.perf_counter() - t0
 
         if not isinstance(result, dict):
-            from dataclasses import asdict
             try:
                 result = asdict(result)
             except (TypeError, ValueError):

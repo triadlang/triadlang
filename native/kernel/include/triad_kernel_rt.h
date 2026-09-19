@@ -1,23 +1,17 @@
 #ifndef TRIAD_KERNEL_RT_H
 #define TRIAD_KERNEL_RT_H
 
-// Versão do triad_rt.h adaptada para o kernel (sem dependências externas)
-// Usada pelo motor quântico interno
-
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 
-// No kernel, usamos alocação simples (sem GC)
 #define TRIAD_NO_BOEHM 1
 
-// Complex number type
 typedef struct {
     double re;
     double im;
 } TriadCplx;
 
-// Basic types for kernel
 typedef struct TriadString TriadString;
 typedef struct TriadList TriadList;
 typedef struct TriadDict TriadDict;
@@ -44,7 +38,6 @@ struct TriadDict {
     void **vals;
 };
 
-// Math constants
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -53,7 +46,6 @@ struct TriadDict {
 #define M_E 2.71828182845904523536
 #endif
 
-// Simple math functions for kernel
 static inline double triad_sqrt(double x) {
     if (x < 0) return 0;
     double y = x / 2.0;
@@ -108,10 +100,9 @@ static inline double triad_fabs(double x) {
     return x < 0 ? -x : x;
 }
 
-static inline double triad_atan(double x);
-static inline double triad_atan2(double y, double x);
+/* triad_atan/triad_atan2 vivem em src/triad_kernel_qt.c (árvore não compilada);
+   sem definição na árvore compilada — sem declaração aqui. */
 
-// Memory functions (kernel uses its own heap)
 extern void *heap_alloc(size_t size);
 extern void heap_free(void *ptr);
 
@@ -123,7 +114,6 @@ static inline void triad_kfree(void *ptr) {
     heap_free(ptr);
 }
 
-// String functions for kernel
 static inline int triad_strlen(const char *s) {
     int len = 0;
     while (s[len]) len++;
@@ -170,7 +160,6 @@ static inline void triad_memset(void *dst, int c, size_t n) {
     }
 }
 
-// Print function (kernel uses VGA)
 extern void vga_puts(const char *s);
 extern void vga_putc(char c);
 
@@ -178,7 +167,6 @@ static inline void triad_kprint(const char *s) {
     vga_puts(s);
 }
 
-// Simple random number generator for kernel
 static inline uint64_t triad_rand64(uint64_t *state) {
     uint64_t x = *state;
     x ^= x << 13;
@@ -195,7 +183,6 @@ static inline double triad_randn(uint64_t *state) {
     return triad_sqrt(-2.0 * triad_log(u1)) * triad_cos(2.0 * M_PI * u2);
 }
 
-// TriadLang value types for kernel interpreter
 typedef enum {
     TRIAD_KERNEL_NONE = 0,
     TRIAD_KERNEL_INT,
@@ -225,11 +212,9 @@ typedef struct {
     };
 } TriadKernelValue;
 
-// Forward declarations for quantum kernel
 struct QosProcess;
 struct QosRuntime;
 
-// Kernel quantum functions
 void qos_kernel_init_process(struct QosProcess *p, int N, double L);
 void qos_kernel_evolve_all(struct QosRuntime *rt, double T);
 

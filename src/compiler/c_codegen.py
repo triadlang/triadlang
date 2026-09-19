@@ -14,7 +14,6 @@ _C_BASE = r'''#include "triad_rt.h"
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Safety: NULL-check macro for allocations in generated code */
 #define TRIAD_ENSURE(ptr, msg) do { if ((ptr) == NULL) { fprintf(stderr, "triad: allocation failed: %s\n", (msg)); abort(); } } while(0)
 '''
 
@@ -37,9 +36,17 @@ static int64_t _solver_lget(TriadValue cfg, const char *key, int64_t def) {
     return (v.tag == TRIAD_INT) ? v.as.ival : (int64_t)v.as.fval;
 }
 
+static double _solver_vget(TriadValue v, double def) {
+    if (v.tag == TRIAD_INT) return (double)v.as.ival;
+    if (v.tag == TRIAD_FLOAT) return v.as.fval;
+    return def;
+}
+
 static TriadValue _triad_solver_solve(TriadValue cfg) {
     static double _nu_def[] = {2.0, 0.5, 0.1};
     static double _lam_def[] = {-0.3, -0.2, -0.1};
+    static double _nu_cfg[16];
+    static double _lam_cfg[16];
 
     TriadSolverC p;
     memset(&p, 0, sizeof(p));
@@ -59,7 +66,24 @@ static TriadValue _triad_solver_solve(TriadValue cfg) {
     p.M      = 3;
     p.nu     = _nu_def;
     p.lam    = _lam_def;
-    p.mode   = 2; /* always triad: P1+P2+P3 never isolated from codegen */
+    {
+        TriadValue nu_v = triad_dict_get(cfg.as.dval, triad_str_new("nu"));
+        TriadValue lam_v = triad_dict_get(cfg.as.dval, triad_str_new("lam"));
+        if (nu_v.tag == TRIAD_LIST && lam_v.tag == TRIAD_LIST) {
+            int32_t nu_n = triad_list_len(nu_v.as.lval);
+            int32_t lam_n = triad_list_len(lam_v.as.lval);
+            if (nu_n == lam_n && nu_n >= 1 && nu_n <= 16) {
+                for (int32_t _i = 0; _i < nu_n; _i++) {
+                    _nu_cfg[_i] = _solver_vget(triad_list_get(nu_v.as.lval, _i), _nu_def[_i < 3 ? _i : 2]);
+                    _lam_cfg[_i] = _solver_vget(triad_list_get(lam_v.as.lval, _i), _lam_def[_i < 3 ? _i : 2]);
+                }
+                p.M = nu_n;
+                p.nu = _nu_cfg;
+                p.lam = _lam_cfg;
+            }
+        }
+    }
+    p.mode   = 2;
     p.seed   = (uint64_t)_solver_lget(cfg, "seed", 42);
     p.D      = _solver_iget(cfg, "D", 3);
     p.fdt_couple = _solver_iget(cfg, "fdt_couple", 1);
@@ -150,11 +174,6 @@ static TriadValue _triad_solver_solve(TriadValue cfg) {
     triad_dict_set(rd, triad_str_new("dx"), TRIAD_FLOAT(_dx));
     triad_dict_set(rd, triad_str_new("D"), TRIAD_INT(p.D));
 
-    /*
-     * crystallinity: FFT power spectrum, fraction where |k| > k_cutoff.
-     * Computed on the 1D axis; for D>1 uses the first N samples of psi
-     * (axis cut through the field).
-     */
     {
         TriadCplx *psi_hat = (TriadCplx*)malloc((size_t)p.N * sizeof(TriadCplx));
         if (psi_hat != NULL) {
@@ -171,7 +190,6 @@ static TriadValue _triad_solver_solve(TriadValue cfg) {
 
                 total_P += Pi;
 
-                /* k = 2*pi*fftfreq(i, N, dx) */
                 double fi = (double)i;
                 if (i > p.N / 2) {
                     fi -= (double)p.N;
@@ -232,7 +250,6 @@ static TriadValue _triad_solver_solve(TriadValue cfg) {
     return (TriadValue){.tag = TRIAD_DICT, .as = {.dval = rd}};
 }
 
-/* ==== ML builtins (tensor, triad, sequential, adam, etc.) ==== */
 '''
 
 _C_ML = r'''
@@ -242,14 +259,12 @@ static double _ml_vf(TriadValue v) {
     return (v.tag == TRIAD_INT) ? (double)v.as.ival : v.as.fval;
 }
 
-/* tensor(list, requires_grad?) -> TriadTensor* via TRIAD_PTR */
 static TriadValue _ml_tensor(TriadValue data_v, TriadValue rg_v) {
     int rg = (rg_v.tag == TRIAD_BOOL) ? rg_v.as.bval : 0;
 
     if (data_v.tag == TRIAD_LIST) {
         TriadList *l = data_v.as.lval;
 
-        /* Check if 2D (list of lists) */
         if (l->len > 0 && l->items[0].tag == TRIAD_LIST) {
             int32_t rows = l->len;
             int32_t cols = triad_list_len(l->items[0].as.lval);
@@ -266,7 +281,6 @@ static TriadValue _ml_tensor(TriadValue data_v, TriadValue rg_v) {
             return TRIAD_PTR_VAL(t);
         }
 
-        /* 1D */
         int32_t shape[] = {l->len};
         TriadTensor *t = triad_tensor_new(1, shape, rg);
 
@@ -277,7 +291,6 @@ static TriadValue _ml_tensor(TriadValue data_v, TriadValue rg_v) {
         return TRIAD_PTR_VAL(t);
     }
 
-    /* scalar */
     TriadTensor *t = triad_tensor_scalar(_ml_vf(data_v), rg);
     return TRIAD_PTR_VAL(t);
 }
@@ -353,7 +366,6 @@ static TriadValue _ml_tensor_item(TriadValue t_v) {
     return TRIAD_FLOAT(t->data[0]);
 }
 
-/* Sequential: seq_new(n), seq_add(seq, type, layer), seq_forward(seq, x) */
 static TriadValue _ml_sequential_new(TriadValue n_v) {
     return TRIAD_PTR_VAL(triad_sequential_new((int32_t)n_v.as.ival));
 }
@@ -378,7 +390,6 @@ static TriadValue _ml_sequential_forward(TriadValue seq_v, TriadValue x_v) {
     return TRIAD_PTR_VAL(triad_sequential_forward((TriadSequential*)seq_v.as.ptr, (TriadTensor*)x_v.as.ptr));
 }
 
-/* Adam: adam_new(seq, lr), adam_step(adam), adam_zero_grad(adam) */
 static TriadValue _ml_adam_new(TriadValue seq_v, TriadValue lr_v) {
     TriadTensor *params[256];
     int32_t np = triad_sequential_params((TriadSequential*)seq_v.as.ptr, params, 256);
@@ -435,7 +446,6 @@ static TriadValue _ml_tensor_mean(TriadValue a_v) {
     return TRIAD_PTR_VAL(triad_tensor_mean((TriadTensor*)a_v.as.ptr));
 }
 
-/* transformer nativo: embedding, layernorm, mha, transformer */
 static TriadValue _ml_embedding_new(TriadValue vocab_v, TriadValue dim_v) {
     return TRIAD_PTR_VAL(triad_embedding_new((int32_t)vocab_v.as.ival, (int32_t)dim_v.as.ival));
 }
@@ -486,7 +496,6 @@ static TriadValue _ml_transformer_adam(TriadValue t_v, TriadValue lr_v) {
     return TRIAD_PTR_VAL(triad_adam_new(params, np, _ml_vf(lr_v), 0.9, 0.999, 1e-8));
 }
 
-/* wave: peso de onda nativo */
 static TriadValue _ml_wave_new(TriadValue in_v, TriadValue out_v) {
     return TRIAD_PTR_VAL(triad_wave_triad_new((int32_t)in_v.as.ival, (int32_t)out_v.as.ival));
 }
@@ -534,6 +543,28 @@ static TriadValue _ml_tensor_print(TriadValue t_v) {
 '''
 
 _C_CCALL = r'''
+#ifdef _WIN32
+#include <windows.h>
+
+static void *_ccall_dlopen(const char *lib_name) {
+    void *h = (void*)LoadLibraryA(lib_name);
+
+    if (!h) {
+        fprintf(stderr, "ccall: cannot open library %s\n", lib_name);
+        return NULL;
+    }
+
+    return h;
+}
+
+static void *_ccall_sym(void *handle, const char *name) {
+    return (void*)GetProcAddress((HMODULE)handle, name);
+}
+
+static const char *_ccall_sym_error(void *sym) {
+    return sym ? NULL : "unknown symbol";
+}
+#else
 #include <dlfcn.h>
 
 static void *_ccall_dlopen(const char *lib_name) {
@@ -547,6 +578,17 @@ static void *_ccall_dlopen(const char *lib_name) {
     return h;
 }
 
+static void *_ccall_sym(void *handle, const char *name) {
+    dlerror();
+    return dlsym(handle, name);
+}
+
+static const char *_ccall_sym_error(void *sym) {
+    (void)sym;
+    return dlerror();
+}
+#endif
+
 static TriadValue _tri_ccall(TriadValue lib_v, TriadValue fn_v, int32_t nargs, TriadValue *args) {
     if (lib_v.tag != TRIAD_STRING || fn_v.tag != TRIAD_STRING) {
         fprintf(stderr, "ccall: lib and func must be strings\n");
@@ -558,10 +600,8 @@ static TriadValue _tri_ccall(TriadValue lib_v, TriadValue fn_v, int32_t nargs, T
         return TRIAD_NONE_VAL;
     }
 
-    dlerror();
-
-    void *sym = dlsym(handle, fn_v.as.sval->data);
-    char *err = dlerror();
+    void *sym = _ccall_sym(handle, fn_v.as.sval->data);
+    const char *err = _ccall_sym_error(sym);
 
     if (err) {
         fprintf(stderr, "ccall: cannot find symbol %s: %s\n", fn_v.as.sval->data, err);
@@ -646,7 +686,6 @@ static TriadString *_triad_str_join(TriadString *sep, TriadList *l) {
     return out;
 }
 
-/* format spec subset: [width][.prec][f e g d %], python-style */
 static TriadString *_triad_format_spec(TriadValue v, const char *spec) {
     char buf[256];
     int width = -1, prec = -1;
@@ -726,9 +765,9 @@ static TriadValue _triad_num_binop(char op, TriadValue l, TriadValue r) {
         case '+': return TRIAD_INT(a + b);
         case '-': return TRIAD_INT(a - b);
         case '*': return TRIAD_INT(a * b);
-        case '/': return TRIAD_FLOAT((double)a / (double)b);  /* python semantics */
+        case '/': return TRIAD_FLOAT((double)a / (double)b);
         case 'f': { int64_t q = a / b; if ((a % b != 0) && ((a < 0) != (b < 0))) q--; return TRIAD_INT(q); }
-        case '%': return TRIAD_INT(((a % b) + b) % b);        /* python sign */
+        case '%': return TRIAD_INT(((a % b) + b) % b);
         case 'p': {
             if (b >= 0) {
                 int64_t acc = 1, base = a, e = b;
@@ -784,7 +823,6 @@ static TriadValue _triad_num_cmp(char op, TriadValue l, TriadValue r) {
 }
 
 static TriadValue _triad_identity_eq(TriadValue l, TriadValue r) {
-    /* for is/is_not: pointer equality for objects, value equality for ints/floats/bools/none */
     if (l.tag == TRIAD_INT && r.tag == TRIAD_INT)
         return TRIAD_BOOL(l.as.ival == r.as.ival);
     if (l.tag == TRIAD_FLOAT && r.tag == TRIAD_FLOAT)
@@ -793,7 +831,6 @@ static TriadValue _triad_identity_eq(TriadValue l, TriadValue r) {
         return TRIAD_BOOL(l.as.bval == r.as.bval);
     if (l.tag == TRIAD_NONE && r.tag == TRIAD_NONE)
         return TRIAD_BOOL(true);
-    /* objects: identity comparison (same pointer) */
     return TRIAD_BOOL(l.as.ival == r.as.ival);
 }
 
@@ -899,13 +936,18 @@ static TriadValue _triad_method_fallback(TriadValue obj, const char *m,
                                          int32_t nkw, const char **kwn, TriadValue *kwv) {
     if (obj.tag == TRIAD_PYOBJ)
         return triad_py_method_kw(obj, m, n, args, nkw, kwn, kwv);
+    if (obj.tag == TRIAD_REGEX) {
+        const char *s = (n > 0 && args[0].tag == TRIAD_STRING && args[0].as.sval) ? args[0].as.sval->data : "";
+        if (!strcmp(m, "test")) return TRIAD_BOOL(triad_regex_test(obj.as.rxval, s));
+        if (!strcmp(m, "search")) return triad_regex_search(obj.as.rxval, s);
+        if (!strcmp(m, "match")) return triad_regex_match(obj.as.rxval, s);
+        if (!strcmp(m, "findall")) return triad_regex_findall(obj.as.rxval, s);
+    }
     if (obj.tag == TRIAD_OBJECT) {
-        /* check field table first (closure methods) */
         TriadValue f = triad_object_get(obj.as.oval, triad_str_new(m));
         if (f.tag != TRIAD_NONE) {
             return _triad_call_value(f, n, args, nkw, kwn, kwv);
         }
-        /* walk class meta chain for inherited native methods */
         if (obj.as.oval->class_meta) {
             TriadNativeFn fn = triad_class_meta_resolve_method(obj.as.oval->class_meta, m);
             if (fn) return fn(n, args);
@@ -919,6 +961,12 @@ static TriadValue _triad_method_fallback(TriadValue obj, const char *m,
 static TriadValue _triad_field_any(TriadValue obj, const char *name) {
     if (obj.tag == TRIAD_PYOBJ)
         return triad_py_getattr(obj, name);
+    if (obj.tag == TRIAD_REGEX) {
+        if (!strcmp(name, "pattern") || !strcmp(name, "source"))
+            return (TriadValue){.tag = TRIAD_STRING, .as = {.sval = triad_str_new(triad_regex_pattern(obj.as.rxval))}};
+        if (!strcmp(name, "flags"))
+            return (TriadValue){.tag = TRIAD_STRING, .as = {.sval = triad_str_new(triad_regex_flags(obj.as.rxval))}};
+    }
     if (obj.tag == TRIAD_OBJECT)
         return triad_object_get(obj.as.oval, triad_str_new(name));
     if (obj.tag == TRIAD_DICT)
@@ -1135,11 +1183,17 @@ static TriadValue _triad_call_value(TriadValue fn, int32_t n, TriadValue *args,
 static TriadValue _triad_method_fallback(TriadValue obj, const char *m,
                                          int32_t n, TriadValue *args,
                                          int32_t nkw, const char **kwn, TriadValue *kwv) {
+    if (obj.tag == TRIAD_REGEX) {
+        const char *s = (n > 0 && args[0].tag == TRIAD_STRING && args[0].as.sval) ? args[0].as.sval->data : "";
+        if (!strcmp(m, "test")) return TRIAD_BOOL(triad_regex_test(obj.as.rxval, s));
+        if (!strcmp(m, "search")) return triad_regex_search(obj.as.rxval, s);
+        if (!strcmp(m, "match")) return triad_regex_match(obj.as.rxval, s);
+        if (!strcmp(m, "findall")) return triad_regex_findall(obj.as.rxval, s);
+    }
     if (obj.tag == TRIAD_OBJECT) {
         TriadValue f = triad_object_get(obj.as.oval, triad_str_new(m));
         if (f.tag != TRIAD_NONE)
             return _triad_call_value(f, n, args, nkw, kwn, kwv);
-        /* walk class meta chain for inherited native methods */
         if (obj.as.oval->class_meta) {
             TriadNativeFn fn = triad_class_meta_resolve_method(obj.as.oval->class_meta, m);
             if (fn) return fn(n, args);
@@ -1151,6 +1205,12 @@ static TriadValue _triad_method_fallback(TriadValue obj, const char *m,
 }
 
 static TriadValue _triad_field_any(TriadValue obj, const char *name) {
+    if (obj.tag == TRIAD_REGEX) {
+        if (!strcmp(name, "pattern") || !strcmp(name, "source"))
+            return (TriadValue){.tag = TRIAD_STRING, .as = {.sval = triad_str_new(triad_regex_pattern(obj.as.rxval))}};
+        if (!strcmp(name, "flags"))
+            return (TriadValue){.tag = TRIAD_STRING, .as = {.sval = triad_str_new(triad_regex_flags(obj.as.rxval))}};
+    }
     if (obj.tag == TRIAD_OBJECT)
         return triad_object_get(obj.as.oval, triad_str_new(name));
     if (obj.tag == TRIAD_DICT)
@@ -1599,14 +1659,13 @@ class CCodeGen:
         elif isinstance(node, IRMapDestruct):
             self._gen_map_destruct(node)
         elif isinstance(node, IRCouple):
-            self._emit(f'/* couple {node.src} -> {node.dst} (native runtime metadata) */')
+            pass
         elif isinstance(node, IRPair):
-            self._emit(f'/* pair {node.a} <-> {node.b} (native runtime metadata) */')
+            pass
         elif isinstance(node, IRRing):
-            members_str = ', '.join(node.members)
-            self._emit(f'/* ring [{members_str}] (native runtime metadata) */')
+            pass
         elif isinstance(node, IRAnnotation):
-            self._emit(f'/* @{node.key}({node.args}) (native runtime metadata) */')
+            pass
         elif isinstance(node, IRMatch):
             self._gen_match(node)
         elif isinstance(node, (IRTypeDecl, IREntityDecl, IRWorldDecl, IRRegDecl, IRSubstrateDecl, IRObserve, IRRun)):
@@ -1658,14 +1717,13 @@ class CCodeGen:
         elif isinstance(node, IRMapDestruct):
             self._gen_map_destruct(node)
         elif isinstance(node, IRCouple):
-            self._emit(f'/* couple {node.src} -> {node.dst} (native runtime metadata) */')
+            pass
         elif isinstance(node, IRPair):
-            self._emit(f'/* pair {node.a} <-> {node.b} (native runtime metadata) */')
+            pass
         elif isinstance(node, IRRing):
-            members_str = ', '.join(node.members)
-            self._emit(f'/* ring [{members_str}] (native runtime metadata) */')
+            pass
         elif isinstance(node, IRAnnotation):
-            self._emit(f'/* @{node.key}({node.args}) (native runtime metadata) */')
+            pass
         elif isinstance(node, IRMatch):
             self._gen_match(node)
         elif isinstance(node, (IRTypeDecl, IREntityDecl, IRWorldDecl, IRRegDecl, IRSubstrateDecl, IRObserve, IRRun)):
@@ -1971,7 +2029,7 @@ class CCodeGen:
             name = self._sanitize(node.name)
             val = self._gen_expr(node.value)
             return f'TriadValue {name} = {val};'
-        return '/* unknown let */;'
+        return '(void)0;'
 
     def _gen_destruct_let(self, node: IRDestructLet) -> None:
         val_expr = self._gen_expr(node.value)
@@ -2106,7 +2164,7 @@ class CCodeGen:
         each = self._gen_expr(node.each_for) if node.each_for else 'TRIAD_NONE_VAL'
         self._emit(f'(void){inputs};')
         self._emit(f'(void){each};')
-        self._emit(f'/* sequence via {node.target} is preserved as native metadata here */')
+        self._emit('(void)0;')
 
     def _gen_try_catch(self, node: IRTryCatch):
         self._emit('TRIAD_TRY_BEGIN {')
@@ -2214,6 +2272,16 @@ class CCodeGen:
             return self._gen_yield_expr(node)
         if isinstance(node, IRAwait):
             return self._gen_await(node)
+        if isinstance(node, IRNullish):
+            return self._gen_nullish(node)
+        if isinstance(node, IRElvis):
+            return self._gen_elvis(node)
+        if isinstance(node, IROptChain):
+            return self._gen_optchain(node)
+        if isinstance(node, IRRegex):
+            return self._gen_regex(node)
+        if isinstance(node, IRCompoundAssign):
+            return self._gen_compound_assign(node)
         if isinstance(node, IRLambda):
             return self._gen_lambda(node)
         return 'TRIAD_NONE_VAL'
@@ -2263,6 +2331,99 @@ class CCodeGen:
         if node.op == '~':
             return f'_triad_bitwise_not(({operand}))'
         return operand
+
+    def _gen_nullish(self, node) -> str:
+        l = self._gen_expr(node.left)
+        r = self._gen_expr(node.right)
+        return f'({{ TriadValue _t = ({l}); _t.tag == TRIAD_NONE ? ({r}) : _t; }})'
+
+    def _gen_elvis(self, node) -> str:
+        c = self._gen_expr(node.cond)
+        e = self._gen_expr(node.else_val)
+        return f'({{ TriadValue _c = ({c}); triad_is_y(_c) ? _c : ({e}); }})'
+
+    def _gen_optchain(self, node) -> str:
+        o = self._gen_expr(node.obj)
+        if node.kind == 'attr':
+            access = f'_triad_field_any(_o, "{node.name}")'
+        elif node.kind == 'index':
+            access = f'_triad_index_any(_o, ({self._gen_expr(node.index)}))'
+        else:
+            if node.kwargs:
+                names = ', '.join(f'"{k}"' for k in node.kwargs)
+                vals = ', '.join(self._gen_expr(v) for v in node.kwargs.values())
+                kw_c = f'{len(node.kwargs)}, (const char*[]){{{names}}}, (TriadValue[]){{{vals}}}'
+            else:
+                kw_c = '0, NULL, NULL'
+            if not any(isinstance(a, IRUnaryOp) and a.op == '*' for a in node.args):
+                args = [self._gen_expr(a) for a in node.args]
+                n = len(args)
+                args_arr = ', '.join(args) if args else ''
+                args_c = f'(TriadValue[]){{{args_arr}}}' if args else 'NULL'
+                access = (f'({{ TriadValue _mo = _triad_field_any(_o, "{node.name}"); '
+                          f'_triad_method_fallback(_mo, "{node.name}", {n}, {args_c}, {kw_c}); }})')
+            else:
+                av = self._fresh('_argv')
+                an = self._fresh('_argc')
+                ai = self._fresh('_ai')
+                parts = []
+                bounds = []
+                for a in node.args:
+                    if isinstance(a, IRUnaryOp) and a.op == '*':
+                        sv = self._fresh('_sp')
+                        parts.append(f'TriadValue {sv} = ({self._gen_expr(a.operand)});')
+                        bounds.append(('sp', sv))
+                    else:
+                        bounds.append(('fx', self._gen_expr(a)))
+                parts.append(f'int32_t {an} = 0;')
+                for kind, ex in bounds:
+                    if kind == 'sp':
+                        parts.append(f'{an} += ({ex}.tag == TRIAD_LIST) ? triad_list_len({ex}.as.lval) : 1;')
+                    else:
+                        parts.append(f'{an}++;')
+                parts.append(f'TriadValue *{av} = malloc((size_t){an} * sizeof(TriadValue));')
+                parts.append(f'int32_t {ai} = 0;')
+                for kind, ex in bounds:
+                    if kind == 'sp':
+                        parts.append(f'if ({ex}.tag == TRIAD_LIST) {{ for (int32_t _si = 0; _si < triad_list_len({ex}.as.lval); _si++) {av}[{ai}++] = triad_list_get({ex}.as.lval, _si); }} else {{ {av}[{ai}++] = {ex}; }}')
+                    else:
+                        parts.append(f'{av}[{ai}++] = ({ex});')
+                parts.append(f'TriadValue _r = _triad_method_fallback(_triad_field_any(_o, "{node.name}"), "{node.name}", {an}, {av}, {kw_c});')
+                parts.append(f'free({av});')
+                parts.append('_r;')
+                access = '({ ' + ' '.join(parts) + ' })'
+        return f'({{ TriadValue _o = ({o}); _o.tag == TRIAD_NONE ? TRIAD_NONE_VAL : ({access}); }})'
+
+    def _gen_compound_assign(self, node) -> str:
+        t = node.target
+        v = self._gen_expr(node.value)
+        if node.op == '??=':
+            new = f'({{ TriadValue _n = ({v}); _old.tag == TRIAD_NONE ? _n : _old; }})'
+        elif node.op == '||=':
+            new = f'(triad_is_y(_old) ? _old : ({v}))'
+        else:
+            new = f'(triad_is_y(_old) ? ({v}) : _old)'
+        if isinstance(t, IRIndex):
+            o = self._gen_expr(t.obj)
+            k = self._gen_expr(t.index)
+            return (f'({{ TriadValue _o = ({o}); TriadValue _k = ({k}); '
+                    f'TriadValue _old = _triad_index_any(_o, _k); TriadValue _new = {new}; '
+                    f'(void)_triad_setindex_any(_o, _k, _new); _new; }})')
+        if isinstance(t, IRField):
+            o = self._gen_expr(t.obj)
+            return (f'({{ TriadValue _o = ({o}); '
+                    f'TriadValue _old = _triad_field_any(_o, "{t.field}"); TriadValue _new = {new}; '
+                    f'(void)_triad_setattr_any(_o, "{t.field}", _new); _new; }})')
+        return self._gen_expr(node.value)
+
+    @staticmethod
+    def _c_escape(s: str) -> str:
+        return s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\t', '\\t').replace('\r', '\\r')
+
+    def _gen_regex(self, node) -> str:
+        pat = self._c_escape(node.pattern)
+        fl = self._c_escape(node.flags or '')
+        return f'((TriadValue){{.tag = TRIAD_REGEX, .as = {{.rxval = triad_regex_compile("{pat}", "{fl}")}}}})'
 
     def _gen_call(self, node: IRCall) -> str:
         if any(isinstance(a, IRUnaryOp) and a.op == '*' for a in node.args):
@@ -2701,11 +2862,22 @@ class CCodeGen:
         return f'_triad_field_any(({obj}), "{node.field}")'
 
     def _gen_list(self, node: IRList) -> str:
-        elems = [self._gen_expr(e) for e in node.elements]
-        if not elems:
-            return '(TriadValue){.tag = TRIAD_LIST, .as = {.lval = triad_list_new()}}'
-        elems_str = ', '.join(elems)
-        return f'({{ TriadList *_tl = triad_list_new_cap({len(elems)}); TriadValue _ta[] = {{{elems_str}}}; for (int32_t _ti = 0; _ti < {len(elems)}; _ti++) triad_list_push(_tl, _ta[_ti]); (TriadValue){{.tag = TRIAD_LIST, .as = {{.lval = _tl}}}}; }})'
+        if not any(isinstance(e, IRUnaryOp) and e.op == '*' for e in node.elements):
+            elems = [self._gen_expr(e) for e in node.elements]
+            if not elems:
+                return '(TriadValue){.tag = TRIAD_LIST, .as = {.lval = triad_list_new()}}'
+            elems_str = ', '.join(elems)
+            return f'({{ TriadList *_tl = triad_list_new_cap({len(elems)}); TriadValue _ta[] = {{{elems_str}}}; for (int32_t _ti = 0; _ti < {len(elems)}; _ti++) triad_list_push(_tl, _ta[_ti]); (TriadValue){{.tag = TRIAD_LIST, .as = {{.lval = _tl}}}}; }})'
+        parts = ['TriadList *_tl = triad_list_new();']
+        for e in node.elements:
+            if isinstance(e, IRUnaryOp) and e.op == '*':
+                sv = self._fresh('_sp')
+                parts.append(f'TriadValue {sv} = ({self._gen_expr(e.operand)});')
+                parts.append(f'if ({sv}.tag == TRIAD_LIST) {{ for (int32_t _si = 0; _si < triad_list_len({sv}.as.lval); _si++) triad_list_push(_tl, triad_list_get({sv}.as.lval, _si)); }} else {{ triad_list_push(_tl, {sv}); }}')
+            else:
+                parts.append(f'triad_list_push(_tl, ({self._gen_expr(e)}));')
+        parts.append('(TriadValue){.tag = TRIAD_LIST, .as = {.lval = _tl}};')
+        return '({ ' + ' '.join(parts) + ' })'
 
     def _gen_map(self, node: IRMap) -> str:
         if not node.pairs:
@@ -3016,7 +3188,7 @@ class CCodeGen:
         if isinstance(pattern, IRIdent):
             if pattern.name == '_':
                 return '1'
-            return '1  /* binding pattern always matches */'
+            return '1'
         if isinstance(pattern, IRComplex):
             return f'triad_eq({subject_var}, (TriadValue){{.tag = TRIAD_COMPLEX, .as = {{.cplx = {{ {pattern.real}, {pattern.imag} }}}}}})'
         if isinstance(pattern, IRBytes):
@@ -3047,7 +3219,7 @@ class CCodeGen:
                 el_expr = self._gen_expr(el)
                 checks.append(f'triad_set_contains({subject_var}, {el_expr})')
             return ' && '.join(f'({c})' for c in checks)
-        return '1  /* unknown pattern type */'
+        return '1'
 
     def _gen_match_bindings(self, subject_var: str, pattern: IRNode) -> None:
         if isinstance(pattern, IRIdent):

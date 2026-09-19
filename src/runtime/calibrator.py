@@ -93,7 +93,7 @@ class GaussNewtonCalibrator:
         for i, name in enumerate(self.config.observables):
 
             old_val = prev.get(name, 0.0)
-            new_val = obs[name]
+            new_val = obs.get(name, 0.0)
             if abs(old_val) > 1e-10:
                 residual[i] = (new_val - old_val) / abs(old_val)
             else:

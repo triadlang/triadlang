@@ -51,7 +51,15 @@ def cmd_watch(args) -> int:
         if a == '--cmd' and i + 1 < len(args):
             subcmd = args[i + 1]; i += 2
         elif a == '--interval' and i + 1 < len(args):
-            interval = float(args[i + 1]); i += 2
+            try:
+                interval = float(args[i + 1])
+            except ValueError:
+                print(f'watch: invalid --interval {args[i + 1]!r}', file=sys.stderr)
+                return 1
+            if not interval >= 0.05:
+                print('watch: --interval must be >= 0.05', file=sys.stderr)
+                return 1
+            i += 2
         elif a == '--no-clear':
             clear = False; i += 1
         else:
@@ -98,7 +106,7 @@ def cmd_watch(args) -> int:
         print('\nwatch: stopped')
         return 0 if (last_rc in (0, None)) else last_rc
 
-_BUNDLE_PACKAGES = ('frontend', 'runtime', 'compiler', 'stdlib', 'cli', 'adapters', 'embed')
+_BUNDLE_PACKAGES = ('frontend', 'runtime', 'compiler', 'stdlib', 'cli', 'adapters', 'embed', 'triad')
 
 _MAIN_PY = '''\
 import os
@@ -108,14 +116,14 @@ import zipfile
 
 def _extract_app(tmp):
     here = os.path.dirname(os.path.abspath(__file__))
-    if os.path.isdir(here):                      # rodando descompactado
+    if os.path.isdir(here):
         src = os.path.join(here, "app")
         for fn in os.listdir(src):
             with open(os.path.join(src, fn), "rb") as f:
                 data = f.read()
             with open(os.path.join(tmp, fn), "wb") as f:
                 f.write(data)
-    else:                                        # rodando do .pyz
+    else:
         with zipfile.ZipFile(here) as z:
             for info in z.infolist():
                 if info.filename.startswith("app/") and not info.is_dir():

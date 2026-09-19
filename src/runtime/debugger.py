@@ -26,23 +26,36 @@ class DAPProtocol:
 
     def read_message(self) -> dict | None:
 
-        header = b''
-        while True:
-            byte = self._in.read(1)
-            if not byte:
-                return None
-            header += byte
-            if header.endswith(b'\r\n\r\n'):
-                break
-        header_str = header.decode('ascii')
-        content_length = 0
-        for line in header_str.split('\r\n'):
-            if line.startswith('Content-Length:'):
-                content_length = int(line.split(':')[1].strip())
-        if content_length == 0:
+        try:
+            header = b''
+            while True:
+                byte = self._in.read(1)
+                if not byte:
+                    return None
+                header += byte
+                if header.endswith(b'\r\n\r\n'):
+                    break
+                if len(header) > 8192:
+                    return None
+            header_str = header.decode('ascii')
+        except (OSError, ValueError, UnicodeDecodeError):
             return None
-        body = self._in.read(content_length)
-        return json.loads(body.decode('utf-8'))
+        content_length = 0
+        try:
+            for line in header_str.split('\r\n'):
+                if line.lower().startswith('content-length:'):
+                    content_length = int(line.split(':')[1].strip())
+        except ValueError:
+            return None
+        if content_length <= 0 or content_length > 16 * 1024 * 1024:
+            return None
+        try:
+            body = self._in.read(content_length)
+            if len(body) < content_length:
+                return None
+            return json.loads(body.decode('utf-8'))
+        except (OSError, ValueError, UnicodeDecodeError):
+            return None
 
     def send_message(self, msg: dict[str, object]):
 
@@ -187,10 +200,21 @@ class TriadDebugger:
             'isinstance': isinstance, 'issubclass': issubclass,
             'True': True, 'False': False, 'None': None,
         }
-        for token in ('__import__', 'eval', 'exec', 'compile', 'open', 'globals', 'locals'):
-            if token in expr:
-                raise NameError(f'forbidden token in debugger expression: {token}')
-        return eval(expr, {'__builtins__': allowed_builtins}, frame)
+        import ast as _ast
+        try:
+            _tree = _ast.parse(expr, mode='eval')
+        except SyntaxError as e:
+            raise NameError(f'invalid debugger expression: {e}')
+        for _node in _ast.walk(_tree):
+            if isinstance(_node, _ast.Attribute):
+                if _node.attr.startswith('__'):
+                    raise NameError(f'forbidden attribute in debugger expression: {_node.attr}')
+            elif isinstance(_node, _ast.Name):
+                if _node.id in ('__import__', 'eval', 'exec', 'compile', 'open',
+                                'globals', 'locals', 'vars', 'dir', 'getattr',
+                                'setattr', 'delattr', '__builtins__'):
+                    raise NameError(f'forbidden name in debugger expression: {_node.id}')
+        return eval(compile(_tree, '<triad-dbg>', 'eval'), {'__builtins__': allowed_builtins}, frame)
 
     def _interact(self, line: int):
         src_line = self._source_lines[line - 1] if 0 < line <= len(self._source_lines) else ''
@@ -524,6 +548,10 @@ class TriadDebugger:
                                  tri_source=source)
         env = compiler._make_globals(filename)
         env['_triad_dbg'] = self
+        bltin = env.get('__builtins__')
+        if isinstance(bltin, dict):
+            import builtins as _bltins
+            bltin.setdefault('locals', _bltins.locals)
         try:
             compiled = compile(code, filename, 'exec')
             exec(compiled, env)

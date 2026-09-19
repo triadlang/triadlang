@@ -27,7 +27,7 @@ def _collect_templates() -> list[dict]:
         if not os.path.isdir(cat_dir) or category.startswith('__'):
             continue
         for fname in sorted(os.listdir(cat_dir)):
-            if not fname.endswith('.tri'):
+            if not fname.endswith('.tri') or fname.startswith(('.', '__')):
                 continue
             fpath = os.path.join(cat_dir, fname)
             try:

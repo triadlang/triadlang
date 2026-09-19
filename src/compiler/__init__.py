@@ -4,12 +4,6 @@ __all__ = ['TriadCompiler', 'CompileConfig', 'decode_outputs', 'main']
 
 
 def __getattr__(name):
-    """Load the solver-backed compiler only when it is actually requested.
-
-    Keeping package import lightweight lets frontend-only tools such as the
-    parser, formatter and type checker run without initializing the numerical
-    runtime or probing GPU drivers.
-    """
     if name in {'TriadCompiler', 'CompileConfig', 'decode_outputs'}:
         from compiler.triadc import CompileConfig, Compiler, decode_outputs
 

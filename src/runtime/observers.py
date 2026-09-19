@@ -24,7 +24,9 @@ def density_scalar_series(density_traj: np.ndarray, dx: float,
     if kind == 'ipr':
         n4 = (rho ** 2).sum(0) * dx
         return n4 / np.maximum(n2 * n2, 1e-30)
-    return n2
+    if kind == 'norm':
+        return n2
+    raise ValueError(f"density_scalar_series unknown kind {kind!r}; use 'participation', 'peak', 'ipr' or 'norm'")
 
 def slow_memory_series(y_traj: np.ndarray) -> np.ndarray:
 

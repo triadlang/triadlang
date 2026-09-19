@@ -44,13 +44,11 @@ body{font-family:'JetBrains Mono','Fira Code','Consolas',monospace;background:va
 .obs-card .value{font-size:16px;color:var(--a);font-weight:700;margin-top:2px}
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--b);border-top-color:var(--a);border-radius:50%;animation:spin .6s triad infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-/* canvas */
 .canvas-row{display:flex;gap:12px;margin-top:12px}
 .canvas-col{flex:1;min-width:0}
 .canvas-col canvas{width:100%;height:200px;background:var(--bg);border:1px solid var(--b);border-radius:4px}
 .canvas-label{font-size:10px;color:var(--d);text-transform:uppercase;margin-bottom:4px}
 .timeline-canvas{width:100%;height:160px;background:var(--bg);border:1px solid var(--b);border-radius:4px;margin-top:12px}
-/* tutorial overlay */
 .tutorial-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:100}
 .tutorial-box{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:24px;max-width:640px;width:90%;max-height:80vh;overflow-y:auto}
 .tutorial-box h2{color:var(--a);margin-bottom:16px;font-size:18px}
@@ -104,8 +102,7 @@ body{font-family:'JetBrains Mono','Fira Code','Consolas',monospace;background:va
       <button class="secondary" onclick="checkCode()">Check</button>
       <button class="secondary" onclick="formatCode()">Format</button>
     </div>
-    <div class="editor-wrapper"><textarea id="editor" spellcheck="false">// TriadLang — P1 + P2 + P3
-print("Hello from TriadLang")</textarea></div>
+    <div class="editor-wrapper"><textarea id="editor" spellcheck="false">print("Hello from TriadLang")</textarea></div>
     <div class="output-wrapper" id="codeOutput"><div style="color:var(--d);font-size:12px">Output will appear here...</div></div>
   </div>
 
@@ -143,7 +140,6 @@ print("Hello from TriadLang")</textarea></div>
 </div>
 
 <script>
-// ======== STATE ========
 let allTemplates=[],activeTab='code',tutStep=0;
 
 const TUT_STEPS=[
@@ -196,11 +192,9 @@ const TUT_STEPS=[
   }
 ];
 
-// ======== INIT ========
 async function init(){await loadTemplates();await loadRegimeLists();await loadRegimes();}
 init();
 
-// ======== TABS ========
 document.getElementById('tabBar').addEventListener('click',e=>{
   const t=e.target.closest('.tab');if(!t)return;
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
@@ -208,7 +202,6 @@ document.getElementById('tabBar').addEventListener('click',e=>{
   ['code','field','coupled','regimes'].forEach(id=>document.getElementById('tab-'+id).style.display=id===activeTab?'flex':'none');
 });
 
-// ======== TUTORIAL ========
 function openTutorial(){tutStep=0;renderTut();document.getElementById('tutorialOverlay').style.display='flex';}
 function closeTutorial(){document.getElementById('tutorialOverlay').style.display='none';}
 function tutNext(){if(tutStep<TUT_STEPS.length-1){tutStep++;renderTut();}else{closeTutorial();}}
@@ -222,7 +215,6 @@ function renderTut(){
   document.getElementById('tutNext').textContent=tutStep===TUT_STEPS.length-1?'Finish →':'Next →';
 }
 
-// ======== TEMPLATES ========
 async function loadTemplates(){
   try{
     const r=await fetch('/api/templates/');const d=await r.json();
@@ -231,17 +223,18 @@ async function loadTemplates(){
       const cd=document.createElement('div');cd.className='template-cat';cd.textContent=cat;l.appendChild(cd);
       for(const t of allTemplates.filter(x=>x.category===cat)){
         const i=document.createElement('div');i.className='template-item';i.textContent=t.name;i.title=t.path;
-        i.onclick=()=>{loadTemplate(t);};
+        i.onclick=(ev)=>{loadTemplate(t,ev);};
         l.appendChild(i);
       }
     }
   }catch(e){console.error(e);}
 }
-function loadTemplate(t){
+function loadTemplate(t,ev){
   document.getElementById('editor').value=t.source;
   switchTab('code');
   document.querySelectorAll('.template-item').forEach(el=>el.classList.remove('active'));
-  if(event&&event.target)event.target.classList.add('active');
+  const tgt=ev&&(ev.currentTarget||ev.target);
+  if(tgt&&tgt.classList)tgt.classList.add('active');
 }
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(tab=>tab.classList.remove('active'));
@@ -249,7 +242,6 @@ function switchTab(name){
   activeTab=name;['code','field','coupled','regimes'].forEach(id=>document.getElementById('tab-'+id).style.display=id===name?'flex':'none');
 }
 
-// ======== CODE ========
 async function runCode(){
   const o=document.getElementById('codeOutput');o.innerHTML='<div class="timestamp">'+now()+' — running...</div><div class="spinner"></div>';
   try{
@@ -284,7 +276,6 @@ async function formatCode(){
   }catch(e){o.innerHTML='<div class="error">'+esc(e.message)+'</div>';}
 }
 
-// ======== FIELD ========
 async function runField(){
   const regime=document.getElementById('fieldRegime').value;
   const params={N:+document.getElementById('fieldN').value,T:+document.getElementById('fieldT').value,
@@ -319,14 +310,10 @@ function renderFieldLoading(){
 function renderFieldResult(d,params){
   let h='<div class="timestamp">'+now()+'</div>';
   h+='<div style="font-size:11px;color:var(--d);margin-bottom:8px">t_final='+d.t_final.toFixed(1)+' &nbsp; dx='+d.dx.toFixed(3)+' &nbsp; L='+d.L.toFixed(1)+' &nbsp; N='+d.x.length+' &nbsp; <span style="color:var(--y)">P1+P2+P3</span></div>';
-  // density + power spectrum row
   h+='<div class="canvas-row"><div class="canvas-col"><div class="canvas-label">density |ψ(x)|²</div><canvas id="densityCanvas"></canvas></div><div class="canvas-col"><div class="canvas-label">power spectrum</div><canvas id="spectrumCanvas"></canvas></div></div>';
-  // timeline
   if(d.timeline&&d.timeline.length>0){h+='<div class="canvas-label" style="margin-top:8px">crystallinity over time</div><canvas id="timelineCanvas" class="timeline-canvas"></canvas>';}
-  // observables
   h+=obsGrid(d.observables);
   document.getElementById('fieldOutput').innerHTML=h;
-  // draw
   requestAnimationFrame(()=>{
     const cA=getComputedStyle(document.documentElement).getPropertyValue('--a').trim();
     const cO=getComputedStyle(document.documentElement).getPropertyValue('--o').trim();
@@ -336,7 +323,6 @@ function renderFieldResult(d,params){
   });
 }
 
-// ======== CANVAS DRAW ========
 function drawLine(canvasId,x,y,color,ylabel){
   const c=document.getElementById(canvasId);if(!c)return;
   const W=c.parentElement.clientWidth-4;c.width=W*2;c.height=400;c.style.width=W+'px';c.style.height='200px';
@@ -345,11 +331,9 @@ function drawLine(canvasId,x,y,color,ylabel){
   if(x.length<2)return;
   const xMin=Math.min(...x),xMax=Math.max(...x),yMin=Math.min(...y),yMax=Math.max(...y);
   const yr=yMax-yMin||1;
-  // grid
   const gridColor=getComputedStyle(document.documentElement).getPropertyValue('--b').trim()||'#23283a';
   ctx.strokeStyle=gridColor;ctx.lineWidth=0.5;
   for(let i=0;i<5;i++){const gy=m+(h-2*m)*i/4;ctx.beginPath();ctx.moveTo(m,gy);ctx.lineTo(w-m,gy);ctx.stroke();}
-  // line
   ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();
   for(let i=0;i<x.length;i++){
     const px=m+(x[i]-xMin)/(xMax-xMin||1)*(w-2*m);
@@ -357,7 +341,6 @@ function drawLine(canvasId,x,y,color,ylabel){
     if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
   }
   ctx.stroke();
-  // labels
   const dimColor=getComputedStyle(document.documentElement).getPropertyValue('--d').trim()||'#6c7480';
   ctx.fillStyle=dimColor;ctx.font='9px monospace';
   ctx.textAlign='center';ctx.fillText('x',w/2,h-4);
@@ -372,7 +355,6 @@ function drawTimeline(canvasId,tl){
   ctx.clearRect(0,0,w,h);
   const ts=tl.map(x=>x.t),crs=tl.map(x=>x.crystallinity);
   const tMin=ts[0],tMax=ts[ts.length-1],cMin=0,cMax=1;
-  // grid & line
   ctx.strokeStyle='rgba(35,40,58,.5)';ctx.lineWidth=0.5;
   for(let i=0;i<5;i++){const gy=m+(h-2*m)*i/4;ctx.beginPath();ctx.moveTo(m,gy);ctx.lineTo(w-m,gy);ctx.stroke();}
   const pColor=getComputedStyle(document.documentElement).getPropertyValue('--p').trim()||'#c586c0';
@@ -389,7 +371,6 @@ function drawTimeline(canvasId,tl){
   ctx.save();ctx.translate(8,h/2);ctx.rotate(-Math.PI/2);ctx.textAlign='center';ctx.fillText('crystallinity',0,0);ctx.restore();
 }
 
-// ======== COUPLED ========
 async function runCoupled(){
   const o=document.getElementById('coupledOutput');o.innerHTML='<div class="spinner"></div> coupling substrates...';
   try{
@@ -404,7 +385,6 @@ async function runCoupled(){
   }catch(e){o.innerHTML='<div class="error">'+esc(e.message)+'</div>';}
 }
 
-// ======== REGIMES ========
 async function loadRegimeLists(){
   try{
     const r=await fetch('/regimes/');const d=await r.json();
@@ -431,7 +411,6 @@ async function loadRegimes(){
   }catch(e){o.innerHTML='<div class="error">'+esc(e.message)+'</div>';}
 }
 
-// ======== UTILS ========
 function obsGrid(d){return '<div class="obs-grid">'+
   '<div class="obs-card"><div class="label">crystallinity</div><div class="value">'+(d.crystallinity||0).toFixed(4)+'</div></div>'+
   '<div class="obs-card"><div class="label">k*</div><div class="value">'+(d.k_star||0).toFixed(4)+'</div></div>'+

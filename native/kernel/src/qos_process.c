@@ -33,25 +33,23 @@ static void fft_1d(TriadCplx *in, TriadCplx *out, int N, int sign) {
             out[k].re += in[n].re * c - in[n].im * s;
             out[k].im += in[n].re * s + in[n].im * c;
         }
-        out[k].re /= N;
-        out[k].im /= N;
+        if (sign > 0) {
+            out[k].re /= N;
+            out[k].im /= N;
+        }
     }
 }
 
 static void evolve_step(QosProcess *p, double dt, double V_ext, double V_coupled) {
     if (!p->psi || p->N <= 0) return;
     
-    // P1: Evoluir ψ com FFT (sem colapso!)
     TriadCplx *psi_freq = (TriadCplx *)malloc(p->N * sizeof(TriadCplx));
     if (!psi_freq) return;
-    
     fft_1d(p->psi, psi_freq, p->N, -1);
-    
-    // Aplicar fase no espaço de frequência (kinetic term)
     double dk = 2.0 * M_PI / p->L;
     for (int k = 0; k < p->N; k++) {
         double kx = (k < p->N/2) ? k * dk : (k - p->N) * dk;
-        double phase = -0.5 * kx * kx * dt;  // hbar = m = 1
+        double phase = -0.5 * kx * kx * dt;
         double c = cos(phase);
         double s = sin(phase);
         double re = psi_freq[k].re * c - psi_freq[k].im * s;
@@ -62,31 +60,16 @@ static void evolve_step(QosProcess *p, double dt, double V_ext, double V_coupled
     
     fft_1d(psi_freq, p->psi, p->N, 1);
     
-    // P2 + P3: Evoluir com não-linearidade e memória
     double Lambda = p->Lambda;
     double alpha = p->alpha;
     double Gamma = p->Gamma;
-    
-    // Potencial total (sem impor, natural)
     double V_total = V_ext + V_coupled;
-    
-    // Não-linearidade + memória (P1+P2+P3 integrados, não isolados!)
     for (int i = 0; i < p->N; i++) {
         double rho = p->psi[i].re * p->psi[i].re + p->psi[i].im * p->psi[i].im;
-        
-        // P1: Termo não-linear (self-interaction)
         double V_nonlinear = Lambda * rho + alpha * rho * rho;
-        
-        // P2: Memory field contribution
         double memory_term = (p->y && i < p->M_y) ? p->y[i] : 0.0;
-        
-        // P3: Reservoir dynamics (threshold of chaos)
         double reservoir_noise = Gamma > 0 ? randn() * sqrt(Gamma) : 0;
-        
-        // Potencial total efetivo
         double V_eff = V_total + V_nonlinear + memory_term;
-        
-        // Aplicar fase do potencial
         double angle = -V_eff * dt;
         double c = cos(angle);
         double s = sin(angle);
@@ -95,7 +78,6 @@ static void evolve_step(QosProcess *p, double dt, double V_ext, double V_coupled
         p->psi[i].re = re;
         p->psi[i].im = im;
         
-        // Evoluir memória (P2)
         if (p->y && i < p->M_y) {
             p->y[i] = p->y[i] * 0.99 + 0.01 * rho + reservoir_noise * 0.001;
         }
@@ -121,11 +103,8 @@ static void compute_observables(QosProcess *p) {
     if (norm > 1e-15) {
         mean_x /= norm;
         mean_x2 /= norm;
-        p->energy = mean_x2 - mean_x * mean_x;  // Variance = energy
+        p->energy = mean_x2 - mean_x * mean_x;
     }
-    
-    // Crystallinity: quão "estruturado" está o sistema
-    // (auto-organização, não métrica imposta!)
     double crystallinity = 0;
     for (int i = 1; i < p->N; i++) {
         double dpsi_re = p->psi[i].re - p->psi[i-1].re;
@@ -134,7 +113,6 @@ static void compute_observables(QosProcess *p) {
     }
     p->crystallinity = 1.0 / (1.0 + crystallinity / p->N);
     
-    // k_star: medida de correlação
     double k_star = 0;
     for (int i = 0; i < p->N/2; i++) {
         double re = p->psi[i].re * p->psi[p->N-1-i].re - p->psi[i].im * p->psi[p->N-1-i].im;
@@ -161,7 +139,6 @@ static void compute_couplings(double *V_out, int n, QosProcess *processes) {
             QosProcess *dst = &processes[dst_idx];
             double kappa = src->couplings[c].kappa;
             
-            // Transferência de densidade (comunicação natural)
             int minN = src->N < dst->N ? src->N : dst->N;
             for (int k = 0; k < minN; k++) {
                 double rho_src = src->psi[k].re * src->psi[k].re + src->psi[k].im * src->psi[k].im;
@@ -197,7 +174,6 @@ int qos_create_process(const char *name, int N, int D, double L) {
     p->pid = pid;
     snprintf(p->name, sizeof(p->name), "%s", name);
     
-    // P1: Wavefunction
     p->N = N;
     p->D = D;
     p->L = L;
@@ -205,7 +181,6 @@ int qos_create_process(const char *name, int N, int D, double L) {
     p->psi = (TriadCplx *)malloc(N * sizeof(TriadCplx));
     if (p->psi) {
         memset(p->psi, 0, N * sizeof(TriadCplx));
-        // Estado inicial: ground state (gaussian)
         double x0 = 0;
         double sigma = L / 10.0;
         for (int i = 0; i < N; i++) {
@@ -216,24 +191,18 @@ int qos_create_process(const char *name, int N, int D, double L) {
         }
     }
     
-    // P2: Memory field
     p->M_y = N;
     p->y = (double *)malloc(N * sizeof(double));
     if (p->y) memset(p->y, 0, N * sizeof(double));
-    
-    // P3: Parâmetros de dinâmica (começam caóticos, evoluem naturalmente)
-    p->Lambda = 4.0;   // Não-linearidade
-    p->alpha = 0.1;    // Correção
-    p->Gamma = 0.01;   // Dissipação
-    p->sigma = 0.1;    // Ruído
-    p->f_FDT = 1.0;    // Fluctuation-dissipation
-    
-    // Auto-organização (não calibrado!)
+    p->Lambda = 4.0;
+    p->alpha = 0.1;
+    p->Gamma = 0.01;
+    p->sigma = 0.1;
+    p->f_FDT = 1.0;
     p->energy = 0;
     p->crystallinity = 0;
     p->k_star = 0;
-    
-    p->state = 0;  // Caótico inicialmente
+    p->state = 0;
     p->created_at = g_time_ns;
     p->last_evolution = g_time_ns;
     
@@ -311,12 +280,11 @@ void qos_evolve_process(int pid, double dt) {
     
     p->last_evolution = g_time_ns;
     
-    // Auto-detecção de equilíbrio (não imposto!)
     if (p->crystallinity > 0.8 && p->state == 0) {
-        p->state = 1;  // Equilibrado
+        p->state = 1;
     }
     if (p->crystallinity > 0.95 && p->state == 1) {
-        p->state = 2;  // Cristalizado
+        p->state = 2;
     }
 }
 
@@ -325,15 +293,10 @@ void qos_evolve_all(double T) {
     
     int n_steps = (int)(T / g_qos.dt);
     
-    // Alocar potencial acoplado
     double *V_coupled = (double *)malloc(g_qos.n_processes * QOS_MAX_GRID * sizeof(double));
     if (!V_coupled) return;
-    
     for (int step = 0; step < n_steps; step++) {
-        // Calcular acoplamentos (comunicação entre processos)
         compute_couplings(V_coupled, g_qos.n_processes, g_qos.processes);
-        
-        // Evoluir todos os processos (P1+P2+P3 integrados!)
         for (int i = 0; i < g_qos.n_processes; i++) {
             QosProcess *p = &g_qos.processes[i];
             
@@ -346,7 +309,6 @@ void qos_evolve_all(double T) {
             evolve_step(p, g_qos.dt, V_ext, V_coupled[i * QOS_MAX_GRID]);
             compute_observables(p);
             
-            // Transição natural de estados
             if (p->crystallinity > 0.8 && p->state == 0) p->state = 1;
             if (p->crystallinity > 0.95 && p->state == 1) p->state = 2;
         }

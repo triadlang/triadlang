@@ -13,13 +13,21 @@ PY_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.pat
 if PY_ROOT not in sys.path:
     sys.path.insert(0, PY_ROOT)
 
-_REGIMES = [
-    'B0', 'dispersive', 'anti_collapse', 'R5_crystal', '_pure',
-    'B0_3d', 'B0_2d', 'memory_heavy', 'HodgkinHuxley', 'ENSO_recharge',
-    'England_autopoietic', 'Eigen_hypercycle', 'Belousov_Zhabotinsky',
-    'LSV_market', 'MaxwellWiechert', 'Cepheid_pulsator',
-    'DarkMatter_halo', 'Cosmological_inflation',
-]
+def _default_regimes() -> list[str]:
+    try:
+        from stdlib.regimes import list_regimes
+        return list_regimes()
+    except Exception:
+        return [
+            'B0', 'dispersive', 'anti_collapse', 'R5_crystal', '_pure',
+            'B0_3d', 'HodgkinHuxley', 'ENSO_recharge',
+            'England_autopoietic', 'Eigen_hypercycle', 'Belousov_Zhabotinsky',
+            'LSV_market', 'MaxwellWiechert', 'Cepheid_pulsator',
+            'DarkMatter_halo', 'Cosmological_inflation',
+        ]
+
+
+_REGIMES = _default_regimes()
 
 _OBSERVABLES = ['k_star', 'crystallinity', 'peak', 'norm', 'ipr', 'fwhm']
 

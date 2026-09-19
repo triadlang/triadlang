@@ -71,12 +71,15 @@ class REPLScreen(Screen):
         output.write(Text(f"triad> {code}", style="bold cyan"))
 
         if code.startswith(':'):
+            self._multiline_buffer = []
+            self._multiline_depth = 0
+            self.query_one("#repl-input", Input).placeholder = "triad> "
             self._handle_command(code, output)
             return
 
-        open_braces = code.count('{') - code.count('}')
+        open_braces = self._brace_delta(code)
         self._multiline_buffer.append(code)
-        self._multiline_depth += open_braces
+        self._multiline_depth = max(0, self._multiline_depth + open_braces)
 
         if self._multiline_depth > 0:
             self.query_one("#repl-input", Input).placeholder = "... "
@@ -87,6 +90,36 @@ class REPLScreen(Screen):
         self._multiline_depth = 0
         self.query_one("#repl-input", Input).placeholder = "triad> "
         self._eval(triad_code, output)
+
+    @staticmethod
+    def _brace_delta(code: str) -> int:
+        depth = 0
+        i, n = 0, len(code)
+        in_str = None
+        while i < n:
+            c = code[i]
+            if in_str:
+                if c == '\\':
+                    i += 2
+                    continue
+                if c == in_str:
+                    in_str = None
+                i += 1
+                continue
+            if c in ('"', "'"):
+                in_str = c
+                i += 1
+                continue
+            if c == '/' and i + 1 < n and code[i + 1] == '/':
+                break
+            if c == '#':
+                break
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+            i += 1
+        return depth
 
     def _handle_command(self, code: str, output: RichLog):
         cmd = code[1:].strip()

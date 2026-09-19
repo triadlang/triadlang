@@ -118,6 +118,8 @@ class TieredJIT:
 
     def compile_function(self, name: str, c_source: str) -> ctypes.CDLL | None:
 
+        import re as _re
+        safe_name = _re.sub(r'[^A-Za-z0-9_]', '_', name)[:64] or 'jit'
         cached = self._cache.get(name)
         if cached is not None:
             return cached
@@ -125,8 +127,8 @@ class TieredJIT:
         self.ensure_runtime()
         rt_dir = os.path.join(self.repo_root, 'native', 'c')
 
-        c_path = os.path.join(self._temp_dir, f'{name}_{self._compile_count}.c')
-        so_path = os.path.join(self._temp_dir, f'{name}_{self._compile_count}.so')
+        c_path = os.path.join(self._temp_dir, f'{safe_name}_{self._compile_count}.c')
+        so_path = os.path.join(self._temp_dir, f'{safe_name}_{self._compile_count}.so')
         self._compile_count += 1
 
         with open(c_path, 'w') as f:
@@ -240,7 +242,7 @@ def _measured_compile_cost() -> float:
     src = ('#include <stdint.h>\n'
            'int64_t kernel(int64_t *I, double *D){ (void)I; (void)D; return 0; }\n')
     t0 = _t.perf_counter()
-    lib = get_jit().compile_function('_triad_probe', src)
+    lib = get_jit().compile_function('_triad_tap', src)
     cost = _t.perf_counter() - t0 if lib is not None else float('inf')
     _compile_cost.append(cost)
     return cost

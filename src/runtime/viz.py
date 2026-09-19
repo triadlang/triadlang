@@ -33,6 +33,9 @@ def multi_scale_plot(compiled, source_path: str):
             if sub.density_traj is None or sub.density_traj.size == 0:
                 ax.text(0.5, 0.5, '(no trajectory)', ha='center', transform=ax.transAxes)
                 continue
+            if sub.t_traj is None or len(sub.t_traj) == 0:
+                ax.text(0.5, 0.5, '(no timeline)', ha='center', transform=ax.transAxes)
+                continue
             ax.imshow(sub.density_traj, aspect='auto', origin='lower', extent=[sub.t_traj[0], sub.t_traj[-1], -sub.params.L / 2, sub.params.L / 2], cmap='viridis')
             ax.set_ylabel(sub.name)
             ax.set_title(f'|psi|²(x,t)  —  {sub.name}')

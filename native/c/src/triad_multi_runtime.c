@@ -853,12 +853,19 @@ static int _is_active(const TriadSegment *seg, int sid) {
 
 static void _ensure_traj_cap(TriadSubstrate *s, int extra_records) {
     int need = s->n_records + extra_records;
-    if (need <= s->cap_records) return;
+    if (!s || s->grid_size <= 0 || need <= s->cap_records) return;
     int new_cap = s->cap_records ? s->cap_records * 2 : 64;
     while (new_cap < need) new_cap *= 2;
-    s->density_traj = (double *)realloc(s->density_traj,
+    double *nd = (double *)realloc(s->density_traj,
         sizeof(double) * (size_t)s->grid_size * (size_t)new_cap);
-    s->t_traj = (double *)realloc(s->t_traj, sizeof(double) * (size_t)new_cap);
+    if (!nd) return;
+    double *nt = (double *)realloc(s->t_traj, sizeof(double) * (size_t)new_cap);
+    if (!nt) {
+        s->density_traj = nd;
+        return;
+    }
+    s->density_traj = nd;
+    s->t_traj = nt;
     s->cap_records = new_cap;
 }
 
@@ -1023,6 +1030,7 @@ void triad_mr_run(TriadMultiRuntime *rt) {
                 for (int i = 0; i < Ns; ++i) {
                     TriadSubstrate *s = rt->substrates[i];
                     _ensure_traj_cap(s, 1);
+                    if (!s->density_traj || !s->t_traj || s->n_records >= s->cap_records) continue;
                     int k = s->n_records;
                     double *dst = &s->density_traj[(int64_t)k * s->grid_size];
                     for (int64_t x = 0; x < s->grid_size; ++x)

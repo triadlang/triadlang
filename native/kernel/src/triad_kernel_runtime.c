@@ -386,9 +386,6 @@ int triad_kernel_run_file(const char *path) {
     if (!buf) return -1;
     
     size_t len = 0;
-    // Simplified file reading - in real kernel would use VFS
-    // For now, just read from embedded source
-    
     TriadKernelModule *mod = triad_kernel_parse(buf, len);
     kernel_free(buf);
     

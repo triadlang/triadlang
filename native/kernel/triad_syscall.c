@@ -31,6 +31,7 @@ static void *safe_user_ptr(uint64_t addr, size_t len) {
 int64_t triad_syscall_dispatch(TriadSyscall num,
                                uint64_t a, uint64_t b, uint64_t c,
                                uint64_t d, uint64_t e) {
+    if (triad_current_pid < 0 || triad_current_pid >= MAX_PROCS) return -1;
     TriadProc *proc = &triad_procs[triad_current_pid];
     switch (num) {
     case SYS_EXIT: {
@@ -43,7 +44,7 @@ int64_t triad_syscall_dispatch(TriadSyscall num,
         int fd = (int)a;
         const void *buf = safe_user_ptr(b, (uint32_t)c);
         uint32_t n = (uint32_t)c;
-        if (!buf && fd != 1 && fd != 2) return -1;
+        if (!buf) return -1;
         if (fd == 1 || fd == 2) {
             triad_stac();
             triad_serial_puts((const char *)buf);

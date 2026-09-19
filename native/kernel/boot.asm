@@ -25,9 +25,9 @@ pd:
 .section .rodata
 .align 8
 gdt64:
-    .quad 0x0000000000000000   # null
-    .quad 0x00AF9A000000FFFF   # 64-bit code: L=1, D=0
-    .quad 0x00CF92000000FFFF   # data
+    .quad 0x0000000000000000
+    .quad 0x00AF9A000000FFFF
+    .quad 0x00CF92000000FFFF
 gdt64_ptr:
     .word . - gdt64 - 1
     .quad gdt64
@@ -38,22 +38,19 @@ gdt64_ptr:
 .type _start, @function
 _start:
     cli
-    # Identity-map first 64 MiB with 2 MiB pages
-    # (kernel VMA == physical 1M, bump heap at physical 16M-48M).
     movl $pdpt, %eax
-    orl  $0x3, %eax              # present | writable
+    orl  $0x3, %eax
     movl %eax, pml4
     movl $0, pml4 + 4
     movl $pd, %eax
     orl  $0x3, %eax
     movl %eax, pdpt
     movl $0, pdpt + 4
-    # PD entries 0..31 -> 32 x 2 MiB identity pages
     movl $0, %ecx
 .pd_fill:
     movl %ecx, %eax
-    shll $21, %eax               # index * 2 MiB
-    orl  $0x83, %eax             # PS | RW | P
+    shll $21, %eax
+    orl  $0x83, %eax
     movl %eax, pd(,%ecx,8)
     movl $0, pd+4(,%ecx,8)
     incl %ecx
@@ -63,18 +60,15 @@ _start:
     movl $pml4, %eax
     movl %eax, %cr3
 
-    # CR4: PAE + OSFXSR + OSXMMEXCPT (SSE for kernel doubles)
     movl %cr4, %eax
     orl  $(1 << 5) | (1 << 9) | (1 << 10), %eax
     movl %eax, %cr4
 
-    # EFER.LME + EFER.NXE (hardening maps pages with PTE_NX)
     movl $0xC0000080, %ecx
     rdmsr
     orl  $(1 << 8) | (1 << 11), %eax
     wrmsr
 
-    # CR0: PG + MP, clear EM
     movl %cr0, %eax
     orl  $(1 << 31) | (1 << 1), %eax
     andl $~(1 << 2), %eax

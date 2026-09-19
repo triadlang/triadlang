@@ -19,10 +19,18 @@ def to_torch(t: TriadTensor, dtype=None, device=None) -> torch.Tensor | None:
         raise RuntimeError('PyTorch not installed; install torch for interop')
     arr = t._data
     if hasattr(arr, '__dlpack__'):
-        return torch.from_dlpack(arr)
+        tt = torch.from_dlpack(arr)
+        if dtype is not None:
+            tt = tt.to(dtype)
+        if device is not None:
+            tt = tt.to(device)
+        return tt
 
     np_arr = asnumpy(arr)
-    tt = torch.from_numpy(np_arr)
+    try:
+        tt = torch.from_numpy(np_arr)
+    except (TypeError, RuntimeError, AttributeError):
+        tt = torch.tensor(np_arr.tolist())
     if dtype is not None:
         tt = tt.to(dtype)
     if device is not None:

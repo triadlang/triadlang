@@ -26,6 +26,8 @@ class SpectralExtractor:
 
     def extract_batch(self, psi_batch: np.ndarray) -> np.ndarray:
 
+        if psi_batch.ndim != 2:
+            raise ValueError(f'extract_batch needs 2D (B, N), got shape {psi_batch.shape}')
         B = psi_batch.shape[0]
         feats = np.empty((B, 2 * self.n_modes), dtype=np.float64)
         for i in range(B):

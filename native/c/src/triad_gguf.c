@@ -4,7 +4,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#ifdef _WIN32
+#include "triad_mmap_compat.h"
+#else
 #include <sys/mman.h>
+#endif
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -160,19 +164,50 @@ GGUFFile *gguf_open(const char *path) {
     f->version = r_u32(&r);
     f->n_tensors = (int64_t)r_u64(&r);
     f->n_kv = (int64_t)r_u64(&r);
+    if (f->n_tensors < 0 || f->n_tensors > 100000 || f->n_kv < 0 || f->n_kv > 100000) {
+        fprintf(stderr, "GGUF header counts invalid\n");
+        munmap(addr, file_size);
+        close(fd);
+        free(f->path);
+        free(f);
+        return NULL;
+    }
 
-    f->kv = calloc(f->n_kv, sizeof(GGUFKeyValue));
+    f->kv = calloc((size_t)f->n_kv ? (size_t)f->n_kv : 1, sizeof(GGUFKeyValue));
+    if (!f->kv) {
+        munmap(addr, file_size);
+        close(fd);
+        free(f->path);
+        free(f);
+        return NULL;
+    }
     for (int64_t i = 0; i < f->n_kv; i++)
         f->kv[i] = r_kv(&r);
 
-    f->tensors = calloc(f->n_tensors, sizeof(GGUFTensorInfo));
+    f->tensors = calloc((size_t)f->n_tensors ? (size_t)f->n_tensors : 1, sizeof(GGUFTensorInfo));
+    if (!f->tensors) {
+        munmap(addr, file_size);
+        close(fd);
+        free(f->path);
+        free(f);
+        return NULL;
+    }
     for (int64_t i = 0; i < f->n_tensors; i++) {
         GGUFTensorInfo *ti = &f->tensors[i];
         ti->name = r_str(&r);
         ti->ndim = r_u32(&r);
+        if (ti->ndim > 4) {
+            fprintf(stderr, "GGUF tensor ndim %u exceeds 4\n", ti->ndim);
+            goto header_fail;
+        }
         ti->n_elements = 1;
         for (uint32_t d = 0; d < ti->ndim; d++) {
-            ti->shape[d] = (int64_t)r_u64(&r);
+            int64_t dim = (int64_t)r_u64(&r);
+            if (dim < 0 || dim > (int64_t)(8ULL << 30)) {
+                fprintf(stderr, "GGUF tensor dim invalid\n");
+                goto header_fail;
+            }
+            ti->shape[d] = dim;
             ti->n_elements *= ti->shape[d];
         }
         ti->type = (GGMLType)r_u32(&r);
@@ -180,6 +215,10 @@ GGUFFile *gguf_open(const char *path) {
 
         int64_t bs = ggml_block_size(ti->type);
         size_t ts = ggml_type_size(ti->type);
+        if (ts == 0 || bs < 1) {
+            fprintf(stderr, "GGUF tensor unknown type %d\n", (int)ti->type);
+            goto header_fail;
+        }
         ti->n_bytes = (size_t)((ti->n_elements + bs - 1) / bs) * ts;
     }
 
@@ -187,6 +226,15 @@ GGUFFile *gguf_open(const char *path) {
     f->data_offset = (r.pos + align - 1) & ~(align - 1);
 
     return f;
+
+header_fail:
+    munmap(addr, file_size);
+    close(fd);
+    free(f->kv);
+    free(f->tensors);
+    free(f->path);
+    free(f);
+    return NULL;
 }
 
 void gguf_close(GGUFFile *f) {

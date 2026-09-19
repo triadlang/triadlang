@@ -340,12 +340,12 @@ static int64_t mul_i(int64_t a, int64_t b){ int64_t r; if(__builtin_mul_overflow
 static int64_t fdiv_i(int64_t a, int64_t b){
     if(b==0){ BAIL_ZDIV; return 0; }
     int64_t q = a/b, r = a%b;
-    return (r != 0 && ((r < 0) != (b < 0))) ? q-1 : q;   /* floor, como Python */
+    return (r != 0 && ((r < 0) != (b < 0))) ? q-1 : q;
 }
 static int64_t mod_i(int64_t a, int64_t b){
     if(b==0){ BAIL_ZDIV; return 0; }
     int64_t r = a%b;
-    return (r != 0 && ((r < 0) != (b < 0))) ? r+b : r;   /* sinal do divisor */
+    return (r != 0 && ((r < 0) != (b < 0))) ? r+b : r;
 }
 static double div_d(double a, double b){ if(b==0.0){ BAIL_ZDIV; return 0.0; } return a/b; }
 static double fdiv_d(double a, double b){ if(b==0.0){ BAIL_ZDIV; return 0.0; } return floor(a/b); }
@@ -357,7 +357,7 @@ static double mod_d(double a, double b){
 static int64_t abs_i(int64_t a){ if(a==INT64_MIN) BAIL_OVF; return a<0?-a:a; }
 static int64_t idx_n(int64_t i, int64_t n){
     if(i < 0) i += n;
-    if(i < 0 || i >= n){ _bail = 4; return 0; }   /* IndexError -> derrete */
+    if(i < 0 || i >= n){ _bail = 4; return 0; }
     return i;
 }
 '''

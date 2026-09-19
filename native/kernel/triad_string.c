@@ -1,6 +1,3 @@
-/* Freestanding libc string/memory symbols.
- * GCC emits calls to these even with -ffreestanding; volatile pointers
- * keep -O2 from folding the loops back into libcalls. */
 #include <stddef.h>
 #include <stdint.h>
 

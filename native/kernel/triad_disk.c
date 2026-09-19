@@ -6,8 +6,6 @@
 #include <string.h>
 
 static DiskFsSuperblock disk_super;
-static DiskFsInode *inode_cache = NULL;
-static uint64_t inode_cache_count = 0;
 static uint8_t *block_bitmap = NULL;
 static uint64_t bitmap_blocks = 0;
 static uint64_t mounted_start = 0;
@@ -48,6 +46,7 @@ static int cache_read(uint64_t block, void *buf) {
             break;
         }
     }
+    if (!block_cache[idx]) return 0;
     memcpy(block_cache[idx], buf, DISK_SECTOR_SIZE);
     block_cache_tags[idx] = block;
     block_cache_valid[idx] = 1;
@@ -55,8 +54,9 @@ static int cache_read(uint64_t block, void *buf) {
 }
 
 static int cache_write(uint64_t block, const void *buf) {
+    if (!buf) return -1;
     for (int i = 0; i < DISK_CACHE_SIZE; i++) {
-        if (block_cache_valid[i] && block_cache_tags[i] == block) {
+        if (block_cache_valid[i] && block_cache_tags[i] == block && block_cache[i]) {
             memcpy(block_cache[i], buf, DISK_SECTOR_SIZE);
         }
     }
@@ -70,6 +70,8 @@ int triad_disk_init(void) {
 }
 
 int triad_disk_format(uint64_t start_sector, uint64_t num_sectors) {
+    /* mesma convenção de triad_disk_mount: escritas relativas à base. */
+    mounted_start = start_sector;
     DiskFsSuperblock sb;
     memset(&sb, 0, sizeof(sb));
     sb.magic = DISKFS_MAGIC;

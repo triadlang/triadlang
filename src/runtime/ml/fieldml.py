@@ -44,7 +44,7 @@ class TriadFlow:
         self._steps += 1
         gs = [q._grad if q._grad is not None else np.zeros_like(q._data)
               for q in self.params]
-        decay = float(np.exp(self.lam[-1]))
+        decay = float(np.exp(-abs(float(self.lam[-1]))))
         for i, g in enumerate(gs):
             self._temp[i] = decay * self._temp[i] + (1.0 - decay) * (g ** 2)
 
@@ -53,7 +53,7 @@ class TriadFlow:
 
             m = self._mem[i]
             for k in range(len(self.nu)):
-                m[k] += self.nu[k] * F + self.lam[k] * m[k]
+                m[k] += self.nu[k] * F - abs(float(self.lam[k])) * m[k]
             M = m.sum(axis=0)
 
             Dterm = self._laplacian_1d(q._data)
@@ -280,10 +280,12 @@ class FieldMemoryBank:
         proof[proof == 0] = 1.0
         others = [np.sign(prng.standard_normal(self.dim)) for _ in range(self.slots - 1)]
         psi0 = self._sub.psi.copy()
+        y0 = self._sub.y.copy()
         t0 = self._rt.global_t
         depth = 1.0
         for _ in range(max_doublings):
             self._sub.psi = psi0.copy()
+            self._sub.y = y0.copy()
             self._rt.global_t = t0
             self._set_wells(depth)
             used_keep = self._used
@@ -302,6 +304,7 @@ class FieldMemoryBank:
                 ok = ok and all(bool((self._read_slot(i) == pat).all())
                                 for i, pat in enumerate(stored))
             self._sub.psi = psi0.copy()
+            self._sub.y = y0.copy()
             self._rt.global_t = t0
             self._used = used_keep
             if ok:

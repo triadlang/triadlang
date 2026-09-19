@@ -47,7 +47,11 @@ class ParseError(TriadLangError):
         return ''.join(parts)
 
 class TypeCheckError(TriadLangError):
-    pass
+    def __init__(self, errors: list[str] | str = ()):
+        if isinstance(errors, str):
+            errors = [errors] if errors else []
+        self.errors: list[str] = list(errors)
+        super().__init__('\n'.join(self.errors) if self.errors else 'typecheck error')
 
 class CCompileError(TriadLangError):
     pass

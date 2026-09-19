@@ -85,6 +85,7 @@ static void sha256_transform(Sha256Ctx *ctx, const uint8_t *block) {
 }
 
 void triad_sha256_init(Sha256Ctx *ctx) {
+    if (!ctx) return;
     for (int i = 0; i < 8; i++) {
         ctx->state[i] = sha256_init[i];
     }
@@ -92,6 +93,8 @@ void triad_sha256_init(Sha256Ctx *ctx) {
 }
 
 void triad_sha256_update(Sha256Ctx *ctx, const uint8_t *data, size_t len) {
+    if (!ctx) return;
+    if (!data && len > 0) return;
     size_t buffer_idx = (size_t)(ctx->count % SHA256_BLOCK_SIZE);
     ctx->count += len;
 
@@ -125,6 +128,7 @@ void triad_sha256_update(Sha256Ctx *ctx, const uint8_t *data, size_t len) {
 
 void triad_sha256_final(Sha256Ctx *ctx, uint8_t out[32]) {
     uint8_t pad[128];
+    if (!ctx || !out) return;
     uint64_t bit_count = ctx->count * 8;
     size_t pad_len;
     size_t i;
@@ -292,10 +296,14 @@ static void aes_enc_block(AesCtx *ctx, const uint8_t in[16], uint8_t out[16]) {
         s3 = t3;
     }
 
-    s0 = (aes_sbox[(s0 >> 24) & 0xFF] << 24 | aes_sbox[(s1 >> 16) & 0xFF] << 16 | aes_sbox[(s2 >> 8) & 0xFF] << 8 | aes_sbox[s3 & 0xFF]) ^ rk[ctx->rounds * 4];
-    s1 = (aes_sbox[(s1 >> 24) & 0xFF] << 24 | aes_sbox[(s2 >> 16) & 0xFF] << 16 | aes_sbox[(s3 >> 8) & 0xFF] << 8 | aes_sbox[s0 & 0xFF]) ^ rk[ctx->rounds * 4 + 1];
-    s2 = (aes_sbox[(s2 >> 24) & 0xFF] << 24 | aes_sbox[(s3 >> 16) & 0xFF] << 16 | aes_sbox[(s0 >> 8) & 0xFF] << 8 | aes_sbox[s1 & 0xFF]) ^ rk[ctx->rounds * 4 + 2];
-    s3 = (aes_sbox[(s3 >> 24) & 0xFF] << 24 | aes_sbox[(s0 >> 16) & 0xFF] << 16 | aes_sbox[(s1 >> 8) & 0xFF] << 8 | aes_sbox[s2 & 0xFF]) ^ rk[ctx->rounds * 4 + 3];
+    uint32_t f0 = (aes_sbox[(s0 >> 24) & 0xFF] << 24 | aes_sbox[(s1 >> 16) & 0xFF] << 16 | aes_sbox[(s2 >> 8) & 0xFF] << 8 | aes_sbox[s3 & 0xFF]) ^ rk[ctx->rounds * 4];
+    uint32_t f1 = (aes_sbox[(s1 >> 24) & 0xFF] << 24 | aes_sbox[(s2 >> 16) & 0xFF] << 16 | aes_sbox[(s3 >> 8) & 0xFF] << 8 | aes_sbox[s0 & 0xFF]) ^ rk[ctx->rounds * 4 + 1];
+    uint32_t f2 = (aes_sbox[(s2 >> 24) & 0xFF] << 24 | aes_sbox[(s3 >> 16) & 0xFF] << 16 | aes_sbox[(s0 >> 8) & 0xFF] << 8 | aes_sbox[s1 & 0xFF]) ^ rk[ctx->rounds * 4 + 2];
+    uint32_t f3 = (aes_sbox[(s3 >> 24) & 0xFF] << 24 | aes_sbox[(s0 >> 16) & 0xFF] << 16 | aes_sbox[(s1 >> 8) & 0xFF] << 8 | aes_sbox[s2 & 0xFF]) ^ rk[ctx->rounds * 4 + 3];
+    s0 = f0;
+    s1 = f1;
+    s2 = f2;
+    s3 = f3;
 
     PUT_UINT32(s0, out);
     PUT_UINT32(s1, out + 4);
@@ -320,10 +328,14 @@ static void aes_dec_block(AesCtx *ctx, const uint8_t in[16], uint8_t out[16]) {
         s3 = t3 ^ ctx->enc_key[r * 4 + 3];
     }
 
-    s0 = (uint32_t)aes_inv_sbox[(s0 >> 24) & 0xFF] << 24 | (uint32_t)aes_inv_sbox[(s3 >> 16) & 0xFF] << 16 | (uint32_t)aes_inv_sbox[(s2 >> 8) & 0xFF] << 8 | (uint32_t)aes_inv_sbox[s1 & 0xFF] ^ ctx->enc_key[0];
-    s1 = (uint32_t)aes_inv_sbox[(s1 >> 24) & 0xFF] << 24 | (uint32_t)aes_inv_sbox[(s0 >> 16) & 0xFF] << 16 | (uint32_t)aes_inv_sbox[(s3 >> 8) & 0xFF] << 8 | (uint32_t)aes_inv_sbox[s2 & 0xFF] ^ ctx->enc_key[1];
-    s2 = (uint32_t)aes_inv_sbox[(s2 >> 24) & 0xFF] << 24 | (uint32_t)aes_inv_sbox[(s1 >> 16) & 0xFF] << 16 | (uint32_t)aes_inv_sbox[(s0 >> 8) & 0xFF] << 8 | (uint32_t)aes_inv_sbox[s3 & 0xFF] ^ ctx->enc_key[2];
-    s3 = (uint32_t)aes_inv_sbox[(s3 >> 24) & 0xFF] << 24 | (uint32_t)aes_inv_sbox[(s2 >> 16) & 0xFF] << 16 | (uint32_t)aes_inv_sbox[(s1 >> 8) & 0xFF] << 8 | (uint32_t)aes_inv_sbox[s0 & 0xFF] ^ ctx->enc_key[3];
+    uint32_t g0 = ((uint32_t)aes_inv_sbox[(s0 >> 24) & 0xFF] << 24 | (uint32_t)aes_inv_sbox[(s3 >> 16) & 0xFF] << 16 | (uint32_t)aes_inv_sbox[(s2 >> 8) & 0xFF] << 8 | (uint32_t)aes_inv_sbox[s1 & 0xFF]) ^ ctx->enc_key[0];
+    uint32_t g1 = ((uint32_t)aes_inv_sbox[(s1 >> 24) & 0xFF] << 24 | (uint32_t)aes_inv_sbox[(s0 >> 16) & 0xFF] << 16 | (uint32_t)aes_inv_sbox[(s3 >> 8) & 0xFF] << 8 | (uint32_t)aes_inv_sbox[s2 & 0xFF]) ^ ctx->enc_key[1];
+    uint32_t g2 = ((uint32_t)aes_inv_sbox[(s2 >> 24) & 0xFF] << 24 | (uint32_t)aes_inv_sbox[(s1 >> 16) & 0xFF] << 16 | (uint32_t)aes_inv_sbox[(s0 >> 8) & 0xFF] << 8 | (uint32_t)aes_inv_sbox[s3 & 0xFF]) ^ ctx->enc_key[2];
+    uint32_t g3 = ((uint32_t)aes_inv_sbox[(s3 >> 24) & 0xFF] << 24 | (uint32_t)aes_inv_sbox[(s2 >> 16) & 0xFF] << 16 | (uint32_t)aes_inv_sbox[(s1 >> 8) & 0xFF] << 8 | (uint32_t)aes_inv_sbox[s0 & 0xFF]) ^ ctx->enc_key[3];
+    s0 = g0;
+    s1 = g1;
+    s2 = g2;
+    s3 = g3;
 
     PUT_UINT32(s0, out);
     PUT_UINT32(s1, out + 4);

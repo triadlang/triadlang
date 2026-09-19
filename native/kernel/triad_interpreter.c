@@ -735,7 +735,6 @@ static int exec_while(InterpLexer *lex, TriadInterp *interp) {
             return -1;
         }
 
-        int body_start = lex->pos;
         triad_interp_push_scope(interp);
         while (interp->running) {
             InterpLexer saved = *lex;
@@ -880,6 +879,7 @@ int triad_interp_run(TriadInterp *interp, const char *src) {
 
 TriadVal *triad_interp_eval(TriadInterp *interp, const char *expr) {
     InterpLexer lex;
+    if (!interp || !expr) return NULL;
     lex_init(&lex, expr);
     return parse_expr(&lex, interp);
 }

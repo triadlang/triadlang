@@ -8,11 +8,7 @@ static cublasHandle_t g_handle = NULL;
 static int g_initialized = 0;
 #define DEFAULT_BATCH_ROWS 65536
 
-/* ═══════════════════════════════════════════════════════════════
-   CUDA Kernels — fused dequant + matvec
-   One block per row (blockIdx.x = row)
-   Shared memory dynamically allocated for x vector
-   ═══════════════════════════════════════════════════════════════ */
+
 
 __device__ __forceinline__ float f16_to_f32(uint16_t h) {
     uint32_t sign = (h >> 15) & 1;
@@ -129,9 +125,7 @@ __global__ void kernel_matvec_q6k(const uint8_t *W, const float *x, float *y,
     y[row] = sum;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   CUDA device management
-   ═══════════════════════════════════════════════════════════════ */
+
 
 extern "C" int cuda_init(void) {
     if (g_initialized) return 0;
@@ -153,9 +147,7 @@ extern "C" void cuda_shutdown(void) {
     g_initialized = 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   f32 matvec via cuBLAS (legacy, for non-quantized weights)
-   ═══════════════════════════════════════════════════════════════ */
+
 
 static int do_matvec(const float *W, const float *x, float *y,
                       int32_t rows, int32_t cols) {
@@ -214,9 +206,7 @@ extern "C" int cuda_matvec_f32_batched(const float *W, const float *x, float *y,
     return do_matvec(W,x,y,rows,cols);
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   Fused dequant + matvec on GPU (persistent buffer pool)
-   ═══════════════════════════════════════════════════════════════ */
+
 
 static uint8_t *g_dW = NULL; static size_t g_dWcap = 0;
 static float *g_dx = NULL; static float *g_dy = NULL; static int32_t g_dy_rows = 0;

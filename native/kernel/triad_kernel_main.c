@@ -51,6 +51,8 @@ static void print_banner(void) {
 }
 
 static void proc_init(int pid, TriadTier tier, const char *name) {
+    if (pid < 0 || pid >= MAX_PROCS) return;
+    if (!name) name = "?";
     TriadProc *p = &triad_procs[pid];
     p->id = pid;
     p->tier = tier;

@@ -160,6 +160,8 @@ def lower_stmt(s: Stmt) -> IRNode:
     if isinstance(s, AsyncWithStmt):
         return IRAsyncWith(lower_expr(s.expr) if s.expr else None, s.var,
                            [lower_stmt(st) for st in s.body])
+    if isinstance(s, CompoundAssignExpr):
+        return _lower_compound_assign(s)
     raise NotImplementedError(f"lower_stmt: unhandled statement type {type(s).__name__}")
 
 def _lower_class(s: ClassDecl) -> IRClassDecl:
@@ -328,7 +330,7 @@ def lower_expr(e: Expr) -> IRNode:
     if isinstance(e, UnaryOp):
         return IRUnaryOp(e.op, lower_expr(e.operand))
     if isinstance(e, CallExpr):
-        return IRCall(lower_expr(e.func), [lower_expr(a) for a in e.args], {k: lower_expr(v) for k, v in e.kwargs.items()})
+        return IRCall(lower_expr(e.func), [_lower_call_arg(a) for a in e.args], {k: lower_expr(v) for k, v in e.kwargs.items()})
     if isinstance(e, IndexExpr):
         if isinstance(e.index, SliceExpr):
             return IRSlice(lower_expr(e.obj), lower_expr(e.index.start) if e.index.start else None, lower_expr(e.index.end) if e.index.end else None, lower_expr(e.index.step) if e.index.step else None)
@@ -344,7 +346,7 @@ def lower_expr(e: Expr) -> IRNode:
     if isinstance(e, LambdaExpr):
         return IRLambda(params=[p.name for p in e.params], body=[lower_stmt(s) for s in e.body])
     if isinstance(e, MethodCallExpr):
-        return IRMethodCall(lower_expr(e.obj), e.method, [lower_expr(a) for a in e.args], {k: lower_expr(v) for k, v in e.kwargs.items()})
+        return IRMethodCall(lower_expr(e.obj), e.method, [_lower_call_arg(a) for a in e.args], {k: lower_expr(v) for k, v in e.kwargs.items()})
     if isinstance(e, AssignExpr):
         return IRAssignExpr(lower_expr(e.target), lower_expr(e.value))
     if isinstance(e, FStringExpr):
@@ -384,5 +386,73 @@ def lower_expr(e: Expr) -> IRNode:
         return IRYieldExpr(value=lower_expr(e.value) if e.value else None)
     if isinstance(e, AwaitExpr):
         return IRAwait(value=lower_expr(e.value))
+    if isinstance(e, NullishCoalesceExpr):
+        return IRNullish(lower_expr(e.left), lower_expr(e.right))
+    if isinstance(e, ElvisExpr):
+        return IRElvis(lower_expr(e.cond), lower_expr(e.else_val))
+    if isinstance(e, OptChainExpr):
+        if e.attr is not None:
+            return IROptChain(lower_expr(e.obj), 'attr', e.attr)
+        if e.method is not None:
+            return IROptChain(lower_expr(e.obj), 'method', e.method,
+                              [lower_expr(a) for a in e.args or []],
+                              {k: lower_expr(v) for k, v in (e.kwargs or {}).items()})
+        if e.index is not None:
+            return IROptChain(lower_expr(e.obj), 'index', None, [], {}, lower_expr(e.index))
+        return IRNone()
+    if isinstance(e, PipelineExpr):
+        fn = e.right
+        arg = lower_expr(e.left)
+        if isinstance(fn, CallExpr):
+            return IRCall(lower_expr(fn.func), [arg] + [lower_expr(a) for a in fn.args],
+                          {k: lower_expr(v) for k, v in fn.kwargs.items()})
+        return IRCall(lower_expr(fn), [arg])
+    if isinstance(e, RangeExpr):
+        if e.end is None:
+            return IRCall(IRIdent('range'), [lower_expr(e.start)])
+        end = lower_expr(e.end)
+        if e.inclusive:
+            end = IRBinOp('+', end, IRInt(1))
+        return IRCall(IRIdent('range'), [lower_expr(e.start), end])
+    if isinstance(e, RegexLit):
+        return IRRegex(e.pattern, e.flags)
+    if isinstance(e, CompoundAssignExpr):
+        return _lower_compound_assign_expr(e)
+    if isinstance(e, SpreadExpr):
+        return IRUnaryOp('*', lower_expr(e.value))
     raise NotImplementedError(f"lower_expr: unhandled expression type {type(e).__name__}")
+
+
+def _lower_call_arg(a: Expr) -> IRNode:
+    if isinstance(a, SpreadExpr):
+        return IRUnaryOp('*', lower_expr(a.value))
+    return lower_expr(a)
+
+
+def _lower_compound_assign(e: CompoundAssignExpr) -> IRNode:
+    if e.op not in ('??=', '||=', '&&='):
+        raise NotImplementedError(f"lower: unhandled compound assign op {e.op!r}")
+    if isinstance(e.target, Ident):
+        t = lower_expr(e.target)
+        v = lower_expr(e.value)
+        if e.op == '??=':
+            return IRAssign(t, IRNullish(t, v))
+        if e.op == '||=':
+            return IRAssign(t, IRBinOp('or', t, v))
+        return IRAssign(t, IRBinOp('and', t, v))
+    return IRExprStmt(IRCompoundAssign(lower_expr(e.target), e.op, lower_expr(e.value)))
+
+
+def _lower_compound_assign_expr(e: CompoundAssignExpr) -> IRNode:
+    if e.op not in ('??=', '||=', '&&='):
+        raise NotImplementedError(f"lower: unhandled compound assign op {e.op!r}")
+    if isinstance(e.target, Ident):
+        t = lower_expr(e.target)
+        v = lower_expr(e.value)
+        if e.op == '??=':
+            return IRAssignExpr(t, IRNullish(t, v))
+        if e.op == '||=':
+            return IRAssignExpr(t, IRBinOp('or', t, v))
+        return IRAssignExpr(t, IRBinOp('and', t, v))
+    return IRCompoundAssign(lower_expr(e.target), e.op, lower_expr(e.value))
 

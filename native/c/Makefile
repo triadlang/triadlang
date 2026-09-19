@@ -1,13 +1,23 @@
 CC      = gcc
 UNAME_S := $(shell uname -s)
+ifeq ($(OS),Windows_NT)
+  ON_WINDOWS = 1
+endif
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+  ON_WINDOWS = 1
+endif
+ifneq (,$(findstring MSYS,$(UNAME_S)))
+  ON_WINDOWS = 1
+endif
+ifdef ON_WINDOWS
+  CFLAGS_EXTRA = -DTRIAD_ON_WINDOWS
+endif
 
-CFLAGS  = -std=c11 -Wall -Wextra -O2 -fPIC -Iinclude
+CFLAGS  = -std=c11 -Wall -Wextra -O2 -fPIC -Iinclude $(CFLAGS_EXTRA)
 SRCDIR  = src
 OBJDIR  = obj
 LIB     = libtriad_rt.a
 
-# Boehm GC is the default when libgc is present. Use GC=no to force
-# the malloc/free fallback; if gc/gc.h is missing the fallback is automatic.
 GC_HEADER := $(wildcard /usr/include/gc/gc.h /usr/local/include/gc/gc.h /opt/homebrew/include/gc/gc.h)
 ifeq ($(GC),no)
   CFLAGS += -DTRIAD_NO_BOEHM
@@ -25,11 +35,11 @@ ifneq ($(wildcard /usr/include/fftw3.h),)
   FFTW_LDFLAGS = -lfftw3
 endif
 
-# CUDA detection
-NVCC   := $(shell which nvcc 2>/dev/null)
+NVCC   := $(shell command -v nvcc)
 ifneq ($(NVCC),)
+  CUDA_ROOT = $(patsubst %/bin/nvcc,%,$(NVCC))
   CUDA_CFLAGS = -Iinclude
-  CUDA_LDFLAGS = -L/opt/cuda/lib64 -lcublas -lcudart -lstdc++
+  CUDA_LDFLAGS = -L$(CUDA_ROOT)/lib64 -L$(CUDA_ROOT)/lib -lcublas -lcudart -lstdc++
   CFLAGS += -DHAVE_CUDA
 endif
 
@@ -66,7 +76,8 @@ SRCS    = $(SRCDIR)/triad_gc.c \
           $(SRCDIR)/triad_codec.c \
           $(SRCDIR)/triad_multi_runtime.c \
           $(SRCDIR)/triad_observables_atoms.c \
-          $(SRCDIR)/triad_compiler.c
+          $(SRCDIR)/triad_compiler.c \
+          $(SRCDIR)/triad_regex.c
 
 CU_SRCS = $(SRCDIR)/triad_cuda.cu
 
@@ -77,8 +88,10 @@ else
   CU_OBJS =
 endif
 
-ifeq ($(UNAME_S),Darwin)
-  CHAT_LDFLAGS = -lm $(GC_LDFLAGS)
+ifdef ON_WINDOWS
+  CHAT_LDFLAGS = -L. -ltriad_rt -lm $(GC_LDFLAGS)
+else ifeq ($(UNAME_S),Darwin)
+  CHAT_LDFLAGS = -L. -ltriad_rt -Wl,-rpath,@loader_path -lm $(GC_LDFLAGS)
 else
   CHAT_LDFLAGS = -L. -ltriad_rt -Wl,-rpath,'$$ORIGIN' -lm $(GC_LDFLAGS)
 endif
@@ -88,17 +101,40 @@ endif
 ifneq ($(wildcard /usr/include/fftw3.h),)
   CHAT_LDFLAGS += $(FFTW_LDFLAGS)
 endif
+ifdef ON_WINDOWS
+  TEST_LDFLAGS = -L. -ltriad_rt -lm $(GC_LDFLAGS)
+else ifeq ($(UNAME_S),Darwin)
+  TEST_LDFLAGS = -L. -ltriad_rt -Wl,-rpath,@loader_path/.. -lm $(GC_LDFLAGS)
+else
+  TEST_LDFLAGS = -L. -ltriad_rt -Wl,-rpath,'$$ORIGIN/..' -lm $(GC_LDFLAGS)
+endif
+ifneq ($(NVCC),)
+  TEST_LDFLAGS += $(CUDA_LDFLAGS)
+endif
+ifneq ($(wildcard /usr/include/fftw3.h),)
+  TEST_LDFLAGS += $(FFTW_LDFLAGS)
+endif
+SHARED_LDFLAGS = -lm $(GC_LDFLAGS)
+ifneq ($(NVCC),)
+  SHARED_LDFLAGS += $(CUDA_LDFLAGS)
+endif
+ifneq ($(wildcard /usr/include/fftw3.h),)
+  SHARED_LDFLAGS += $(FFTW_LDFLAGS)
+endif
 
-ifeq ($(UNAME_S),Darwin)
+ifdef ON_WINDOWS
+  SO      = triad_rt.dll
+  IMPLIB  = libtriad_rt.dll.a
+else ifeq ($(UNAME_S),Darwin)
   SO      = libtriad_rt.dylib
+  IMPLIB  =
 else
   SO      = libtriad_rt.so
+  IMPLIB  =
 endif
 
 .PHONY: all clean rebuild static chat frontend parity_ast test_frontend triad-cli parity shared
 
-# Keep clean and build in separate recursive make invocations.  This avoids
-# `make clean all -j` racing deletion against object compilation/linking.
 rebuild:
 	$(MAKE) clean
 	$(MAKE) all
@@ -164,43 +200,55 @@ parity_solver_1d: static parity/parity_solver_1d.c
 	$(CC) $(CFLAGS) parity/parity_solver_1d.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o parity/parity_solver_1d
 
 test_codec: static tests/test_codec.c
-	$(CC) $(CFLAGS) tests/test_codec.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_codec
+	$(CC) $(CFLAGS) tests/test_codec.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_codec
 
 test_multi_runtime: static tests/test_multi_runtime.c
-	$(CC) $(CFLAGS) tests/test_multi_runtime.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_multi_runtime
+	$(CC) $(CFLAGS) tests/test_multi_runtime.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_multi_runtime
 
 test_observables_atoms: static tests/test_observables_atoms.c
-	$(CC) $(CFLAGS) tests/test_observables_atoms.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_observables_atoms
+	$(CC) $(CFLAGS) tests/test_observables_atoms.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_observables_atoms
 
 test_compiler: static tests/test_compiler.c
-	$(CC) $(CFLAGS) tests/test_compiler.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_compiler
+	$(CC) $(CFLAGS) tests/test_compiler.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_compiler
+
+test_regex: static tests/test_regex.c
+	$(CC) $(CFLAGS) tests/test_regex.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_regex
+
+test_autograd_shapes: static tests/test_autograd_shapes.c
+	$(CC) $(CFLAGS) tests/test_autograd_shapes.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_autograd_shapes
+
+ifneq ($(NVCC),)
+test_cuda_kernels: static tests/test_cuda_kernels.c
+	$(CC) $(CFLAGS) tests/test_cuda_kernels.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_cuda_kernels
+endif
 
 triad-cli: static shared triad_cli.c
 	$(CC) $(CFLAGS) triad_cli.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o triad
 
 test_lexer: static tests/test_lexer.c
-	$(CC) $(CFLAGS) tests/test_lexer.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_lexer
+	$(CC) $(CFLAGS) tests/test_lexer.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_lexer
 
 test_parser: static tests/test_parser.c
-	$(CC) $(CFLAGS) tests/test_parser.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_parser
+	$(CC) $(CFLAGS) tests/test_parser.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_parser
 
 test_lower: static tests/test_lower.c
-	$(CC) $(CFLAGS) tests/test_lower.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_lower
+	$(CC) $(CFLAGS) tests/test_lower.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_lower
 
 test_check: static tests/test_check.c
-	$(CC) $(CFLAGS) tests/test_check.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_check
+	$(CC) $(CFLAGS) tests/test_check.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_check
 
 test_solver_nd: static tests/test_solver_nd.c
-	$(CC) $(CFLAGS) tests/test_solver_nd.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_solver_nd
+	$(CC) $(CFLAGS) tests/test_solver_nd.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_solver_nd
 
 test_observables: static tests/test_observables.c
-	$(CC) $(CFLAGS) tests/test_observables.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o tests/test_observables
+	$(CC) $(CFLAGS) tests/test_observables.c $(OBJS) $(CU_OBJS) $(TEST_LDFLAGS) -o tests/test_observables
 
-test_frontend: test_lexer test_parser test_legacy_frontend test_lower test_check
-	./tests/test_lexer && ./tests/test_parser && ./tests/./tests/test_lower && ./tests/test_check
+test_frontend:
+	for t in test_lexer test_parser test_lower test_check; do \
+		if [ -f tests/$$t.c ]; then $(MAKE) $$t && ./tests/$$t || exit 1; \
+		else echo "skip $$t (no source in this checkout)"; fi; \
+	done
 
-# Aggregate parity driver: runs every native parity_* binary side-by-side with
-# its Python reference across all .tri fixtures in the repo. See parity_run_all.py.
 parity: frontend
 	PYTHONPATH=../../src python3 parity/parity_run_all.py
 
@@ -219,9 +267,11 @@ static: $(OBJS) $(CU_OBJS)
 
 shared: $(OBJS) $(CU_OBJS)
 ifeq ($(UNAME_S),Darwin)
-	$(CC) -dynamiclib -o $(SO) $^ $(CHAT_LDFLAGS)
+	$(CC) -dynamiclib -Wl,-install_name,@rpath/libtriad_rt.dylib -o $(SO) $^ $(SHARED_LDFLAGS)
+else ifdef ON_WINDOWS
+	$(CC) -shared -o $(SO) $^ $(SHARED_LDFLAGS) -Wl,--out-implib,$(IMPLIB)
 else
-	$(CC) -shared -o $(SO) $^ $(CHAT_LDFLAGS)
+	$(CC) -shared -o $(SO) $^ $(SHARED_LDFLAGS)
 endif
 	@echo "Built $(SO)"
 
@@ -229,4 +279,4 @@ chat: static shared $(OBJS) $(CU_OBJS)
 	$(CC) $(CFLAGS) triad_chat.c $(OBJS) $(CU_OBJS) $(CHAT_LDFLAGS) -o triad-chat
 
 clean:
-	rm -rf $(OBJDIR) $(LIB) $(SO) triad-chat triad
+	rm -rf $(OBJDIR) $(LIB) $(SO) $(IMPLIB) triad-chat triad

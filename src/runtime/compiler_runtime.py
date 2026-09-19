@@ -99,7 +99,7 @@ class TriadCompiler:
     def _source_hash(self, filepath: str) -> bytes:
         with open(filepath, 'rb') as f:
             h = hashlib.sha256(f.read())
-        h.update(f'v{_COMPILER_VERSION}:{self._backend}'.encode())
+        h.update(f'v{_COMPILER_VERSION}:{self._backend}:py{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}'.encode())
         return h.digest()
 
     def _load_cache(self, filepath: str):
@@ -1498,7 +1498,8 @@ class TriadCompiler:
             import numpy as _numpy_mod
             g['_np'] = _numpy_mod
         except ImportError:
-            g['_np'] = None
+            from triad import ntri as _numpy_mod
+            g['_np'] = _numpy_mod
         g['len'] = len
         g['_tri_sum'] = sum
         g['sqrt'] = math.sqrt
@@ -1884,7 +1885,10 @@ async def _tri_async_fetch(url, method='GET', headers=None, body=None):
     loop = _asyncio.get_event_loop()
     resp = await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=30))
     status = resp.status
-    data = resp.read().decode('utf-8', errors='replace')
+    raw = resp.read(4 * 1024 * 1024 + 1)
+    if len(raw) > 4 * 1024 * 1024:
+        raise ValueError('http response exceeds 4MB cap')
+    data = raw.decode('utf-8', errors='replace')
     return {'status': status, 'body': data}
 
 class _TriObj:
@@ -1955,9 +1959,11 @@ def _init_stdlib():
     _STDLIB['fs'] = _TriModule('fs', {'read_text': _fs_read, 'write_text': _fs_write, 'exists': _fs_exists, 'listdir': _fs_listdir, 'tempdir': _tempfile.gettempdir, 'join': os.path.join})
     _STDLIB['time'] = _TriModule('time', {'now': _time_mod.time, 'sleep': _time_mod.sleep})
     _STDLIB['collections'] = _TriModule('collections', {'len': len, 'range': lambda *a: list(range(*a)), 'enumerate': lambda xs: [list(p) for p in enumerate(xs)], 'sorted': sorted, 'reversed': lambda x: list(reversed(x)), 'zip': lambda *args: [list(t) for t in zip(*args)], 'map': lambda f, xs: [f(x) for x in xs], 'filter': lambda f, xs: [x for x in xs if f(x)]})
-    from stdlib import plot as _plot_mod
-
-    _STDLIB['plot'] = _TriModule('plot', dict(_plot_mod.__dict__))
+    try:
+        from stdlib import plot as _plot_mod
+        _STDLIB['plot'] = _TriModule('plot', dict(_plot_mod.__dict__))
+    except RuntimeError:
+        _STDLIB['plot'] = _TriModule('plot', {})
     _STDLIB['triad.plot'] = _STDLIB['plot']
 
     import datetime as _dt
@@ -2209,7 +2215,7 @@ def _init_stdlib():
 _init_stdlib()
 
 def _lazy_ntri_module():
-    import numpy as _np
+    from triad import ntri as _np
     return _np
 
 def _lazy_triad_module():
@@ -2388,6 +2394,8 @@ def _lazy_kernel_module():
             elif hasattr(result, obs):
                 val = getattr(result, obs)
                 out[obs] = float(val) if hasattr(val, '__float__') else val
+            else:
+                raise ValueError(f"unknown observable {obs!r}; use 'crystallinity', 'peak', 'norm', 'k_star', 'ipr' or 'fwhm'")
         return out
     return _TriModule('triad.kernel', {'prepare': prepare, 'run': run, 'extract': extract})
 
@@ -2707,7 +2715,7 @@ _SAFE_IMPORT_PREFIXES = [
     'triad', 'math', 'random', 'statistics', 'json', 'itertools',
     'functools', 'collections', 're', 'datetime', 'fs', 'io', 'string',
     'time', 'hash', 'csv', 'logging', 'threading', 'net', 'os', 'subprocess',
-    'socket',
+    'socket', 'numpy', 'click', 'flask',
 ]
 
 def set_allowed_import_prefixes(prefixes: list[str] | None):

@@ -55,7 +55,7 @@ def _run_1d_sync(req: SolveRequest) -> SolveResult:
     from runtime.core.solver import integrate
     p = _resolve_params(req)
     if p.D != 1:
-        p.D = 1
+        raise HTTPException(status_code=400, detail=f'D mismatch: endpoint is 1D but params D={p.D}')
     psi0 = b64_to_ndarray(req.psi0_b64) if req.psi0_b64 else None
     raw = integrate(p, psi0=psi0)
     return _build_solve_result(raw, p)
@@ -64,7 +64,7 @@ def _run_2d_sync(req: SolveRequest) -> SolveResult:
     from runtime.core.solver import integrate_2d
     p = _resolve_params(req)
     if p.D != 2:
-        p.D = 2
+        raise HTTPException(status_code=400, detail=f'D mismatch: endpoint is 2D but params D={p.D}')
     psi0 = b64_to_ndarray(req.psi0_b64) if req.psi0_b64 else None
     raw = integrate_2d(p, psi0=psi0)
     return _build_solve_result(raw, p)
@@ -73,7 +73,7 @@ def _run_3d_sync(req: SolveRequest) -> SolveResult:
     from runtime.core.solver import integrate_3d
     p = _resolve_params(req)
     if p.D != 3:
-        p.D = 3
+        raise HTTPException(status_code=400, detail=f'D mismatch: endpoint is 3D but params D={p.D}')
     raw = integrate_3d(p)
     return _build_solve_result(raw, p)
 

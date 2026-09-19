@@ -37,6 +37,11 @@ class TriadEditor(TextArea):
     def on_key(self, event) -> None:
         if event.character == '\r' or event.key == "enter":
             self._auto_indent()
+            try:
+                event.prevent_default()
+            except AttributeError:
+                pass
+            return
         super().on_key(event)
 
     def _auto_indent(self):
@@ -121,7 +126,7 @@ class TriadEditor(TextArea):
             return
         lines[row] = new_line
         self.load_text('\n'.join(lines))
-        self.cursor_location = (row, col)
+        self.cursor_location = (row, min(col, len(new_line)))
 
     def get_line_col(self) -> tuple[int, int]:
         try:

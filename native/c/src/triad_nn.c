@@ -26,13 +26,17 @@ typedef struct {
 } triadCtx;
 
 static void _triad_backward(TriadTensor *out) {
+    if (!out || !out->grad) return;
     triadCtx *c = (triadCtx*)out->_ctx;
+    if (!c) return;
     TriadTensor *inp = c->x;
     int64_t B = c->rows;
     int32_t inf = c->in_f, outf = c->out_f;
+    if (!inp || !c->weight) return;
 
     if (inp->requires_grad) {
-        if (!inp->grad) inp->grad = calloc(inp->size, sizeof(double));
+        if (!inp->grad) inp->grad = calloc((size_t)inp->size, sizeof(double));
+        if (!inp->grad) return;
         for (int64_t i = 0; i < B; i++)
             for (int32_t k = 0; k < inf; k++) {
                 double s = 0;
@@ -46,7 +50,8 @@ static void _triad_backward(TriadTensor *out) {
     }
 
     if (c->weight->requires_grad) {
-        if (!c->weight->grad) c->weight->grad = calloc(c->weight->size, sizeof(double));
+        if (!c->weight->grad) c->weight->grad = calloc((size_t)c->weight->size, sizeof(double));
+        if (!c->weight->grad) return;
         for (int32_t j = 0; j < outf; j++)
             for (int32_t k = 0; k < inf; k++) {
                 double s = 0;

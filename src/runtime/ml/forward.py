@@ -789,20 +789,331 @@ def _forward_ffn_gguf(h, lw):
     up = h_normed @ lw["up_proj.weight"].T
     return h + (silu(gate) * up) @ lw["down_proj.weight"].T
 
+def _layer_norm(x: torch.Tensor, weight: torch.Tensor, bias=None, eps: float = 1e-5) -> torch.Tensor:
+    m = x.mean(dim=-1, keepdim=True)
+    v = ((x - m) ** 2).mean(dim=-1, keepdim=True)
+    xh = (x - m) / torch.sqrt(v + eps)
+    out = xh * weight
+    if bias is not None:
+        out = out + bias
+    return out
+
+def forward_transformer_gpt2(model, token_ids: np.ndarray,
+                             kv_caches: list | None = None) -> np.ndarray:
+    _ensure_torch()
+    dev = _get_device()
+    w_gpu = {}
+    if not hasattr(model, '_gpu_weights') or model._gpu_weights is None:
+        for k, v in model.weights.items():
+            w_gpu[k] = torch.as_tensor(v, device=dev)
+        model._gpu_weights = w_gpu
+    else:
+        w_gpu = model._gpu_weights
+    cfg = model.config
+    n_layers = model.n_layers
+    n_heads = cfg.get("num_attention_heads", cfg.get("n_head", 12))
+    hidden = cfg.get("hidden_size", cfg.get("n_embd", 768))
+    head_dim = hidden // n_heads
+    eps = cfg.get("layer_norm_epsilon", 1e-5)
+    wte = w_gpu["transformer.wte.weight"]
+    wpe = w_gpu["transformer.wpe.weight"]
+    ids_t = torch.as_tensor(np.asarray(token_ids).reshape(-1), dtype=torch.long, device=dev)
+    seq_len = ids_t.shape[0]
+    if kv_caches is not None and len(kv_caches) == 0:
+        for _ in range(n_layers):
+            kv_caches.append([])
+    if kv_caches is not None and len(kv_caches) > 0 and len(kv_caches[0]) >= 2:
+        start_pos = kv_caches[0][0].shape[0]
+    else:
+        start_pos = 0
+    x = wte[ids_t] + wpe[torch.arange(start_pos, start_pos + seq_len, device=dev)]
+    for i in range(n_layers):
+        p = f"transformer.h.{i}"
+        h = _layer_norm(x, w_gpu[f"{p}.ln_1.weight"], w_gpu.get(f"{p}.ln_1.bias"), eps)
+        qkv = h @ w_gpu[f"{p}.attn.c_attn.weight"].T
+        if f"{p}.attn.c_attn.bias" in w_gpu:
+            qkv = qkv + w_gpu[f"{p}.attn.c_attn.bias"]
+        q, k, v = qkv.split(hidden, dim=-1)
+        q = q.reshape(seq_len, n_heads, head_dim)
+        k = k.reshape(seq_len, n_heads, head_dim)
+        v = v.reshape(seq_len, n_heads, head_dim)
+        layer_kv = kv_caches[i] if kv_caches is not None else None
+        if layer_kv is not None:
+            if len(layer_kv) == 0:
+                layer_kv.append(k)
+                layer_kv.append(v)
+            else:
+                k = torch.cat([layer_kv[0], k], dim=0)
+                v = torch.cat([layer_kv[1], v], dim=0)
+                layer_kv[0] = k
+                layer_kv[1] = v
+            if kv_caches is not None:
+                kv_caches[i] = layer_kv
+        total = k.shape[0]
+        start = total - seq_len
+        causal = torch.triu(torch.full((seq_len, total), -1e9, dtype=x.dtype, device=dev), diagonal=start + 1)
+        q_t = q.transpose(0, 1)[None]
+        k_t = k.transpose(0, 1)[None]
+        v_t = v.transpose(0, 1)[None]
+        scores = torch.matmul(q_t, k_t.transpose(-2, -1)) * (head_dim ** -0.5) + causal[None, None]
+        probs = torch.softmax(scores, dim=-1)
+        out = torch.matmul(probs, v_t)[0].transpose(0, 1).reshape(seq_len, -1)
+        out = out @ w_gpu[f"{p}.attn.c_proj.weight"].T
+        if f"{p}.attn.c_proj.bias" in w_gpu:
+            out = out + w_gpu[f"{p}.attn.c_proj.bias"]
+        x = x + out
+        h2 = _layer_norm(x, w_gpu[f"{p}.ln_2.weight"], w_gpu.get(f"{p}.ln_2.bias"), eps)
+        mlp = torch.nn.functional.gelu(h2 @ w_gpu[f"{p}.mlp.c_fc.weight"].T + w_gpu[f"{p}.mlp.c_fc.bias"])
+        mlp = mlp @ w_gpu[f"{p}.mlp.c_proj.weight"].T + w_gpu[f"{p}.mlp.c_proj.bias"]
+        x = x + mlp
+    x = _layer_norm(x, w_gpu["transformer.ln_f.weight"], w_gpu.get("transformer.ln_f.bias"), eps)
+    lm_head_w = w_gpu.get("lm_head.weight", wte)
+    return (x @ lm_head_w.T).cpu().numpy()
+
+def forward_transformer_falcon(model, token_ids: np.ndarray,
+                               kv_caches: list | None = None) -> np.ndarray:
+    _ensure_torch()
+    dev = _get_device()
+    w_gpu = {}
+    if not hasattr(model, '_gpu_weights') or model._gpu_weights is None:
+        for k, v in model.weights.items():
+            w_gpu[k] = torch.as_tensor(v, device=dev)
+        model._gpu_weights = w_gpu
+    else:
+        w_gpu = model._gpu_weights
+    cfg = model.config
+    n_layers = model.n_layers
+    n_heads = cfg.get("num_attention_heads", 71)
+    n_kv = cfg.get("num_key_value_heads", 1)
+    hidden = cfg.get("hidden_size", 4544)
+    head_dim = hidden // n_heads
+    eps = cfg.get("layer_norm_epsilon", 1e-5)
+    embed_w = w_gpu["transformer.word_embeddings.weight"]
+    ids_t = torch.as_tensor(np.asarray(token_ids).reshape(-1), dtype=torch.long, device=dev)
+    seq_len = ids_t.shape[0]
+    if kv_caches is not None and len(kv_caches) == 0:
+        for _ in range(n_layers):
+            kv_caches.append([])
+    if kv_caches is not None and len(kv_caches) > 0 and len(kv_caches[0]) >= 2:
+        start_pos = kv_caches[0][0].shape[0]
+    else:
+        start_pos = 0
+    x = embed_w[ids_t]
+    for i in range(n_layers):
+        p = f"transformer.h.{i}"
+        h1 = _layer_norm(x, w_gpu[f"{p}.input_layernorm.weight"], w_gpu.get(f"{p}.input_layernorm.bias"), eps)
+        h2 = _layer_norm(x, w_gpu[f"{p}.post_attention_layernorm.weight"], w_gpu.get(f"{p}.post_attention_layernorm.bias"), eps)
+        qkv = h1 @ w_gpu[f"{p}.self_attention.query_key_value.weight"].T
+        if f"{p}.self_attention.query_key_value.bias" in w_gpu:
+            qkv = qkv + w_gpu[f"{p}.self_attention.query_key_value.bias"]
+        q, k, v = qkv.split([n_heads * head_dim, n_kv * head_dim, n_kv * head_dim], dim=-1)
+        q = q.reshape(seq_len, n_heads, head_dim)
+        k = k.reshape(seq_len, n_kv, head_dim)
+        v = v.reshape(seq_len, n_kv, head_dim)
+        layer_kv = kv_caches[i] if kv_caches is not None else None
+        if layer_kv is not None:
+            if len(layer_kv) == 0:
+                layer_kv.append(k)
+                layer_kv.append(v)
+            else:
+                k = torch.cat([layer_kv[0], k], dim=0)
+                v = torch.cat([layer_kv[1], v], dim=0)
+                layer_kv[0] = k
+                layer_kv[1] = v
+            if kv_caches is not None:
+                kv_caches[i] = layer_kv
+        n_rep = n_heads // n_kv
+        if n_rep > 1:
+            k = k.repeat_interleave(n_rep, dim=1)
+            v = v.repeat_interleave(n_rep, dim=1)
+        total = k.shape[0]
+        start = total - seq_len
+        causal = torch.triu(torch.full((seq_len, total), -1e9, dtype=x.dtype, device=dev), diagonal=start + 1)
+        q_t = q.transpose(0, 1)[None]
+        k_t = k.transpose(0, 1)[None]
+        v_t = v.transpose(0, 1)[None]
+        scores = torch.matmul(q_t, k_t.transpose(-2, -1)) * (head_dim ** -0.5) + causal[None, None]
+        probs = torch.softmax(scores, dim=-1)
+        attn = torch.matmul(probs, v_t)[0].transpose(0, 1).reshape(seq_len, -1)
+        attn = attn @ w_gpu[f"{p}.self_attention.dense.weight"].T
+        if f"{p}.self_attention.dense.bias" in w_gpu:
+            attn = attn + w_gpu[f"{p}.self_attention.dense.bias"]
+        mlp = torch.nn.functional.gelu(h2 @ w_gpu[f"{p}.mlp.dense_h_to_4h.weight"].T + w_gpu[f"{p}.mlp.dense_h_to_4h.bias"])
+        mlp = mlp @ w_gpu[f"{p}.mlp.dense_4h_to_h.weight"].T + w_gpu[f"{p}.mlp.dense_4h_to_h.bias"]
+        x = x + attn + mlp
+    x = _layer_norm(x, w_gpu["transformer.ln_f.weight"], w_gpu.get("transformer.ln_f.bias"), eps)
+    lm_head_w = w_gpu.get("lm_head.weight", embed_w)
+    return (x @ lm_head_w.T).cpu().numpy()
+
+def forward_transformer_mamba(model, token_ids: np.ndarray,
+                              kv_caches: list | None = None) -> np.ndarray:
+    _ensure_torch()
+    dev = _get_device()
+    w_gpu = {}
+    if not hasattr(model, '_gpu_weights') or model._gpu_weights is None:
+        for k, v in model.weights.items():
+            w_gpu[k] = torch.as_tensor(v, device=dev)
+        model._gpu_weights = w_gpu
+    else:
+        w_gpu = model._gpu_weights
+    cfg = model.config
+    n_layers = model.n_layers
+    d_model = cfg.get("hidden_size", cfg.get("d_model", 2560))
+    d_state = cfg.get("d_state", 16)
+    d_conv = cfg.get("d_conv", 4)
+    expand = cfg.get("expand", 2)
+    inner = expand * d_model
+    dt_rank = cfg.get("dt_rank", (d_model + 15) // 16)
+    eps = cfg.get("layer_norm_epsilon", 1e-5)
+    use_kv = kv_caches is not None
+    if use_kv and len(kv_caches) == 0:
+        for _ in range(n_layers):
+            kv_caches.append({})
+    ids_t = torch.as_tensor(np.asarray(token_ids).reshape(-1), dtype=torch.long, device=dev)
+    seq_len = ids_t.shape[0]
+    x = w_gpu["backbone.embeddings.weight"][ids_t]
+    for i in range(n_layers):
+        p = f"backbone.layers.{i}.mixer"
+        state = kv_caches[i] if use_kv else {}
+        pos0 = int(state.get("pos", 0))
+        proj = x @ w_gpu[f"{p}.in_proj.weight"].T
+        if f"{p}.in_proj.bias" in w_gpu:
+            proj = proj + w_gpu[f"{p}.in_proj.bias"]
+        x_part, z = proj.split([inner, inner], dim=-1)
+        cw = w_gpu[f"{p}.conv1d.weight"]
+        cb = w_gpu.get(f"{p}.conv1d.bias")
+        if use_kv and "conv" in state:
+            conv_buf = state["conv"]
+        else:
+            conv_buf = torch.zeros(seq_len + d_conv - 1, inner, dtype=x.dtype, device=dev)
+            conv_buf[d_conv - 1:] = x_part
+        if use_kv and pos0 > 0:
+            x_new = x_part
+            keep = conv_buf[-(d_conv - 1):] if d_conv > 1 else conv_buf[:0]
+            conv_buf = torch.cat([keep, x_new], dim=0)
+        x_conv = torch.nn.functional.conv1d(
+            conv_buf.T[None], cw, cb, padding=0).squeeze(0).T[:seq_len]
+        x_dbl = x_conv @ w_gpu[f"{p}.x_proj.weight"].T
+        dt_in, B, C = x_dbl.split([dt_rank, d_state, d_state], dim=-1)
+        dt = torch.nn.functional.softplus(
+            dt_in @ w_gpu[f"{p}.dt_proj.weight"].T + w_gpu.get(
+                f"{p}.dt_proj.bias", dt_in.new_zeros(inner)))
+        A = -torch.exp(w_gpu[f"{p}.A_log"].to(x.dtype))
+        D = w_gpu.get(f"{p}.D", x.new_zeros(inner)).to(x.dtype)
+        if use_kv and "h" in state:
+            h = state["h"]
+        else:
+            h = torch.zeros(inner, d_state, dtype=x.dtype, device=dev)
+        ys = []
+        for t in range(seq_len):
+            dA = torch.exp(dt[t][:, None] * A)
+            dB = torch.where(A != 0, (dA - 1.0) / torch.where(A != 0, A, torch.ones_like(A)) * B[t][None, :], dt[t][:, None] * B[t][None, :])
+            h = dA * h + dB * x_conv[t][:, None]
+            ys.append((h * C[t][None, :]).sum(dim=-1) + D * x_conv[t])
+        y = torch.stack(ys, dim=0)
+        yn = y / torch.sqrt((y * y).mean(dim=-1, keepdim=True) + eps)
+        nw = w_gpu.get(f"{p}.norm.weight")
+        if nw is not None:
+            yn = yn * nw
+        y_g = yn * torch.nn.functional.silu(z)
+        out = y_g @ w_gpu[f"{p}.out_proj.weight"].T
+        if f"{p}.out_proj.bias" in w_gpu:
+            out = out + w_gpu[f"{p}.out_proj.bias"]
+        if use_kv:
+            state["h"] = h.detach()
+            state["conv"] = conv_buf.detach()
+            state["pos"] = pos0 + seq_len
+            kv_caches[i] = state
+        x = x + out
+    x = rms_norm(x, w_gpu["backbone.norm_f.weight"], eps)
+    lm_head_w = w_gpu.get("lm_head.weight", w_gpu["backbone.embeddings.weight"])
+    return (x @ lm_head_w.T).cpu().numpy()
+
 def forward(model, token_ids: list[int] | np.ndarray,
             kv_caches: list | None = None) -> np.ndarray:
     if isinstance(token_ids, list):
         token_ids = np.array(token_ids, dtype=np.int64)
     arch = model.arch
-    if arch == "qwen3_5":
-        return forward_transformer_qwen35(model, token_ids, kv_caches)
     if arch in ("llama", "qwen2", "qwen3", "mistral", "gemma"):
         return forward_transformer(model, token_ids, kv_caches)
-    if arch == "gemma2":
-        return forward_transformer_gemma2(model, token_ids, kv_caches)
-    if arch == "mixtral":
-        return forward_transformer_mixtral(model, token_ids, kv_caches)
+    if arch == "gpt2":
+        return forward_transformer_gpt2(model, token_ids, kv_caches)
+    if arch == "falcon":
+        return forward_transformer_falcon(model, token_ids, kv_caches)
+    if arch == "mamba":
+        return forward_transformer_mamba(model, token_ids, kv_caches)
+    if arch in ("qwen3moe", "qwen2moe"):
+        return forward_transformer_qwenmoe(model, token_ids, kv_caches)
     raise NotImplementedError(f"forward pass not implemented for arch: {arch}")
+
+def _moe_mlp(x: torch.Tensor, layer_w: dict, prefix: str, cfg: dict) -> torch.Tensor:
+    n_exp = int(cfg.get("num_experts", 128))
+    topk = int(cfg.get("num_experts_per_tok", 8))
+    scores = x @ layer_w[f"{prefix}.mlp.gate.weight"].T
+    vals, idx = torch.topk(scores, topk, dim=-1)
+    weights = torch.softmax(vals, dim=-1)
+    out = torch.zeros_like(x)
+    for e in range(n_exp):
+        sel = (idx == e)
+        if not bool(sel.any()):
+            continue
+        rows = sel.any(dim=-1)
+        xe = x[rows]
+        w = weights[rows][sel[rows]].unsqueeze(-1)
+        g = xe @ layer_w[f"{prefix}.mlp.experts.{e}.gate_proj.weight"].T
+        u = xe @ layer_w[f"{prefix}.mlp.experts.{e}.up_proj.weight"].T
+        ye = u @ layer_w[f"{prefix}.mlp.experts.{e}.down_proj.weight"].T
+        out[rows] += w * silu(g) * ye
+    return out
+
+def forward_transformer_qwenmoe(model, token_ids: np.ndarray,
+                                kv_caches: list | None = None) -> np.ndarray:
+    _ensure_torch()
+    dev = _get_device()
+    w_gpu = {}
+    if not hasattr(model, '_gpu_weights') or model._gpu_weights is None:
+        for k, v in model.weights.items():
+            w_gpu[k] = torch.as_tensor(v, device=dev)
+        model._gpu_weights = w_gpu
+    else:
+        w_gpu = model._gpu_weights
+    cfg = model.config
+    layers = [k.split(".")[2] for k in w_gpu.keys() if ".layers." in k]
+    n_layers = max([int(x) for x in layers if x.isdigit()], default=-1) + 1
+    if n_layers <= 0:
+        n_layers = model.n_layers
+    ids_t = torch.as_tensor(np.asarray(token_ids).reshape(-1), dtype=torch.long, device=dev)
+    seq_len = ids_t.shape[0]
+    tok_emb = None
+    for cand in ("model.embed_tokens.weight", "transformer.word_embeddings.weight"):
+        if cand in w_gpu:
+            tok_emb = w_gpu[cand]
+            break
+    if tok_emb is None:
+        tok_emb = next(v for k, v in w_gpu.items() if "embed" in k)
+    if kv_caches is not None and len(kv_caches) == 0:
+        for _ in range(n_layers):
+            kv_caches.append([])
+    if kv_caches is not None and len(kv_caches) > 0 and len(kv_caches[0]) >= 2:
+        start_pos = kv_caches[0][0].shape[0]
+    else:
+        start_pos = 0
+    cache_pos = start_pos + seq_len
+    rope_variant = cfg.get("rope_variant", "neox")
+    wkeys = " ".join(w_gpu.keys())
+    prefix = "transformer.h" if "transformer.h.0" in wkeys else "model.layers"
+    x = tok_emb[ids_t]
+    for i in range(n_layers):
+        p = f"{prefix}.{i}"
+        layer_kv = kv_caches[i] if kv_caches is not None else None
+        x = x + forward_attention_layer(x, i, w_gpu, cfg, kv_caches, layer_kv,
+                                        cache_pos, start_pos, prefix=prefix,
+                                        rope_variant=rope_variant)
+        x = x + _moe_mlp(forward_rmsnorm(x, w_gpu[f"{p}.post_attention_layernorm.weight"]), w_gpu, p, cfg)
+    norm_w = w_gpu.get("model.norm.weight", w_gpu.get("transformer.ln_f.weight"))
+    x = forward_rmsnorm(x, norm_w)
+    lm_head_w = w_gpu.get("lm_head.weight", tok_emb)
+    return (x @ lm_head_w.T).cpu().numpy()
 
 def forward_attention_layer_gemma2(x: torch.Tensor, layer_idx: int,
                                     weights: dict[str, torch.Tensor],

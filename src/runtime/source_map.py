@@ -61,6 +61,9 @@ class SourceMap:
     def lookup_traceback(self, tb) -> list[dict]:
 
         frames = []
+        src_abs = os.path.normcase(os.path.abspath(self.source_file)) if self.source_file not in ('', '<triad>') else self.source_file
+        src_base = os.path.basename(self.source_file)
+        src_has_dir = os.path.dirname(self.source_file) not in ('', '.')
         while tb is not None:
             frame = tb.tb_frame
             py_file = frame.f_code.co_filename
@@ -69,7 +72,13 @@ class SourceMap:
                 'py_file': py_file,
                 'py_line': py_line,
             }
-            if py_file == self.source_file or os.path.basename(py_file) == os.path.basename(self.source_file):
+            py_abs = os.path.normcase(os.path.abspath(py_file))
+            if py_file == self.source_file or py_abs == src_abs:
+                loc = self.lookup(py_line)
+                entry['tri_file'] = loc.file
+                entry['tri_line'] = loc.line
+                entry['tri_col'] = loc.col
+            elif not src_has_dir and os.path.basename(py_file) == src_base:
                 loc = self.lookup(py_line)
                 entry['tri_file'] = loc.file
                 entry['tri_line'] = loc.line

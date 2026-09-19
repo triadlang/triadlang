@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from runtime.backend import asnumpy as _asnumpy
 from runtime.core.fast_solver import fast_integrate
 from runtime.core.multi_runtime import CouplingLink, MultiRuntime, Segment
 from runtime.core.solver import TriadParams
@@ -42,16 +43,18 @@ class _SolveResult:
         self.params = sub.params
         L = sub.params.L
         k_min = 2.0 * np.pi / L
-        self.k_star = float(dominant_wavenumber(sub.psi, sub.dx, k_min=k_min))
-        self.crystallinity = float(crystallinity(sub.psi, sub.dx))
-        self.peak = float(peak_density(sub.psi))
-        self.ipr = float(ipr(sub.psi, sub.dx))
-        self.norm = float((np.abs(sub.psi) ** 2).sum() * sub.dx)
+        # observáveis pós-processados no hospedeiro: materializa o estado do backend.
+        psi_h = _asnumpy(sub.psi)
+        self.k_star = float(dominant_wavenumber(psi_h, sub.dx, k_min=k_min))
+        self.crystallinity = float(crystallinity(psi_h, sub.dx))
+        self.peak = float(peak_density(psi_h))
+        self.ipr = float(ipr(psi_h, sub.dx))
+        self.norm = float((np.abs(psi_h) ** 2).sum() * sub.dx)
         try:
-            self.fwhm = float(fwhm(sub.psi, sub.dx))
+            self.fwhm = float(fwhm(psi_h, sub.dx))
         except (ValueError, ArithmeticError, TypeError):
             self.fwhm = float('nan')
-        self.density = np.abs(sub.psi) ** 2
+        self.density = np.abs(psi_h) ** 2
 
     def __repr__(self):
         return f'SolveResult(k_star={self.k_star:.4f}, crystallinity={self.crystallinity:.4f}, peak={self.peak:.4f}, norm={self.norm:.4f})'
@@ -122,7 +125,6 @@ def solve_coupled(substrates, links, T=None):
     for src, dst, kappa in links:
         ce.append(CouplingLink(src_id=subs[src].id, dst_id=subs[dst].id, kappa=kappa))
     rt.add_segment(Segment(t_start=0.0, t_end=duration, links=ce))
-    rt.global_t = duration
     rt.run(verbose=False)
     return {name: _SolveResult(sub, rt) for name, sub in subs.items()}
 
@@ -176,7 +178,8 @@ def spectrum(psi_or_result, dx=None):
     if dx is None:
         raise ValueError('dx required when passing raw psi array')
     k, S = power_spectrum(psi, dx)
-    return {'k': k, 'S': S}
+    # pós-processamento no hospedeiro: mesma exibição em qualquer backend.
+    return {'k': _asnumpy(k), 'S': _asnumpy(S)}
 
 def pr(psi_or_result, dx=None):
     if _has_result_attrs(psi_or_result):

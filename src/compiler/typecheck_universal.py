@@ -1,13 +1,7 @@
 from __future__ import annotations
 
 from frontend.ast_nodes import *
-
-
-class TypeCheckError(Exception):
-
-    def __init__(self, errors: list[str]):
-        self.errors = errors
-        super().__init__('\n'.join(errors))
+from frontend.errors import TypeCheckError
 
 _KNOWN_METRICS = {'k_star', 'IPR', 'crystallinity', 'peak', 'FWHM', 'norm', 'stabilization',
     'memory_persistence', 'bravais_family', 'cluster_count', 'cluster_centroids',
@@ -327,7 +321,9 @@ def typecheck(mod: Module) -> None:
             name = s.alias or s.path[0]
             scope.add(name)
         elif isinstance(s, FromImportStmt):
-            aliases = s.aliases or [None] * len(s.names)
+            aliases = list(s.aliases) if s.aliases else [None] * len(s.names)
+            if len(aliases) < len(s.names):
+                aliases = aliases + [None] * (len(s.names) - len(aliases))
             for n, a in zip(s.names, aliases):
                 scope.add(a or n)
         elif isinstance(s, RegStmt):

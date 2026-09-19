@@ -66,7 +66,6 @@ QosLLM *qos_llm_create(int embed_dim, int hidden_dim, int context_len) {
     
     memset(llm, 0, sizeof(QosLLM));
     
-    // Embeddings: inicializar com distribuição natural (evolui, não é calibrado!)
     llm->embed_tokens = (double *)malloc(QOS_LLM_VOCAB * embed_dim * sizeof(double));
     llm->embed_pos = (double *)malloc(context_len * embed_dim * sizeof(double));
     
@@ -77,37 +76,31 @@ QosLLM *qos_llm_create(int embed_dim, int hidden_dim, int context_len) {
         llm->embed_pos[i] = randn_llm() * 0.1;
     }
     
-    // Attention layers
     llm->attn_q = (QosLayer *)malloc(sizeof(QosLayer));
     llm->attn_k = (QosLayer *)malloc(sizeof(QosLayer));
     llm->attn_v = (QosLayer *)malloc(sizeof(QosLayer));
     llm->attn_out = (QosLayer *)malloc(sizeof(QosLayer));
     
-    // Query: hidden -> hidden
     llm->attn_q->weights = (double *)malloc(hidden_dim * hidden_dim * sizeof(double));
     llm->attn_q->biases = (double *)malloc(hidden_dim * sizeof(double));
     llm->attn_q->in_dim = hidden_dim;
     llm->attn_q->out_dim = hidden_dim;
     
-    // Key: hidden -> hidden
     llm->attn_k->weights = (double *)malloc(hidden_dim * hidden_dim * sizeof(double));
     llm->attn_k->biases = (double *)malloc(hidden_dim * sizeof(double));
     llm->attn_k->in_dim = hidden_dim;
     llm->attn_k->out_dim = hidden_dim;
     
-    // Value: hidden -> hidden
     llm->attn_v->weights = (double *)malloc(hidden_dim * hidden_dim * sizeof(double));
     llm->attn_v->biases = (double *)malloc(hidden_dim * sizeof(double));
     llm->attn_v->in_dim = hidden_dim;
     llm->attn_v->out_dim = hidden_dim;
     
-    // Output: hidden -> hidden
     llm->attn_out->weights = (double *)malloc(hidden_dim * hidden_dim * sizeof(double));
     llm->attn_out->biases = (double *)malloc(hidden_dim * sizeof(double));
     llm->attn_out->in_dim = hidden_dim;
     llm->attn_out->out_dim = hidden_dim;
     
-    // Inicializar com ruído natural (auto-organização)
     for (int i = 0; i < hidden_dim * hidden_dim; i++) {
         llm->attn_q->weights[i] = randn_llm() * 0.1;
         llm->attn_k->weights[i] = randn_llm() * 0.1;
@@ -121,7 +114,6 @@ QosLLM *qos_llm_create(int embed_dim, int hidden_dim, int context_len) {
         llm->attn_out->biases[i] = 0;
     }
     
-    // Field Memory (P2-inspired)
     llm->memory_bank = (double *)malloc(QOS_LLM_MEMORY * hidden_dim * sizeof(double));
     llm->memory_wells = (double *)malloc(QOS_LLM_MEMORY * sizeof(double));
     
@@ -129,10 +121,8 @@ QosLLM *qos_llm_create(int embed_dim, int hidden_dim, int context_len) {
         llm->memory_bank[i] = randn_llm() * 0.1;
     }
     for (int i = 0; i < QOS_LLM_MEMORY; i++) {
-        llm->memory_wells[i] = (double)i / QOS_LLM_MEMORY;  // Potenciais uniformes
+        llm->memory_wells[i] = (double)i / QOS_LLM_MEMORY;
     }
-    
-    // Contexto
     llm->context_cap = context_len * 16;
     llm->context_buffer = (char *)malloc(llm->context_cap);
     llm->context_len = 0;
@@ -179,10 +169,8 @@ void qos_llm_destroy(QosLLM *llm) {
 void qos_llm_absorb(QosLLM *llm, const char *text, int len) {
     if (!llm || !text || len <= 0) return;
     
-    // Adicionar ao contexto
     int new_len = llm->context_len + len;
     if (new_len >= llm->context_cap) {
-        // Shift: remove oldest to make room
         int shift = new_len - llm->context_cap + 256;
         memmove(llm->context_buffer, llm->context_buffer + shift, llm->context_len - shift);
         llm->context_len -= shift;
@@ -192,45 +180,32 @@ void qos_llm_absorb(QosLLM *llm, const char *text, int len) {
     llm->context_len += len;
     llm->context_buffer[llm->context_len] = '\0';
     
-    // Auto-organização dos embeddings (aprende naturalmente)
     for (int i = 0; i < len && i < QOS_LLM_CONTEXT; i++) {
         int ch = (unsigned char)text[i];
         if (ch < 0 || ch >= QOS_LLM_VOCAB) ch = 0;
-        
-        // Atualizar embedding do token (gradiente natural)
         double *emb = llm->embed_tokens + ch * QOS_LLM_EMBED;
         double *pos = llm->embed_pos + i * QOS_LLM_EMBED;
-        
-        // Resonância: embedding evolui para minimizar energia
         for (int j = 0; j < QOS_LLM_EMBED; j++) {
             double delta = (pos[j] - emb[j]) * 0.01;
-            emb[j] += delta + randn_llm() * 0.001;  // Pequeno ruído
+            emb[j] += delta + randn_llm() * 0.001;
         }
     }
-    
-    // Auto-organizar a memória
     qos_llm_self_organize(llm);
 }
 
 void qos_llm_absorb_process(QosLLM *llm, QosProcess *proc) {
     if (!llm || !proc) return;
     
-    // O estado do processo influencia o LLM
-    // (sem colapso, apenas correlação natural)
-    
     double energy = proc->energy;
     double cryst = proc->crystallinity;
     double kstar = proc->k_star;
     
-    // Adicionar informação ao contexto
     char buf[256];
     snprintf(buf, sizeof(buf), "[proc:%d energy:%.2f cryst:%.2f k:%.2f] ",
              proc->pid, energy, cryst, kstar);
     qos_llm_absorb(llm, buf, strlen(buf));
     
-    // Se cristalizado, adicionar aos "poços de memória"
     if (cryst > 0.9 && llm->bound_pid >= 0) {
-        // Salvar na memória de campo
         double *well = llm->memory_wells;
         for (int i = 0; i < QOS_LLM_MEMORY; i++) {
             well[i] = well[i] * 0.95 + cryst * 0.05;
@@ -247,20 +222,14 @@ void qos_llm_bind_process(QosLLM *llm, int pid, double kappa) {
 void qos_llm_apply_to_field(QosLLM *llm, QosProcess *proc) {
     if (!llm || !proc || llm->bound_pid != proc->pid) return;
     
-    // LLM influencia o campo quântico
-    // (feedback natural, não imposto)
-    
     double influence = llm->influence_kappa;
-    
     for (int i = 0; i < proc->N && i < QOS_LLM_EMBED; i++) {
-        // Usar embeddings como potencial suave
         double emb_sum = 0;
         for (int v = 0; v < QOS_LLM_VOCAB; v++) {
             emb_sum += llm->embed_tokens[v * QOS_LLM_EMBED + i];
         }
         emb_sum /= QOS_LLM_VOCAB;
         
-        // Aplicar como perturbação suave
         proc->psi[i].re += influence * emb_sum * 0.001;
     }
 }
@@ -268,10 +237,6 @@ void qos_llm_apply_to_field(QosLLM *llm, QosProcess *proc) {
 void qos_llm_self_organize(QosLLM *llm) {
     if (!llm) return;
     
-    // Auto-organização: encontrar equilíbrio natural
-    // (sem loss function externa, sem gradiente imposto)
-    
-    // 1. Normalizar embeddings (reduzir energia)
     for (int v = 0; v < QOS_LLM_VOCAB; v++) {
         double *emb = llm->embed_tokens + v * QOS_LLM_EMBED;
         double norm = 0;
@@ -286,11 +251,8 @@ void qos_llm_self_organize(QosLLM *llm) {
         }
     }
     
-    // 2. Atualizar memória (correlações naturais)
     for (int i = 0; i < QOS_LLM_MEMORY; i++) {
         double *mem = llm->memory_bank + i * QOS_LLM_HIDDEN;
-        
-        // Média dos embeddings como atualização
         for (int j = 0; j < QOS_LLM_HIDDEN && j < QOS_LLM_EMBED; j++) {
             double sum = 0;
             for (int v = 0; v < QOS_LLM_VOCAB; v++) {
@@ -299,7 +261,6 @@ void qos_llm_self_organize(QosLLM *llm) {
             mem[j] = mem[j] * 0.99 + (sum / QOS_LLM_VOCAB) * 0.01;
         }
         
-        // Decay natural
         llm->memory_wells[i] *= 0.999;
     }
 }
@@ -312,7 +273,6 @@ double *qos_llm_encode(QosLLM *llm, const char *text, int len) {
     
     memset(embed, 0, QOS_LLM_HIDDEN * sizeof(double));
     
-    // Embedding simples: média dos tokens
     for (int i = 0; i < len && i < QOS_LLM_CONTEXT; i++) {
         int ch = (unsigned char)text[i];
         if (ch < 0 || ch >= QOS_LLM_VOCAB) ch = 0;
@@ -325,7 +285,6 @@ double *qos_llm_encode(QosLLM *llm, const char *text, int len) {
         }
     }
     
-    // Normalizar
     double norm = 0;
     for (int i = 0; i < QOS_LLM_HIDDEN; i++) {
         norm += embed[i] * embed[i];
@@ -336,14 +295,11 @@ double *qos_llm_encode(QosLLM *llm, const char *text, int len) {
             embed[i] /= norm;
         }
     }
-    
     return embed;
 }
 
 void qos_llm_decode(QosLLM *llm, double *embed, char *output, int max_len) {
     if (!llm || !embed || !output || max_len <= 0) return;
-    
-    // Decodificar: encontrar token mais próximo
     for (int pos = 0; pos < max_len - 1; pos++) {
         double best_score = -1e30;
         int best_token = 0;
@@ -356,7 +312,6 @@ void qos_llm_decode(QosLLM *llm, double *embed, char *output, int max_len) {
                 score += embed[j] * tok_emb[j];
             }
             
-            // Adicionar influência da posição
             double *pos_emb = llm->embed_pos + pos * QOS_LLM_EMBED;
             for (int j = 0; j < QOS_LLM_EMBED && j < QOS_LLM_HIDDEN; j++) {
                 score += pos_emb[j] * 0.1;
@@ -368,22 +323,18 @@ void qos_llm_decode(QosLLM *llm, double *embed, char *output, int max_len) {
             }
         }
         
-        // Aplicar ruído (temperatura) para criatividade
         if (randn_llm() > 0.5) {
-            // Token alternativo (exploração)
             best_token = (best_token + (int)(randn_llm() * 10)) % QOS_LLM_VOCAB;
             if (best_token < 0) best_token += QOS_LLM_VOCAB;
         }
         
         output[pos] = (char)best_token;
         
-        // Atualizar embedding para próximo token
         double *tok_emb = llm->embed_tokens + best_token * QOS_LLM_EMBED;
         for (int j = 0; j < QOS_LLM_EMBED && j < QOS_LLM_HIDDEN; j++) {
             embed[j] = embed[j] * 0.7 + tok_emb[j] * 0.3;
         }
         
-        // Parar em espaço ou fim
         if (best_token == ' ' || best_token == '\n' || best_token == 0) {
             output[pos + 1] = '\0';
             break;
@@ -396,14 +347,9 @@ void qos_llm_decode(QosLLM *llm, double *embed, char *output, int max_len) {
 int qos_llm_generate(QosLLM *llm, const char *prompt, char *output, int max_len) {
     if (!llm || !prompt || !output || max_len <= 0) return 0;
     
-    // Adicionar prompt ao contexto
     qos_llm_absorb(llm, prompt, strlen(prompt));
-    
-    // Codificar contexto
     double *embed = qos_llm_encode(llm, llm->context_buffer, llm->context_len);
     if (!embed) return 0;
-    
-    // Attention simples (Query = contexto atual)
     double *q = (double *)malloc(QOS_LLM_HIDDEN * sizeof(double));
     double *k = (double *)malloc(QOS_LLM_HIDDEN * sizeof(double));
     double *v = (double *)malloc(QOS_LLM_HIDDEN * sizeof(double));
@@ -412,7 +358,6 @@ int qos_llm_generate(QosLLM *llm, const char *prompt, char *output, int max_len)
     layer_forward(llm->attn_k, embed, k);
     layer_forward(llm->attn_v, embed, v);
     
-    // Attention: softmax(QK^T / sqrt(d)) * V
     double scale = 1.0 / sqrt((double)QOS_LLM_HIDDEN);
     double attn_sum = 0;
     double *attn_weights = (double *)malloc(QOS_LLM_MEMORY * sizeof(double));
@@ -427,7 +372,6 @@ int qos_llm_generate(QosLLM *llm, const char *prompt, char *output, int max_len)
         attn_sum += attn_weights[i];
     }
     
-    // Output = attention * V
     double *attn_out = (double *)malloc(QOS_LLM_HIDDEN * sizeof(double));
     memset(attn_out, 0, QOS_LLM_HIDDEN * sizeof(double));
     
@@ -439,17 +383,11 @@ int qos_llm_generate(QosLLM *llm, const char *prompt, char *output, int max_len)
         }
     }
     
-    // Combinar com input
     for (int j = 0; j < QOS_LLM_HIDDEN; j++) {
         embed[j] = embed[j] * 0.5 + attn_out[j] * 0.5 + v[j] * 0.3;
     }
-    
     relu(embed, QOS_LLM_HIDDEN);
-    
-    // Decodificar
     qos_llm_decode(llm, embed, output, max_len);
-    
-    // Limpar
     free(q);
     free(k);
     free(v);
@@ -464,17 +402,13 @@ int qos_llm_suggest_command(QosLLM *llm, const char *context,
                             char *suggestion, int max_len) {
     if (!llm || !context || !suggestion || max_len <= 0) return 0;
     
-    // Codificar contexto
     double *embed = qos_llm_encode(llm, context, strlen(context));
     if (!embed) return 0;
-    
-    // Comandos conhecidos (memória estruturada)
     const char *commands[] = {
         "ls", "cat", "run", "eval", "mem", "help", "clear", "exit"
     };
     int n_commands = 8;
     
-    // Encontrar comando mais similar (pela memória)
     double best_score = -1e30;
     int best_cmd = 0;
     
@@ -502,14 +436,12 @@ int qos_llm_suggest_command(QosLLM *llm, const char *context,
 }
 
 int qos_llm_save(QosLLM *llm, const char *path) {
-    // TODO: Salvar em arquivo
     (void)llm;
     (void)path;
     return 0;
 }
 
 int qos_llm_load(QosLLM *llm, const char *path) {
-    // TODO: Carregar de arquivo
     (void)llm;
     (void)path;
     return 0;

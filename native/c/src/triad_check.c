@@ -21,18 +21,23 @@ static size_t fnv1a(const char *s) {
 }
 
 static void ss_init(StrSet *s, size_t cap) {
+    if (!s) return;
     if (cap < 16) cap = 16;
     s->cap = cap;
     s->len = 0;
     s->buckets = (const char **)calloc(cap, sizeof(char *));
+    if (!s->buckets) s->cap = 0;
 }
 
 static int ss_has(const StrSet *s, const char *k);
 
 static void ss_rehash(StrSet *s, size_t new_cap) {
+    if (!s || new_cap == 0) return;
     const char **old = s->buckets;
     size_t old_cap = s->cap;
-    s->buckets = (const char **)calloc(new_cap, sizeof(char *));
+    const char **nb = (const char **)calloc(new_cap, sizeof(char *));
+    if (!nb) return;
+    s->buckets = nb;
     s->cap = new_cap;
     s->len = 0;
     for (size_t i = 0; i < old_cap; ++i) {
@@ -47,9 +52,10 @@ static void ss_rehash(StrSet *s, size_t new_cap) {
 }
 
 static void ss_add(StrSet *s, const char *k) {
-    if (!k) return;
+    if (!s || !k || !s->buckets || s->cap == 0) return;
     if (ss_has(s, k)) return;
     if ((s->len + 1) * 2 > s->cap) ss_rehash(s, s->cap * 2);
+    if (!s->buckets || s->cap == 0) return;
     size_t h = fnv1a(k) % s->cap;
     while (s->buckets[h]) {
         if (strcmp(s->buckets[h], k) == 0) return;
@@ -60,7 +66,7 @@ static void ss_add(StrSet *s, const char *k) {
 }
 
 static int ss_has(const StrSet *s, const char *k) {
-    if (!k || s->cap == 0) return 0;
+    if (!s || !k || !s->buckets || s->cap == 0) return 0;
     size_t h = fnv1a(k) % s->cap;
     while (s->buckets[h]) {
         if (strcmp(s->buckets[h], k) == 0) return 1;
@@ -71,13 +77,15 @@ static int ss_has(const StrSet *s, const char *k) {
 
 static void ss_copy_from(StrSet *dst, const StrSet *src) {
 
+    if (!dst || !src) return;
     ss_init(dst, src->cap);
+    if (!dst->buckets) return;
     for (size_t i = 0; i < src->cap; ++i) {
-        if (src->buckets[i]) ss_add(dst, src->buckets[i]);
+        if (src->buckets && src->buckets[i]) ss_add(dst, src->buckets[i]);
     }
 }
 
-static void ss_free(StrSet *s) { free(s->buckets); s->buckets = NULL; s->cap = s->len = 0; }
+static void ss_free(StrSet *s) { if (!s) return; free(s->buckets); s->buckets = NULL; s->cap = s->len = 0; }
 
 static const char *const BUILTINS[] = {
     "print", "input", "len", "range", "enumerate", "str", "int", "float",
@@ -217,7 +225,7 @@ static int _cmp_cstr(const void *a, const void *b) {
 }
 
 static const char *suggest_name(const StrSet *scope, const char *name) {
-    if (scope->len == 0) return NULL;
+    if (!scope || !name || !scope->buckets || scope->len == 0) return NULL;
     const char **cands = (const char **)malloc(scope->len * sizeof(char *));
     if (!cands) return NULL;
     size_t m = 0;

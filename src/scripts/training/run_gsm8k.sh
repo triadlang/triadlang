@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 cd "$(dirname "$0")/../.."
 PYTHONPATH=src nohup python -u src/scripts/training/bench_gsm8k.py > logs/gsm8k_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 PID=$!

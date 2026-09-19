@@ -8,7 +8,24 @@ _REPO = os.path.dirname(os.path.dirname(_HERE))
 _LIB_PATHS = [
     os.path.join(_REPO, 'native', 'c', 'libtriad_rt.so'),
     os.path.join(_REPO, 'native', 'c', 'libtriad_rt.dylib'),
+    os.path.join(_REPO, 'native', 'c', 'triad_rt.dll'),
 ]
+
+def _cuda_dep_paths():
+    import sys as _sys
+    import glob as _glob
+    if _sys.platform == 'win32':
+        pf = os.environ.get('ProgramFiles', r'C:\Program Files')
+        roots = [os.environ.get('CUDA_PATH')] + sorted(
+            _glob.glob(os.path.join(pf, 'NVIDIA GPU Computing Toolkit', 'CUDA', 'v*')))
+        for root in roots:
+            if not root:
+                continue
+            yield os.path.join(root, 'bin', 'cublasLt64_*.dll')
+            yield os.path.join(root, 'bin', 'cublas64_*.dll')
+    else:
+        yield '/opt/cuda/lib64/libcublasLt.so.*'
+        yield '/opt/cuda/lib64/libcublas.so.*'
 
 _lib = None
 
@@ -20,8 +37,9 @@ def _load():
     if _lib is not None:
         return _lib
 
-    for dep in ('/opt/cuda/lib64/libcublasLt.so.13', '/opt/cuda/lib64/libcublas.so.13'):
-        if os.path.exists(dep):
+    import glob as _glob
+    for pat in _cuda_dep_paths():
+        for dep in sorted(_glob.glob(pat)):
             try:
                 ctypes.CDLL(dep, mode=ctypes.RTLD_GLOBAL)
             except OSError as exc:
@@ -33,7 +51,7 @@ def _load():
             break
     if _lib is None:
         raise MLNativeUnavailable(
-            'libtriad_rt.so not found: build it with `make -C native/c` '
+            'libtriad_rt (so/dylib/dll) not found: build it with `make -C native/c` '
             'to use the ml_* native builtins in the interpreter')
     L = _lib
     i32, i64, dbl = ctypes.c_int32, ctypes.c_int64, ctypes.c_double
@@ -119,6 +137,11 @@ class MLHandle:
     __slots__ = ('ptr', 'kind')
 
     def __init__(self, ptr, kind):
+        if ptr is None:
+            raise RuntimeError(
+                f'native ml call failed (kind={kind!r}): the C function '
+                'returned NULL (bad input shapes or OOM); refusing to '
+                'continue with a null handle')
         self.ptr = ptr
         self.kind = kind
 

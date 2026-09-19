@@ -3,7 +3,6 @@
 #include "triad_mm.h"
 
 bool triad_sb_check_path(TriadSandbox *sb, const char *path, bool write) {
-    (void)write;
     if (!sb || !path) return false;
     int k = 0;
     int j = 0;
@@ -11,19 +10,19 @@ bool triad_sb_check_path(TriadSandbox *sb, const char *path, bool write) {
         k++;
         j++;
     }
-    if (sb->root[j] == 0) return true;
+    if (sb->root[j] == 0 && (path[k] == 0 || path[k] == '/')) return true;
     if (path[0] == '/') {
         if (sb->allow_temp) {
             const char tmp[] = "/tmp";
             int i = 0;
             while (tmp[i] && path[i] == tmp[i]) i++;
-            if (tmp[i] == 0) return true;
+            if (tmp[i] == 0 && (path[i] == 0 || path[i] == '/')) return true;
         }
-        if (sb->allow_home_read) {
+        if (!write && sb->allow_home_read) {
             const char home[] = "/home";
             int i = 0;
             while (home[i] && path[i] == home[i]) i++;
-            if (home[i] == 0) return true;
+            if (home[i] == 0 && (path[i] == 0 || path[i] == '/')) return true;
         }
     }
     return false;

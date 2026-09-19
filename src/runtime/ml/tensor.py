@@ -667,26 +667,28 @@ def exp(t: TriadTensor) -> TriadTensor:
 
 def log(t: TriadTensor) -> TriadTensor:
     t = _ensure_tensor(t)
-    out = TriadTensor(np.log(t._data))
+    xc = np.maximum(t._data, 1e-30)
+    out = TriadTensor(np.log(xc))
     if _ENABLE_GRAD and t._requires_grad:
         out._requires_grad = True
         out._children = [t]
 
         def _back(g):
-            sg = g / t._data
+            sg = g / xc
             t._grad = sg if t._grad is None else t._grad + sg
         out._grad_fn = _back
     return out
 
 def sqrt(t: TriadTensor) -> TriadTensor:
     t = _ensure_tensor(t)
-    out = TriadTensor(np.sqrt(t._data))
+    xc = np.maximum(t._data, 0.0)
+    out = TriadTensor(np.sqrt(xc))
     if _ENABLE_GRAD and t._requires_grad:
         out._requires_grad = True
         out._children = [t]
 
         def _back(g):
-            sg = g / (2 * out._data)
+            sg = g / (2 * np.maximum(out._data, 1e-30))
             t._grad = sg if t._grad is None else t._grad + sg
         out._grad_fn = _back
     return out

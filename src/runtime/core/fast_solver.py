@@ -70,6 +70,11 @@ def equilibrate(p: TriadParams, method: str = "accelerated",
                 verbose: bool = False) -> dict:
     _validate_triad_params(p)
 
+    if method not in ("accelerated", "direct"):
+        raise ValueError(f"equilibrate() method must be 'accelerated' or 'direct', got {method!r}")
+    if method == "direct":
+        return _equilibrate_direct(p, verbose=verbose)
+
     if p.D != 1:
         raise ValueError(f"equilibrate() e 1D mas recebeu D={p.D}")
     rng = np.random.default_rng(p.seed)
@@ -128,6 +133,33 @@ def equilibrate(p: TriadParams, method: str = "accelerated",
         "observables_history": obs_history,
         "observables": obs_final,
         "method": method,
+    }
+
+def _equilibrate_direct(p: TriadParams, verbose: bool = False) -> dict:
+    from runtime.core.solver import integrate
+    r = integrate(p)
+    psi = r["psi_final"]
+    y = r["y_final"]
+    x = np.linspace(-p.L / 2, p.L / 2, p.N, endpoint=False)
+    dx = float(x[1] - x[0])
+    obs_final = {
+        "crystallinity": crystallinity(psi, dx),
+        "k_star": dominant_wavenumber(psi, dx),
+        "ipr": ipr(psi, dx),
+        "participation": participation_ratio(psi, dx),
+        "energy": energy(psi, dx, hbar=p.hbar, m=p.m, Lambda=p.Lambda),
+    }
+    if verbose:
+        print(f'  direct: C={obs_final["crystallinity"]:.4f}  E={obs_final["energy"]:.2f}')
+    return {
+        "psi_star": psi,
+        "y_star": y,
+        "converged": False,
+        "n_supersteps": 0,
+        "n_total_steps": int(r.get("n_steps", 0)),
+        "observables_history": {k: [v] for k, v in obs_final.items()},
+        "observables": obs_final,
+        "method": "direct",
     }
 
 def fast_integrate(p: TriadParams, **kwargs) -> dict:

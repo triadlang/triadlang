@@ -149,18 +149,25 @@ def _run_kernel_sync(params: dict, observables: list[str] | None) -> KernelRunRe
         return KernelRunResult(ok=False, error=str(exc))
 
 def _dict_to_tri_literal(d: dict[str, object]) -> str:
+    import json as _json
     pairs = []
     for k, v in d.items():
+        key = _json.dumps(str(k))
         if isinstance(v, str):
-            pairs.append(f'"{k}": "{v}"')
+            pairs.append(f'{key}: {_json.dumps(v)}')
         elif isinstance(v, bool):
-            pairs.append(f'"{k}": {"true" if v else "false"}')
+            pairs.append(f'{key}: {"true" if v else "false"}')
+        elif isinstance(v, (int, float)):
+            pairs.append(f'{key}: {repr(v)}')
+        elif v is None:
+            pairs.append(f'{key}: none')
         else:
-            pairs.append(f'"{k}": {v}')
+            pairs.append(f'{key}: {_json.dumps(str(v))}')
     return '{' + ', '.join(pairs) + '}'
 
 def _list_to_tri_literal(lst: list[str]) -> str:
-    return '[' + ', '.join(f'"{x}"' for x in lst) + ']'
+    import json as _json
+    return '[' + ', '.join(_json.dumps(str(x)) for x in lst) + ']'
 
 @router.post('/run', response_model=AdapterRunResult,
              summary='Execute .tri source via auto-detected or explicit adapter (headless/flask)')

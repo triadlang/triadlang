@@ -60,6 +60,11 @@ class GradScaler:
             self._scale = max(self._scale * self._backoff, 1.0)
             self._good_steps = 0
             self._last_params = []
+            try:
+                optimizer.zero_grad()
+            except AttributeError:
+                for p in optimizer.params:
+                    p._grad = None
             return False
         optimizer.step()
         self._last_params = list(optimizer.params)

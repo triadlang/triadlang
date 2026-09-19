@@ -3,4 +3,4 @@ from runtime.core.fast_solver import fast_integrate
 from runtime.core.field_router import FieldRouter
 from runtime.core.multi_runtime import MultiRuntime
 from runtime.core.solver import TriadParams, integrate, integrate_nd
-from runtime.core.Triad_runtime import ReadoutConfig, TriadRuntime
+from runtime.core.Triad_runtime import SOLVERS, ReadoutConfig, TriadRuntime, solve_with

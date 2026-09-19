@@ -59,9 +59,7 @@ class SigmaSchedule:
         if self.mode == "triad":
             frac = step / max(self.n_steps - 1, 1)
             return self.sigma_start + frac * (self.sigma_end - self.sigma_start)
-        else:
-
-            return self.sigma_start
+        raise ValueError(f"unknown SigmaSchedule mode {self.mode!r}; use 'triad'")
 
 @dataclass
 class CurriculumResult:

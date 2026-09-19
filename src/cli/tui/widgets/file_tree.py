@@ -34,6 +34,6 @@ class TriadFileTree(Static):
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
 
         path = str(event.path)
-        if path.endswith(".tri"):
+        if path.lower().endswith(".tri") and os.path.isfile(path):
             self.post_message(FileSelected(path))
 

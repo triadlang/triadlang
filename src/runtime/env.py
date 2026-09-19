@@ -21,8 +21,13 @@ def _load_env_file() -> dict:
                         line = line.strip()
                         if not line or line.startswith('#') or '=' not in line:
                             continue
+                        if line.startswith('export '):
+                            line = line[len('export '):].lstrip()
                         k, v = line.split('=', 1)
-                        _ENV_FILE[k.strip()] = v.strip()
+                        v = v.strip()
+                        if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
+                            v = v[1:-1]
+                        _ENV_FILE[k.strip()] = v
         return _ENV_FILE
 
 def load_os_environ():
@@ -37,5 +42,8 @@ def env(key: str, default):
         return default
     if isinstance(default, bool):
         return raw.lower() not in ('0', 'false', 'no', 'off', '')
-    return type(default)(raw)
+    try:
+        return type(default)(raw)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f'env {key}={raw!r} invalid (expected {type(default).__name__}): {e}')
 

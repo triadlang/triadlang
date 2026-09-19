@@ -13,7 +13,8 @@ class Dataset:
             y = y._data
         self.x = np.asarray(x, dtype=np.float64)
         self.y = np.asarray(y, dtype=np.float64) if y is not None else None
-        assert self.x.shape[0] == self.y.shape[0] if self.y is not None else True
+        if self.y is not None and self.x.shape[0] != self.y.shape[0]:
+            raise ValueError(f'Dataset x/y size mismatch: {self.x.shape[0]} vs {self.y.shape[0]}')
 
     def __len__(self):
         return self.x.shape[0]
@@ -28,18 +29,16 @@ class Dataset:
         return tensor(self.x[idx])
 
     def shuffle(self, seed=None):
-        if seed is not None:
-            np.random.seed(seed)
-        perm = np.random.permutation(len(self))
+        rng = np.random.default_rng(seed)
+        perm = rng.permutation(len(self))
         self.x = self.x[perm]
         if self.y is not None:
             self.y = self.y[perm]
 
     def split(self, ratio=0.8, seed=None):
-        if seed is not None:
-            np.random.seed(seed)
+        rng = np.random.default_rng(seed)
         n = len(self)
-        perm = np.random.permutation(n)
+        perm = rng.permutation(n)
         split = int(n * ratio)
         train_idx = perm[:split]
         val_idx = perm[split:]

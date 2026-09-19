@@ -12,8 +12,6 @@ typedef struct {
 
 extern uint64_t isr_table[256];
 
-/* Returns the IRQ frame to resume from (may differ from regs after a
- * thread switch: the frame of the next thread lives on its own stack). */
 TriadRegisters *isr_handler(TriadRegisters *regs);
 void irq_handler(TriadRegisters *regs);
 void isr_table_init(void);

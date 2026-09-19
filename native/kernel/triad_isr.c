@@ -24,7 +24,7 @@ static const char *exc_names[32] = {
     "page fault", "reserved", "x87 fpu error", "alignment check",
     "machine check", "simd fpu error", "virtualization error", "reserved",
     "reserved", "reserved", "reserved", "reserved", "reserved",
-    "reserved", "reserved", "reserved", "reserved", "security", "reserved",
+    "reserved", "reserved", "reserved", "security", "reserved",
 };
 
 void triad_isr_register(int irq, TriadIsrCallback cb) {
@@ -55,9 +55,6 @@ TriadRegisters *isr_handler(TriadRegisters *regs) {
         triad_eq_update(triad_sched_get_ticks());
 
         if (triad_sched_needs_switch()) {
-            /* The frame pushed by the CPU + isr_common IS the saved state:
-             * remember where it lives on the current stack, then resume
-             * from the next thread's frame on its own stack. */
             TriadThread *current = triad_sched_current();
             if (current) {
                 current->ctx.rsp = (uint64_t)regs;

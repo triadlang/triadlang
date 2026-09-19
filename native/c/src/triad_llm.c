@@ -23,6 +23,7 @@ static double _llm_randf(uint64_t *s) {
 
 static uint64_t hash_str(const char *s) {
     uint64_t h = 1469598103934665603ULL;
+    if (!s) return h;
     while (*s) {
         h ^= (unsigned char)*s++;
         h *= 1099511628211ULL;
@@ -31,6 +32,7 @@ static uint64_t hash_str(const char *s) {
 }
 
 static int token_hash_put(TriadTokenizer *t, const char *key, int32_t value) {
+    if (!t || !key) return -1;
     if (!t->token_hash_cap) {
         t->token_hash_cap = 1 << 20;
         t->token_hash = calloc((size_t)t->token_hash_cap, sizeof(TriadTokenHashEntry));
@@ -49,7 +51,7 @@ static int token_hash_put(TriadTokenizer *t, const char *key, int32_t value) {
 }
 
 static int32_t token_hash_get(const TriadTokenizer *t, const char *key) {
-    if (!t->token_hash || !t->token_hash_cap) return -1;
+    if (!t || !key || !t->token_hash || !t->token_hash_cap) return -1;
     uint64_t h = hash_str(key);
     for (int32_t n = 0; n < t->token_hash_cap; n++) {
         int32_t i = (int32_t)((h + (uint64_t)n) & (uint64_t)(t->token_hash_cap - 1));

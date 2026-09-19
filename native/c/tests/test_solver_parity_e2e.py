@@ -1,17 +1,3 @@
-"""End-to-end parity: C solver (triad_solver.c) vs Python solver
-(runtime/core/solver.py).
-
-Triad rule: nothing is isolated. Every case runs the FULL coupled P1.P2.P3
-dynamics in both engines and compares physical observables of the evolved
-state (norm, peak density, participation, per-scale P2 memory means).
-
-Noise-on cases are compared as ensembles over seeds: the C engine draws the
-FDT bath from xorshift64+Box-Muller and the Python engine from PCG64, so
-individual realizations differ by construction while the coupled dynamics
-must agree statistically. The eta->0 limit keeps Gamma dissipation, the P2
-memory feedback and the P1 spectral operator fully coupled and must match
-to FFT round-off.
-"""
 import dataclasses
 import os
 import sys
@@ -21,7 +7,7 @@ import numpy as np
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.join(_ROOT, 'src'))
 
-from runtime.core import solver as S  # noqa: E402
+from runtime.core import solver as S
 
 FAILURES = []
 

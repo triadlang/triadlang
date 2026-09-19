@@ -6,7 +6,7 @@ import sys
 from typing import Union
 
 from runtime.env import env as _env
-from runtime.backend import asnumpy
+from runtime.backend import asnumpy, copy_array
 from triad import ntri as np
 
 VExtSpec = Union[None, str, Callable[[np.ndarray], np.ndarray]]
@@ -269,7 +269,12 @@ def _native_lib():
         global _NATIVE_LIB
         if _NATIVE_LIB is None:
             repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-            lib_name = 'libtriad_rt.dylib' if sys.platform == 'darwin' else 'libtriad_rt.so'
+            if sys.platform == 'darwin':
+                lib_name = 'libtriad_rt.dylib'
+            elif sys.platform == 'win32':
+                lib_name = 'triad_rt.dll'
+            else:
+                lib_name = 'libtriad_rt.so'
             so_path = os.path.join(repo_root, 'native', 'c', lib_name)
             if not os.path.exists(so_path):
                 raise RuntimeError(
@@ -281,16 +286,28 @@ def _native_lib():
                 lib = None
                 if 'cublas' in err or 'cuda' in err:
                     roots = [os.environ.get('CUDA_HOME'), '/opt/cuda', '/usr/local/cuda']
+                    if sys.platform == 'win32':
+                        pf = os.environ.get('ProgramFiles', r'C:\Program Files')
+                        roots = [os.environ.get('CUDA_PATH')] + sorted(
+                            glob.glob(os.path.join(pf, 'NVIDIA GPU Computing Toolkit', 'CUDA', 'v*')))
                     for root in roots:
                         if not root:
                             continue
-                        for cand in sorted(glob.glob(os.path.join(root, 'lib64', 'libcublasLt.so.*'))):
-                            try:
-                                ctypes.CDLL(cand, mode=ctypes.RTLD_GLOBAL)
-                                lib = ctypes.CDLL(so_path)
+                        if sys.platform == 'win32':
+                            patterns = [os.path.join(root, 'bin', 'cublasLt64_*.dll'),
+                                        os.path.join(root, 'bin', 'cublas64_*.dll')]
+                        else:
+                            patterns = [os.path.join(root, 'lib64', 'libcublasLt.so.*')]
+                        for pat in patterns:
+                            for cand in sorted(glob.glob(pat)):
+                                try:
+                                    ctypes.CDLL(cand, mode=ctypes.RTLD_GLOBAL)
+                                    lib = ctypes.CDLL(so_path)
+                                    break
+                                except OSError:
+                                    continue
+                            if lib is not None:
                                 break
-                            except OSError:
-                                continue
                         if lib is not None:
                             break
                 if lib is None:
@@ -302,32 +319,42 @@ def _native_lib():
 
 def _try_native_c(p, **kwargs):
 
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     backend = getattr(p, 'backend', 'auto')
     if backend not in ('cpu', 'numpy'):
+        _log.debug('native C refused: backend=%r not in cpu/numpy', backend)
         return None, False
 
     D = p.D
     if D < 1:
+        _log.debug('native C refused: D=%r invalid', D)
         return None, False
 
     if getattr(p, 'step_mode', 'strang') == 'exptrap':
+        _log.debug('native C refused: step_mode=exptrap has no C path')
         return None, False
 
     spec = p.V_ext
     if callable(spec):
+        _log.debug('native C refused: callable V_ext has no C path')
         return None, False
     if spec is not None:
         spec_name = str(spec)
         if D == 1:
             if spec_name != 'harmonic':
+                _log.debug('native C refused: D=1 V_ext=%r unsupported in C', spec_name)
                 return None, False
         elif spec_name not in ('harmonic', 'double_well', 'gaussian_bump', 'ramp', 'lattice'):
+            _log.debug('native C refused: V_ext=%r unsupported in C', spec_name)
             return None, False
 
     import ctypes
     try:
         _lib = _native_lib()
     except (OSError, RuntimeError) as _e:
+        _log.debug('native C refused: library load failed: %s', _e)
         return None, False
 
     class _Cplx(ctypes.Structure):
@@ -657,13 +684,13 @@ def integrate(p: TriadParams, psi0: np.ndarray | None=None, y0: np.ndarray | Non
                 psi = psi * xp.exp(1j * k0[0] * x)
         psi = psi / xp.sqrt((xp.abs(psi) ** 2).sum() * dx)
     else:
-        psi = xp.asarray(psi0, dtype=xp.complex128).copy()
+        psi = copy_array(xp.asarray(psi0, dtype=xp.complex128))
     nu_arr = xp.asarray(p.nu, dtype=xp.float64)
     M = len(p.nu)
     if y0 is None:
         y = xp.zeros((M, p.N), dtype=xp.float64)
     else:
-        y = xp.asarray(y0, dtype=xp.float64).copy()
+        y = copy_array(xp.asarray(y0, dtype=xp.float64))
     H_lin_k = p.hbar ** 2 * k ** 2 / (2.0 * p.m) + alpha_e * abs_k ** p.sigma
     half_lin = xp.exp(-1j * H_lin_k * p.dt / (2.0 * p.hbar) - Gamma_e * p.dt / (2.0 * p.hbar))
     ou_decay_half = xp.exp(-nu_arr * p.dt * 0.5) if M else None
@@ -782,13 +809,13 @@ def integrate_2d(p: TriadParams, psi0: np.ndarray | None=None, y0: np.ndarray | 
                 psi = psi * xp.exp(1j * (k0[0] * X + k0[1] * Y))
         psi = psi / xp.sqrt((xp.abs(psi) ** 2).sum() * dx * dx)
     else:
-        psi = xp.asarray(psi0, dtype=xp.complex128).copy()
+        psi = copy_array(xp.asarray(psi0, dtype=xp.complex128))
     nu_arr = xp.asarray(p.nu, dtype=xp.float64)
     M = len(p.nu)
     if y0 is None:
         y = xp.zeros((M, p.N, p.N), dtype=xp.float64)
     else:
-        y = xp.asarray(y0, dtype=xp.float64).copy()
+        y = copy_array(xp.asarray(y0, dtype=xp.float64))
     H_lin_k = p.hbar ** 2 * k2 / (2.0 * p.m) + alpha_e * abs_k ** p.sigma
     half_lin = xp.exp(-1j * H_lin_k * p.dt / (2.0 * p.hbar) - Gamma_e * p.dt / (2.0 * p.hbar))
     ou_decay_half = xp.exp(-nu_arr * p.dt * 0.5) if M else None
@@ -900,13 +927,13 @@ def integrate_3d(p: TriadParams, psi0: np.ndarray | None=None, y0: np.ndarray | 
                 psi = psi * xp.exp(1j * (k0[0] * X + k0[1] * Y + k0[2] * Z))
         psi = psi / xp.sqrt((xp.abs(psi) ** 2).sum() * dx ** 3)
     else:
-        psi = xp.asarray(psi0, dtype=xp.complex128).copy()
+        psi = copy_array(xp.asarray(psi0, dtype=xp.complex128))
     nu_arr = xp.asarray(p.nu, dtype=xp.float64)
     M = len(p.nu)
     if y0 is None:
         y = xp.zeros((M, p.N, p.N, p.N), dtype=xp.float64)
     else:
-        y = xp.asarray(y0, dtype=xp.float64).copy()
+        y = copy_array(xp.asarray(y0, dtype=xp.float64))
     H_lin_k = p.hbar ** 2 * k2 / (2.0 * p.m) + alpha_e * abs_k ** p.sigma
     half_lin = xp.exp(-1j * H_lin_k * p.dt / (2.0 * p.hbar) - Gamma_e * p.dt / (2.0 * p.hbar))
     ou_decay_half = xp.exp(-nu_arr * p.dt * 0.5) if M else None
@@ -1025,7 +1052,7 @@ def _integrate_highd(p: TriadParams, psi0: np.ndarray | None=None,
                 psi = psi * xp.exp(1j * phase)
         psi = psi / xp.sqrt((xp.abs(psi) ** 2).sum() * vol)
     else:
-        psi = xp.asarray(psi0, dtype=xp.complex128).copy()
+        psi = copy_array(xp.asarray(psi0, dtype=xp.complex128))
         if tuple(psi.shape) != field_shape:
             raise ValueError(f'psi0 shape {tuple(psi.shape)} incompatible with D={D}, N={N}')
 
@@ -1035,7 +1062,7 @@ def _integrate_highd(p: TriadParams, psi0: np.ndarray | None=None,
     if y0 is None:
         y = xp.zeros(y_shape, dtype=xp.float64)
     else:
-        y = xp.asarray(y0, dtype=xp.float64).copy()
+        y = copy_array(xp.asarray(y0, dtype=xp.float64))
         if tuple(y.shape) != y_shape:
             raise ValueError(f'y0 shape {tuple(y.shape)} incompatible with memory shape {y_shape}')
 
@@ -1173,13 +1200,13 @@ def _integrate_steps(p: TriadParams, psi0: np.ndarray | None=None,
                 psi = psi * xp.exp(1j * k0[0] * x)
         psi = psi / xp.sqrt((xp.abs(psi) ** 2).sum() * dx)
     else:
-        psi = xp.asarray(psi0, dtype=xp.complex128).copy()
+        psi = copy_array(xp.asarray(psi0, dtype=xp.complex128))
     nu_arr = xp.asarray(p.nu, dtype=np.float64)
     M = len(p.nu)
     if y0 is None:
         y = xp.zeros((M, p.N), dtype=np.float64)
     else:
-        y = xp.asarray(y0, dtype=np.float64).copy()
+        y = copy_array(xp.asarray(y0, dtype=np.float64))
     H_lin_k = p.hbar ** 2 * k ** 2 / (2.0 * p.m) + alpha_e * abs_k ** p.sigma
     half_lin = xp.exp(-1j * H_lin_k * p.dt / (2.0 * p.hbar) - Gamma_e * p.dt / (2.0 * p.hbar))
     ou_decay_half = xp.exp(-nu_arr * p.dt * 0.5) if M else None

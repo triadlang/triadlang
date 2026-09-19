@@ -3,10 +3,12 @@
 #include <string.h>
 
 static void list_grow(TriadList *l, int32_t needed) {
-    if (l->cap >= needed) return;
+    if (!l || l->cap >= needed) return;
     int32_t newcap = l->cap < 8 ? 8 : l->cap;
     while (newcap < needed) newcap *= 2;
-    l->items = realloc(l->items, sizeof(TriadValue) * newcap);
+    TriadValue *ni = realloc(l->items, sizeof(TriadValue) * (size_t)newcap);
+    if (!ni) return;
+    l->items = ni;
     l->cap = newcap;
 }
 
@@ -16,10 +18,12 @@ TriadList *triad_list_new(void) {
 
 TriadList *triad_list_new_cap(int32_t cap) {
     TriadList *l = malloc(sizeof(TriadList));
+    if (!l) return NULL;
     l->refcount = 1;
     l->len = 0;
     l->cap = cap < 4 ? 4 : cap;
-    l->items = malloc(sizeof(TriadValue) * l->cap);
+    l->items = malloc(sizeof(TriadValue) * (size_t)l->cap);
+    if (!l->items) { free(l); return NULL; }
     return l;
 }
 
@@ -30,7 +34,9 @@ void triad_list_free(TriadList *l) {
 }
 
 void triad_list_push(TriadList *l, TriadValue v) {
+    if (!l || !l->items) return;
     list_grow(l, l->len + 1);
+    if (!l->items || l->len >= l->cap) return;
     l->items[l->len++] = v;
     triad_retain(&l->items[l->len - 1]);
 }

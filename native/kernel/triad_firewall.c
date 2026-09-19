@@ -49,7 +49,13 @@ int triad_firewall_add_rule(const FirewallRule *rule) {
     if (!rule) return -1;
     if (fw_state.n_rules >= FW_MAX_RULES) return -1;
 
-    uint16_t new_id = (uint16_t)(fw_state.n_rules + 1);
+    uint16_t new_id = 1;
+    for (int i = 0; i < (int)fw_state.n_rules; i++) {
+        if (fw_state.rules[i].rule_id >= new_id) {
+            new_id = (uint16_t)(fw_state.rules[i].rule_id + 1);
+        }
+    }
+    if (new_id == 0) new_id = 1;
 
     for (int i = 0; i < (int)fw_state.n_rules; i++) {
         if (!fw_state.rules[i].enabled) {

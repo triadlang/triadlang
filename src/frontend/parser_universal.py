@@ -176,7 +176,6 @@ class Parser:
                 val = self._parse_expr()
                 self._eat_semi()
                 return AssignStmt(target=expr, value=BinOp(op=bin_op, left=expr, right=val, pos=expr.pos if hasattr(expr, 'pos') else self._pos()), pos=expr.pos if hasattr(expr, 'pos') else self._pos())
-        from frontend.ast_nodes import CompoundAssignExpr
         for compound_op in ('??=', '||=', '&&='):
             if self._at('SYMBOL', compound_op):
                 self._eat()

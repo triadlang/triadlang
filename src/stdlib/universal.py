@@ -67,8 +67,9 @@ def fs_write(path: str, content: str):
 def fs_append(path: str, content: str):
     p = _policy()
     if p is not None and p.safe:
-        p.sandbox.resolve(path, mode='write')
-    p2 = _Path(path)
+        p2 = _Path(str(p.sandbox.resolve(path, mode='write')))
+    else:
+        p2 = _Path(path)
     p2.parent.mkdir(parents=True, exist_ok=True)
     with open(p2, 'a', encoding='utf-8') as f:
         f.write(content)
@@ -117,18 +118,25 @@ def fs_is_dir(path: str) -> bool:
             return False
     return _os.path.isdir(path)
 
+def _inside_base(c: _Path, base: _Path) -> bool:
+    try:
+        c.resolve().relative_to(base.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
 def fs_list(path: str = '.', pattern: str = '*') -> list:
     p = _policy()
     if p is not None and p.safe:
         base = p.sandbox.resolve(path, mode='read', must_exist=True)
-        return sorted(str(c) for c in base.glob(pattern) if c.is_file())
+        return sorted(str(c) for c in base.glob(pattern) if c.is_file() and _inside_base(c, base))
     return sorted(str(p) for p in _Path(path).glob(pattern))
 
 def fs_walk(path: str = '.', pattern: str = '**/*') -> list:
     p = _policy()
     if p is not None and p.safe:
         base = p.sandbox.resolve(path, mode='read', must_exist=True)
-        return sorted(str(c) for c in base.glob(pattern) if c.is_file())
+        return sorted(str(c) for c in base.glob(pattern) if c.is_file() and _inside_base(c, base))
     return sorted(str(p) for p in _Path(path).glob(pattern) if p.is_file())
 
 def fs_mkdir(path: str):
@@ -232,8 +240,12 @@ class HttpResponse:
     def __repr__(self):
         return f'HttpResponse(status={self.status}, url={self.url!r}, bytes={len(self.body)})'
 
+_HTTP_MAX_BYTES = 4 * 1024 * 1024
+
 def _http_request(method: str, url: str, data=None, headers=None,
                   timeout: float = 30.0, params=None) -> HttpResponse:
+    if not timeout or not timeout > 0:
+        raise ValueError(f'http timeout must be > 0, got {timeout!r}')
     if params:
         sep = '&' if '?' in url else '?'
         url = url + sep + _uparse.urlencode(params)
@@ -251,11 +263,15 @@ def _http_request(method: str, url: str, data=None, headers=None,
     req = _urequest.Request(url, data=body, headers=hdrs, method=method)
     try:
         with _urequest.urlopen(req, timeout=timeout) as resp:
-            return HttpResponse(resp.status, dict(resp.headers),
-                                resp.read(), resp.geturl())
+            raw = resp.read(_HTTP_MAX_BYTES + 1)
+            if len(raw) > _HTTP_MAX_BYTES:
+                raise ValueError('http response exceeds 4MB cap')
+            return HttpResponse(resp.status, dict(resp.headers), raw, resp.geturl())
     except _uerror.HTTPError as e:
-        return HttpResponse(e.code, dict(e.headers or {}),
-                            e.read() if hasattr(e, 'read') else b'', url)
+        raw = e.read(_HTTP_MAX_BYTES + 1) if hasattr(e, 'read') else b''
+        if len(raw) > _HTTP_MAX_BYTES:
+            raise ValueError('http response exceeds 4MB cap')
+        return HttpResponse(e.code, dict(e.headers or {}), raw, url)
 
 def http_get(url: str, headers=None, params=None, timeout: float = 30.0) -> HttpResponse:
     p = _policy()

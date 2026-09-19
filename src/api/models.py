@@ -111,9 +111,9 @@ class CoupledRunResult(BaseModel):
 
 class ObservablesRequest(BaseModel):
     psi_b64: str
-    dx: float
+    dx: float = Field(gt=0)
     k_cutoff: float = 1.0
-    L: float | None = None
+    L: float | None = Field(default=None, gt=0)
 
 class ObservablesResult(BaseModel):
     crystallinity: float
@@ -126,7 +126,7 @@ class ObservablesResult(BaseModel):
 
 class PowerSpectrumRequest(BaseModel):
     psi_b64: str
-    dx: float
+    dx: float = Field(gt=0)
 
 class PowerSpectrumResult(BaseModel):
     k_b64: str

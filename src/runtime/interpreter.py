@@ -5,6 +5,12 @@ import os
 from frontend.ast_nodes import *
 
 
+class _Spread(list):
+
+    def __init__(self, items):
+        super().__init__(items)
+        self.items = list(items)
+
 class TriadError(Exception):
 
     def __init__(self, msg, pos=None):
@@ -208,15 +214,26 @@ class Interpreter:
         def _abs(x):
             return abs(x)
 
+        def _scalar_or_self(x):
+            # escalares de backend (0-d) viram float p/ exibição idêntica; resto intacto.
+            if isinstance(x, (int, float, bool, str, complex, list, dict)):
+                return x
+            try:
+                return float(x)
+            except (TypeError, ValueError):
+                return x
+
         def _min(*args):
             if len(args) == 1 and isinstance(args[0], list):
                 return min(args[0])
-            return min(args)
+            r = min(args)
+            return _scalar_or_self(r) if len(args) == 1 else r
 
         def _max(*args):
             if len(args) == 1 and isinstance(args[0], list):
                 return max(args[0])
-            return max(args)
+            r = max(args)
+            return _scalar_or_self(r) if len(args) == 1 else r
         import json as _json
         import math as _math
         import random as _random
@@ -233,11 +250,14 @@ class Interpreter:
         json_env = {'parse': _json.loads, 'stringify': lambda x, indent=None: _json.dumps(x, indent=indent, default=str)}
         self._module_cache['json'] = TriadModule('json', json_env)
 
-        def _solve(params_dict, psi0=None, y0=None):
+        def _solve(params_dict, psi0=None, y0=None, solver='integrate'):
 
-            from runtime.core.solver import TriadParams, integrate
+            from runtime.core.solver import TriadParams
+            from runtime.core.Triad_runtime import solve_with
             p = TriadParams(**params_dict)
-            return integrate(p, psi0=psi0, y0=y0)
+            if solver == 'integrate':
+                return solve_with(p, solver, psi0=psi0, y0=y0)
+            return solve_with(p, solver)
         g.set('solve', _solve)
 
         def _read_text(p):
@@ -853,6 +873,15 @@ class Interpreter:
             return self._match_pattern(subject, pattern_expr.inner)
         return {} if subject == pattern_expr else None
 
+    def _splice(self, values):
+        out = []
+        for v in values:
+            if isinstance(v, _Spread):
+                out.extend(v.items)
+            else:
+                out.append(v)
+        return out
+
     def _eval(self, e: Expr, env: Environment):
         if e is None:
             return None
@@ -890,12 +919,12 @@ class Interpreter:
             raise TriadError(f"unknown unary op '{e.op}'", e.pos)
         if isinstance(e, CallExpr):
             func = self._eval(e.func, env)
-            args = [self._eval(a, env) for a in e.args]
+            args = self._splice([self._eval(a, env) for a in e.args])
             kwargs = {k: self._eval(v, env) for k, v in e.kwargs.items()}
             return self._call(func, args, kwargs, e.pos)
         if isinstance(e, MethodCallExpr):
             obj = self._eval(e.obj, env)
-            args = [self._eval(a, env) for a in e.args]
+            args = self._splice([self._eval(a, env) for a in e.args])
             kwargs = {k: self._eval(v, env) for k, v in e.kwargs.items()}
             return self._method_call(obj, e.method, args, kwargs, e.pos)
         if isinstance(e, IndexExpr):
@@ -909,9 +938,9 @@ class Interpreter:
             obj = self._eval(e.obj, env)
             return self._field_access(obj, e.field, e.pos)
         if isinstance(e, ListExpr):
-            return [self._eval(el, env) for el in e.elements]
+            return self._splice([self._eval(el, env) for el in e.elements])
         if isinstance(e, TupleExpr):
-            return tuple(self._eval(el, env) for el in e.elements)
+            return tuple(self._splice([self._eval(el, env) for el in e.elements]))
         if isinstance(e, MapExpr):
             return {self._eval(k, env): self._eval(v, env) for k, v in e.pairs}
         if isinstance(e, LambdaExpr):
@@ -1114,9 +1143,11 @@ class Interpreter:
             return None
         if isinstance(e, SpreadExpr):
             val = self._eval(e.value, env)
+            if isinstance(val, _Spread):
+                return val
             if isinstance(val, (list, tuple)):
-                return list(val)
-            return [val]
+                return _Spread(list(val))
+            return _Spread([val])
         if isinstance(e, PipelineExpr):
             left = self._eval(e.left, env)
             right = self._eval(e.right, env)

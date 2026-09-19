@@ -4,7 +4,10 @@ import sys
 from importlib import import_module
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-VENV_PYTHON = os.path.join(ROOT, ".venv", "bin", "python")
+if os.name == 'nt':
+    VENV_PYTHON = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
+else:
+    VENV_PYTHON = os.path.join(ROOT, ".venv", "bin", "python")
 if os.path.isfile(VENV_PYTHON) and os.path.realpath(sys.executable) != os.path.realpath(VENV_PYTHON):
     os.execv(VENV_PYTHON, [VENV_PYTHON, __file__, *sys.argv[1:]])
 sys.path.insert(0, os.path.join(ROOT, "src"))

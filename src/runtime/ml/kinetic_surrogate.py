@@ -18,14 +18,17 @@ def spectral_features(psi: np.ndarray, k: np.ndarray, n_modes: int = 32) -> np.n
 def spectral_to_field(delta_hat_re: np.ndarray, delta_hat_im: np.ndarray,
                       N: int) -> np.ndarray:
 
+    if N <= 0:
+        raise ValueError(f'spectral_to_field needs N > 0, got {N}')
+    n = min(len(delta_hat_re), len(delta_hat_im), N // 2)
     triad_re = np.zeros(N)
     triad_im = np.zeros(N)
-    n = len(delta_hat_re)
-    triad_re[:n] = delta_hat_re
-    triad_im[:n] = delta_hat_im
+    triad_re[:n] = delta_hat_re[:n]
+    triad_im[:n] = delta_hat_im[:n]
 
-    triad_re[-1:-n:-1] = delta_hat_re[1:][::-1]
-    triad_im[-1:-n:-1] = -delta_hat_im[1:][::-1]
+    if n > 1:
+        triad_re[-1:-n:-1] = delta_hat_re[1:n][::-1]
+        triad_im[-1:-n:-1] = -delta_hat_im[1:n][::-1]
     return np.fft.ifft(triad_re + 1j * triad_im)
 
 class KineticSurrogate(Module):

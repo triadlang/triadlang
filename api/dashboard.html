@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>TriadLang — WALL-E</title>
+<style>
+:root{--bg:#0d0f14;--s:#161821;--b:#23283a;--t:#c6cdd8;--d:#6c7480;--a:#569cd6;--g:#6a9955;--o:#ce9178;--p:#c586c0;--y:#d7ba7d;--r:#f44747;--c:#4ec9b0}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'JetBrains Mono','Fira Code','Consolas',monospace;background:var(--bg);color:var(--t);display:flex;height:100vh;overflow:hidden}
+.sidebar{width:280px;background:var(--s);border-right:1px solid var(--b);display:flex;flex-direction:column;flex-shrink:0}
+.sidebar-header{padding:14px 16px;border-bottom:1px solid var(--b);font-size:15px;font-weight:700;color:var(--a);display:flex;align-items:center;gap:8px}
+.sidebar-section{padding:8px 16px;font-size:11px;color:var(--d);text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid var(--b)}
+.template-list{flex:1;overflow-y:auto;padding:4px 0}
+.template-cat{font-size:11px;color:var(--d);padding:6px 16px 2px;text-transform:uppercase}
+.template-item{padding:5px 16px 5px 24px;cursor:pointer;font-size:12px;color:var(--t);transition:background .12s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.template-item:hover{background:rgba(86,156,214,.1);color:var(--a)}
+.template-item.active{background:rgba(86,156,214,.15);color:var(--a)}
+.sidebar-footer{padding:10px 16px;border-top:1px solid var(--b);font-size:10px;color:var(--d)}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.toolbar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--b);background:var(--s);flex-shrink:0}
+.toolbar select,.toolbar input{background:var(--bg);border:1px solid var(--b);color:var(--t);padding:4px 8px;font-size:12px;font-family:inherit;border-radius:3px}
+.toolbar select{min-width:140px}
+.toolbar input[type=number]{width:64px}
+.toolbar button{background:var(--a);color:#fff;border:none;padding:5px 14px;font-size:12px;font-family:inherit;border-radius:3px;cursor:pointer;font-weight:600}
+.toolbar button:hover{filter:brightness(1.15)}
+.toolbar button.secondary{background:transparent;border:1px solid var(--b);color:var(--t)}
+.toolbar .spacer{flex:1}
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--b);flex-shrink:0}
+.tab{padding:7px 16px;font-size:12px;cursor:pointer;color:var(--d);border-bottom:2px solid transparent;transition:color .12s,border-color .12s}
+.tab:hover{color:var(--t)}
+.tab.active{color:var(--a);border-bottom-color:var(--a)}
+.editor-pane{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.editor-wrapper{flex:3;position:relative;border-bottom:1px solid var(--b)}
+.editor-wrapper textarea{width:100%;height:100%;background:var(--bg);color:var(--t);border:none;padding:16px;font-family:'JetBrains Mono','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6;resize:none;outline:none;tab-size:2}
+.output-wrapper{flex:2;background:var(--s);overflow-y:auto;padding:12px 16px;font-size:13px;border-top:2px solid var(--b)}
+.timestamp{font-size:10px;color:var(--d);margin-bottom:6px}
+.stdout{color:var(--g);white-space:pre-wrap}
+.stderr{color:var(--r);white-space:pre-wrap}
+.error{color:var(--r);margin-top:4px}
+.obs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-top:10px}
+.obs-card{background:var(--bg);border:1px solid var(--b);border-radius:4px;padding:10px 12px}
+.obs-card .label{font-size:10px;color:var(--d);text-transform:uppercase}
+.obs-card .value{font-size:16px;color:var(--a);font-weight:700;margin-top:2px}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--b);border-top-color:var(--a);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* canvas */
+.canvas-row{display:flex;gap:12px;margin-top:12px}
+.canvas-col{flex:1;min-width:0}
+.canvas-col canvas{width:100%;height:200px;background:var(--bg);border:1px solid var(--b);border-radius:4px}
+.canvas-label{font-size:10px;color:var(--d);text-transform:uppercase;margin-bottom:4px}
+.timeline-canvas{width:100%;height:160px;background:var(--bg);border:1px solid var(--b);border-radius:4px;margin-top:12px}
+/* tutorial overlay */
+.tutorial-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:100}
+.tutorial-box{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:24px;max-width:640px;width:90%;max-height:80vh;overflow-y:auto}
+.tutorial-box h2{color:var(--a);margin-bottom:16px;font-size:18px}
+.tutorial-box h3{color:var(--y);margin-top:20px;margin-bottom:8px;font-size:14px}
+.tutorial-box p{color:var(--t);margin-bottom:10px;line-height:1.6;font-size:13px}
+.tutorial-box code{background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--o);font-size:12px}
+.tutorial-box pre{background:var(--bg);padding:12px;border-radius:4px;overflow-x:auto;margin:8px 0;font-size:12px;line-height:1.5;color:var(--g)}
+.tutorial-box button{margin-top:16px;padding:8px 20px}
+.step-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--b);margin:0 3px;cursor:pointer}
+.step-dot.active{background:var(--a)}
+</style>
+</head>
+<body>
+
+<!-- TUTORIAL OVERLAY -->
+<div class="tutorial-overlay" id="tutorialOverlay" style="display:none">
+  <div class="tutorial-box" id="tutorialBox">
+    <h2 id="tutTitle">Welcome to TriadLang</h2>
+    <div id="tutContent"></div>
+    <div style="text-align:center;margin-top:4px">
+      <span class="step-dot" id="step0"></span><span class="step-dot" id="step1"></span><span class="step-dot" id="step2"></span><span class="step-dot" id="step3"></span><span class="step-dot" id="step4"></span><span class="step-dot" id="step5"></span>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="secondary" id="tutPrev" onclick="tutPrev()" style="display:none">← Back</button>
+      <button id="tutNext" onclick="tutNext()">Start →</button>
+      <button class="secondary" id="tutClose" onclick="closeTutorial()">Skip</button>
+    </div>
+  </div>
+</div>
+
+<!-- SIDEBAR -->
+<div class="sidebar">
+  <div class="sidebar-header"><span style="font-size:20px">&#x25C9;</span> TriadLang</div>
+  <div class="sidebar-section">Templates</div>
+  <div class="template-list" id="templateList"><div style="padding:16px;color:var(--d);font-size:12px">loading...</div></div>
+  <div class="sidebar-footer">P1+P2+P3 &bull; 562 tests</div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="tabs" id="tabBar">
+    <div class="tab active" data-tab="code">Code</div>
+    <div class="tab" data-tab="field">Field</div>
+    <div class="tab" data-tab="coupled">Coupled</div>
+    <div class="tab" data-tab="regimes">Regimes</div>
+    <span class="spacer" style="display:flex;align-items:center"></span>
+    <button class="secondary" style="font-size:11px;padding:4px 10px;margin-right:8px" onclick="openTutorial()">&#9998; Tutorial</button>
+  </div>
+
+  <!-- CODE -->
+  <div class="editor-pane" id="tab-code">
+    <div class="toolbar">
+      <span style="font-size:11px;color:var(--d)">editor</span><span class="spacer"></span>
+      <button onclick="runCode()">&#9654; Run</button>
+      <button class="secondary" onclick="checkCode()">Check</button>
+      <button class="secondary" onclick="formatCode()">Format</button>
+    </div>
+    <div class="editor-wrapper"><textarea id="editor" spellcheck="false">// TriadLang — P1 + P2 + P3
+print("Hello from TriadLang")</textarea></div>
+    <div class="output-wrapper" id="codeOutput"><div style="color:var(--d);font-size:12px">Output will appear here...</div></div>
+  </div>
+
+  <!-- FIELD -->
+  <div class="editor-pane" id="tab-field" style="display:none">
+    <div class="toolbar">
+      <select id="fieldRegime"><option value="">Custom</option></select>
+      <span style="font-size:11px;color:var(--d)">N</span><input type="number" id="fieldN" value="128" min="16" max="1024">
+      <span style="font-size:11px;color:var(--d)">T</span><input type="number" id="fieldT" value="10" step="1" min="1" max="200">
+      <span style="font-size:11px;color:var(--d)">Λ</span><input type="number" id="fieldLambda" value="-0.5" step="0.1" style="width:56px">
+      <span style="font-size:11px;color:var(--d)">Γ</span><input type="number" id="fieldGamma" value="0.05" step="0.01" style="width:56px">
+      <span class="spacer"></span>
+      <button onclick="runField()">&#9654; Evolve</button>
+      <button class="secondary" onclick="runFieldBatch()">Batch (8)</button>
+    </div>
+    <div class="output-wrapper" id="fieldOutput" style="flex:1"><div style="color:var(--d);font-size:12px">Evolve a field and see density, power spectrum, and observables.</div></div>
+  </div>
+
+  <!-- COUPLED -->
+  <div class="editor-pane" id="tab-coupled" style="display:none">
+    <div class="toolbar">
+      <select id="coupledRegime"><option value="B0">B0</option></select>
+      <span style="font-size:11px;color:var(--d)">N</span><input type="number" id="coupledN" value="64" min="16" max="256" style="width:56px">
+      <span style="font-size:11px;color:var(--d)">Substrates</span><input type="number" id="coupledNsub" value="4" min="2" max="16">
+      <span style="font-size:11px;color:var(--d)">κ</span><input type="number" id="coupledKappa" value="-3" step="0.5" style="width:56px">
+      <span style="font-size:11px;color:var(--d)">T</span><input type="number" id="coupledT" value="8" min="1" max="200" style="width:56px">
+      <span class="spacer"></span>
+      <button onclick="runCoupled()">&#9654; Run</button>
+    </div>
+    <div class="output-wrapper" id="coupledOutput" style="flex:1"><div style="color:var(--d);font-size:12px">Run multiple coupled substrates together.</div></div>
+  </div>
+
+  <!-- REGIMES -->
+  <div class="editor-pane" id="tab-regimes" style="display:none">
+    <div class="toolbar"><span style="font-size:11px;color:var(--d)">Available regimes</span><span class="spacer"></span><button onclick="loadRegimes()">Reload</button></div>
+    <div class="output-wrapper" id="regimesOutput" style="flex:1"><div style="color:var(--d);font-size:12px">Loading regimes...</div></div>
+  </div>
+</div>
+
+<script>
+// ======== STATE ========
+let allTemplates=[],activeTab='code',tutStep=0;
+
+const TUT_STEPS=[
+  {
+    title:'1. What is TriadLang?',
+    content:`<p>A programming language where <b>execution is field evolution</b>.</p>
+<p>Instead of running instructions one by one, TriadLang allocates continuous fields and evolves them forward in time using the <b>Triad equation</b>:</p>
+<pre>i·ℏ·∂_t Ψ = [-ℏ²/(2m)∇² + V_ext + Λ|Ψ|² + V_mem + α(-Δ)^(σ/2) - iΓ]Ψ + η</pre>
+<p><b>P1</b> — kinetic/dispersion (FFT). <b>P2</b> — memory/self-reference (Λ|Ψ|²). <b>P3</b> — dissipation/noise (open system).</p>
+<p>All three run together. Always. Crystallization is emergent — not imposed.</p>`
+  },
+  {
+    title:'2. The Dashboard',
+    content:`<p><b>Code tab</b> — write and run .tri programs. Click templates from the sidebar to load examples.</p>
+<p><b>Field tab</b> — the heart. Pick a regime, set parameters (N, T, Λ, Γ), click <b>Evolve</b>. You will see:</p>
+<p>&#8226; Density plot |ψ|² across space<br>&#8226; Power spectrum<br>&#8226; Crystallinity timeline (how structure emerges over time)<br>&#8226; Observable cards (crystallinity, k*, peak density, norm)</p>
+<p><b>Coupled tab</b> — run multiple fields with coupling strength κ. See how they influence each other.</p>
+<p><b>Regimes tab</b> — browse all 17 pre-calibrated regimes with their parameters.</p>`
+  },
+  {
+    title:'3. Try the Code tab',
+    content:`<p>Switch to the <b>Code</b> tab. The editor is pre-loaded with:</p>
+<pre>print("Hello from TriadLang")</pre>
+<p>Click <b>Run</b> (or press <b>Ctrl+Enter</b>). You will see the output appear below.</p>
+<p>Now click a template from the sidebar — for example <b>ml/xor_train.tri</b>. This trains a neural network on XOR. Click Run.</p>
+<p>Try <b>quantum/bell_state.tri</b> next. It creates an entangled Bell pair via field interference. 500 shots of |00⟩, 500 of |11⟩.</p>`
+  },
+  {
+    title:'4. Evolve a field',
+    content:`<p>Switch to the <b>Field</b> tab. The default regime is <b>B0</b> with Λ=-0.5, Γ=0.05.</p>
+<p>Click <b>Evolve</b>. The solver runs the full P1+P2+P3 equation for T=10 simulated seconds.</p>
+<p>You will see:</p>
+<p>&#8226; <b>Density plot</b> — the field density |ψ(x)|² across space<br>&#8226; <b>Power spectrum</b> — which wavenumbers are dominant<br>&#8226; <b>Crystallinity timeline</b> — a number between 0 and 1 showing how structured the field became</p>
+<p>Try changing Λ to <b>-3.0</b> and run again. Stronger coupling → different structure.</p>
+<p>Try the <b>anti_collapse</b> regime. Or <b>HodgkinHuxley</b>. Each regime encodes different physics.</p>`
+  },
+  {
+    title:'5. Couple fields',
+    content:`<p>Switch to the <b>Coupled</b> tab. Multiple substrates run simultaneously.</p>
+<p>Set <b>Substrates=4</b>, <b>κ=-3</b>, <b>T=8</b>. Click <b>Run</b>.</p>
+<p>Each substrate is a full Triad field with its own ψ, memory, and noise. They are coupled through κ — energy flows between them.</p>
+<p>The output shows observables for each substrate. Different seeds → different crystallinity values, shaped by the coupling.</p>`
+  },
+  {
+    title:'6. Go deeper',
+    content:`<p>You have seen the basics. Here is where to go next:</p>
+<p>&#8226; <b>Browse all 17 regimes</b> — regimes tab shows parameters for each<br>&#8226; <b>57 example templates</b> — sidebar loads all of them<br>&#8226; <b>Batch mode</b> — Field tab → Batch (8) runs 8 independent seeds, shows mean±std crystallinity<br>&#8226; <b>Power spectrum</b> — always displayed alongside density, shows which scales dominate<br>&#8226; <b>CLI</b> — <code>triad run file.tri</code>, <code>triad solve --regime B0</code>, <code>triad repl</code></p>
+<p>Everything you saw here is also available as a REST API at <code>/solver/run</code>, <code>/lang/run</code>, <code>/coupled/run</code>, etc.</p>
+<p><b>P1+P2+P3 always together. Crystallization is emergent.</b></p>`
+  }
+];
+
+// ======== INIT ========
+async function init(){await loadTemplates();await loadRegimeLists();await loadRegimes();}
+init();
+
+// ======== TABS ========
+document.getElementById('tabBar').addEventListener('click',e=>{
+  const t=e.target.closest('.tab');if(!t)return;
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');activeTab=t.dataset.tab;
+  ['code','field','coupled','regimes'].forEach(id=>document.getElementById('tab-'+id).style.display=id===activeTab?'flex':'none');
+});
+
+// ======== TUTORIAL ========
+function openTutorial(){tutStep=0;renderTut();document.getElementById('tutorialOverlay').style.display='flex';}
+function closeTutorial(){document.getElementById('tutorialOverlay').style.display='none';}
+function tutNext(){if(tutStep<TUT_STEPS.length-1){tutStep++;renderTut();}else{closeTutorial();}}
+function tutPrev(){if(tutStep>0){tutStep--;renderTut();}}
+function renderTut(){
+  const s=TUT_STEPS[tutStep];
+  document.getElementById('tutTitle').textContent=s.title;
+  document.getElementById('tutContent').innerHTML=s.content;
+  for(let i=0;i<TUT_STEPS.length;i++)document.getElementById('step'+i).className='step-dot'+(i===tutStep?' active':'');
+  document.getElementById('tutPrev').style.display=tutStep===0?'none':'inline-block';
+  document.getElementById('tutNext').textContent=tutStep===TUT_STEPS.length-1?'Finish →':'Next →';
+}
+
+// ======== TEMPLATES ========
+async function loadTemplates(){
+  try{
+    const r=await fetch('/api/templates/');const d=await r.json();
+    allTemplates=d.templates;const l=document.getElementById('templateList');l.innerHTML='';
+    for(const cat of d.categories){
+      const cd=document.createElement('div');cd.className='template-cat';cd.textContent=cat;l.appendChild(cd);
+      for(const t of allTemplates.filter(x=>x.category===cat)){
+        const i=document.createElement('div');i.className='template-item';i.textContent=t.name;i.title=t.path;
+        i.onclick=()=>{loadTemplate(t);};
+        l.appendChild(i);
+      }
+    }
+  }catch(e){console.error(e);}
+}
+function loadTemplate(t){
+  document.getElementById('editor').value=t.source;
+  switchTab('code');
+  document.querySelectorAll('.template-item').forEach(el=>el.classList.remove('active'));
+  if(event&&event.target)event.target.classList.add('active');
+}
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(tab=>tab.classList.remove('active'));
+  const el=document.querySelector('.tab[data-tab="'+name+'"]');if(el)el.classList.add('active');
+  activeTab=name;['code','field','coupled','regimes'].forEach(id=>document.getElementById('tab-'+id).style.display=id===name?'flex':'none');
+}
+
+// ======== CODE ========
+async function runCode(){
+  const o=document.getElementById('codeOutput');o.innerHTML='<div class="timestamp">'+now()+' — running...</div><div class="spinner"></div>';
+  try{
+    const r=await fetch('/lang/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById('editor').value})});
+    const d=await r.json();
+    let h='<div class="timestamp">'+now()+'</div>';
+    if(d.stdout)h+='<div class="stdout">'+esc(d.stdout)+'</div>';
+    if(d.stderr)h+='<div class="stderr">'+esc(d.stderr)+'</div>';
+    if(d.error)h+='<div class="error">Error: '+esc(d.error)+'</div>';
+    if(!d.stdout&&!d.stderr&&!d.error)h+='<div style="color:var(--g)">OK (no output)</div>';
+    o.innerHTML=h;
+  }catch(e){o.innerHTML='<div class="error">Request failed: '+esc(e.message)+'</div>';}
+}
+async function checkCode(){
+  const o=document.getElementById('codeOutput');o.innerHTML='<div class="timestamp">'+now()+' — checking...</div>';
+  try{
+    const r=await fetch('/lang/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById('editor').value})});
+    const d=await r.json();
+    let h='<div class="timestamp">'+now()+'</div>';
+    if(d.ok)h+='<div style="color:var(--g)">&#10003; No type errors</div>';
+    else{h+='<div class="error">Type errors:</div>';for(const e of d.errors)h+='<div class="error">  '+esc(e)+'</div>';}
+    o.innerHTML=h;
+  }catch(e){o.innerHTML='<div class="error">'+esc(e.message)+'</div>';}
+}
+async function formatCode(){
+  const o=document.getElementById('codeOutput');
+  try{
+    const r=await fetch('/lang/format',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById('editor').value})});
+    const d=await r.json();
+    if(d.ok&&d.source){document.getElementById('editor').value=d.source;o.innerHTML='<div class="timestamp">'+now()+'</div><div style="color:var(--g)">&#10003; Formatted</div>';}
+    else o.innerHTML='<div class="timestamp">'+now()+'</div><div class="error">'+(d.error||'unknown error')+'</div>';
+  }catch(e){o.innerHTML='<div class="error">'+esc(e.message)+'</div>';}
+}
+
+// ======== FIELD ========
+async function runField(){
+  const regime=document.getElementById('fieldRegime').value;
+  const params={N:+document.getElementById('fieldN').value,T:+document.getElementById('fieldT').value,
+    Lambda:+document.getElementById('fieldLambda').value,Gamma:+document.getElementById('fieldGamma').value,
+    sigma:1.5,alpha:0.15,f_FDT:0.002,V_ext:'harmonic',seed:Math.floor(Math.random()*10000),
+    regime:regime||null};
+  renderFieldLoading();
+  try{
+    const r=await fetch('/solver/plot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(params)});
+    const d=await r.json();
+    renderFieldResult(d,params);
+  }catch(e){document.getElementById('fieldOutput').innerHTML='<div class="error">'+esc(e.message)+'</div>';}
+}
+async function runFieldBatch(){
+  const regime=document.getElementById('fieldRegime').value;
+  const params={N:+document.getElementById('fieldN').value,T:+document.getElementById('fieldT').value,
+    Lambda:+document.getElementById('fieldLambda').value,Gamma:+document.getElementById('fieldGamma').value,
+    V_ext:'harmonic'};
+  document.getElementById('fieldOutput').innerHTML='<div class="timestamp">'+now()+'</div><div class="spinner"></div> Running 8-seed ensemble...';
+  try{
+    const r=await fetch('/solver/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({params,regime:regime||null,K:8})});
+    const d=await r.json();
+    let h='<div class="timestamp">'+now()+'</div>';
+    h+='<div style="margin-bottom:8px"><span style="color:var(--y)">Ensemble (8 seeds)</span> crystallinity: mean='+d.ensemble_crystallinity_mean.toFixed(4)+' <span style="color:var(--d)">std='+d.ensemble_crystallinity_std.toFixed(4)+'</span></div>';
+    for(let i=0;i<d.results.length;i++){h+='<details style="margin:4px 0"><summary style="cursor:pointer;color:var(--a);font-size:12px">seed #'+i+'</summary>'+obsGrid(d.results[i])+'</details>';}
+    document.getElementById('fieldOutput').innerHTML=h;
+  }catch(e){document.getElementById('fieldOutput').innerHTML='<div class="error">'+esc(e.message)+'</div>';}
+}
+function renderFieldLoading(){
+  document.getElementById('fieldOutput').innerHTML='<div class="timestamp">'+now()+'</div><div class="spinner"></div> Evolving field... (P1+P2+P3)';
+}
+function renderFieldResult(d,params){
+  let h='<div class="timestamp">'+now()+'</div>';
+  h+='<div style="font-size:11px;color:var(--d);margin-bottom:8px">t_final='+d.t_final.toFixed(1)+' &nbsp; dx='+d.dx.toFixed(3)+' &nbsp; L='+d.L.toFixed(1)+' &nbsp; N='+d.x.length+' &nbsp; <span style="color:var(--y)">P1+P2+P3</span></div>';
+  // density + power spectrum row
+  h+='<div class="canvas-row"><div class="canvas-col"><div class="canvas-label">density |ψ(x)|²</div><canvas id="densityCanvas"></canvas></div><div class="canvas-col"><div class="canvas-label">power spectrum</div><canvas id="spectrumCanvas"></canvas></div></div>';
+  // timeline
+  if(d.timeline&&d.timeline.length>0){h+='<div class="canvas-label" style="margin-top:8px">crystallinity over time</div><canvas id="timelineCanvas" class="timeline-canvas"></canvas>';}
+  // observables
+  h+=obsGrid(d.observables);
+  document.getElementById('fieldOutput').innerHTML=h;
+  // draw
+  requestAnimationFrame(()=>{
+    const cA=getComputedStyle(document.documentElement).getPropertyValue('--a').trim();
+    const cO=getComputedStyle(document.documentElement).getPropertyValue('--o').trim();
+    drawLine('densityCanvas',d.x,d.density,cA,'|ψ|²');
+    drawLine('spectrumCanvas',d.k,d.power_spectrum,cO,'P(k)');
+    if(d.timeline&&d.timeline.length>0)drawTimeline('timelineCanvas',d.timeline);
+  });
+}
+
+// ======== CANVAS DRAW ========
+function drawLine(canvasId,x,y,color,ylabel){
+  const c=document.getElementById(canvasId);if(!c)return;
+  const W=c.parentElement.clientWidth-4;c.width=W*2;c.height=400;c.style.width=W+'px';c.style.height='200px';
+  const ctx=c.getContext('2d'),w=c.width,h=c.height,m=30;
+  ctx.clearRect(0,0,w,h);
+  if(x.length<2)return;
+  const xMin=Math.min(...x),xMax=Math.max(...x),yMin=Math.min(...y),yMax=Math.max(...y);
+  const yr=yMax-yMin||1;
+  // grid
+  const gridColor=getComputedStyle(document.documentElement).getPropertyValue('--b').trim()||'#23283a';
+  ctx.strokeStyle=gridColor;ctx.lineWidth=0.5;
+  for(let i=0;i<5;i++){const gy=m+(h-2*m)*i/4;ctx.beginPath();ctx.moveTo(m,gy);ctx.lineTo(w-m,gy);ctx.stroke();}
+  // line
+  ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();
+  for(let i=0;i<x.length;i++){
+    const px=m+(x[i]-xMin)/(xMax-xMin||1)*(w-2*m);
+    const py=h-m-(y[i]-yMin)/yr*(h-2*m);
+    if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+  }
+  ctx.stroke();
+  // labels
+  const dimColor=getComputedStyle(document.documentElement).getPropertyValue('--d').trim()||'#6c7480';
+  ctx.fillStyle=dimColor;ctx.font='9px monospace';
+  ctx.textAlign='center';ctx.fillText('x',w/2,h-4);
+  ctx.textAlign='right';
+  for(let i=0;i<5;i++){const v=yMin+yr*i/4;ctx.fillText(v.toFixed(yMax>10?1:4),m-4,h-m-(h-2*m)*i/4+3);}
+  ctx.save();ctx.translate(8,h/2);ctx.rotate(-Math.PI/2);ctx.textAlign='center';ctx.fillText(ylabel,0,0);ctx.restore();
+}
+function drawTimeline(canvasId,tl){
+  const c=document.getElementById(canvasId);if(!c||tl.length<2)return;
+  const W=c.parentElement.clientWidth-4;c.width=W*2;c.height=320;c.style.width=W+'px';c.style.height='160px';
+  const ctx=c.getContext('2d'),w=c.width,h=c.height,m=30;
+  ctx.clearRect(0,0,w,h);
+  const ts=tl.map(x=>x.t),crs=tl.map(x=>x.crystallinity);
+  const tMin=ts[0],tMax=ts[ts.length-1],cMin=0,cMax=1;
+  // grid & line
+  ctx.strokeStyle='rgba(35,40,58,.5)';ctx.lineWidth=0.5;
+  for(let i=0;i<5;i++){const gy=m+(h-2*m)*i/4;ctx.beginPath();ctx.moveTo(m,gy);ctx.lineTo(w-m,gy);ctx.stroke();}
+  const pColor=getComputedStyle(document.documentElement).getPropertyValue('--p').trim()||'#c586c0';
+  ctx.strokeStyle=pColor;ctx.lineWidth=2;ctx.beginPath();
+  for(let i=0;i<ts.length;i++){
+    const px=m+(ts[i]-tMin)/(tMax-tMin||1)*(w-2*m);
+    const py=h-m-(crs[i]-cMin)/(cMax-cMin||1)*(h-2*m);
+    if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+  }
+  ctx.stroke();
+  const dimColor2=getComputedStyle(document.documentElement).getPropertyValue('--d').trim()||'#6c7480';
+  ctx.fillStyle=dimColor2;ctx.font='9px monospace';ctx.textAlign='center';ctx.fillText('t',w/2,h-4);
+  for(let i=0;i<5;i++){ctx.textAlign='right';ctx.fillText((cMin+(cMax-cMin)*i/4).toFixed(2),m-4,h-m-(h-2*m)*i/4+3);}
+  ctx.save();ctx.translate(8,h/2);ctx.rotate(-Math.PI/2);ctx.textAlign='center';ctx.fillText('crystallinity',0,0);ctx.restore();
+}
+
+// ======== COUPLED ========
+async function runCoupled(){
+  const o=document.getElementById('coupledOutput');o.innerHTML='<div class="spinner"></div> coupling substrates...';
+  try{
+    const r=await fetch('/coupled/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({regime:document.getElementById('coupledRegime').value,n_substrates:+document.getElementById('coupledNsub').value,
+        kappa:+document.getElementById('coupledKappa').value,T:+document.getElementById('coupledT').value,
+        N:+document.getElementById('coupledN').value,seed:Math.floor(Math.random()*10000)})});
+    const d=await r.json();
+    let h='<div class="timestamp">'+now()+'</div><div style="font-size:12px;color:var(--d);margin-bottom:8px">elapsed='+d.elapsed.toFixed(3)+'s</div>';
+    for(const s of d.substrates){h+='<details style="margin:4px 0" open><summary style="cursor:pointer;color:var(--p);font-size:12px;font-weight:600">'+s.name+'</summary>'+obsGrid(s)+'</details>';}
+    o.innerHTML=h;
+  }catch(e){o.innerHTML='<div class="error">'+esc(e.message)+'</div>';}
+}
+
+// ======== REGIMES ========
+async function loadRegimeLists(){
+  try{
+    const r=await fetch('/regimes/');const d=await r.json();
+    const sf=document.getElementById('fieldRegime'),sc=document.getElementById('coupledRegime');
+    for(const n of d.regimes){const o=document.createElement('option');o.value=n;o.textContent=n;sf.appendChild(o);
+      const co=document.createElement('option');co.value=n;co.textContent=n;sc.appendChild(co);}
+  }catch(e){console.error(e);}
+}
+async function loadRegimes(){
+  const o=document.getElementById('regimesOutput');
+  try{
+    const r=await fetch('/regimes/');const d=await r.json();
+    let h='<div class="timestamp">'+now()+'</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">';
+    for(const n of d.regimes){
+      h+='<div style="background:var(--bg);border:1px solid var(--b);border-radius:4px;padding:10px 12px">';
+      h+='<div style="color:var(--a);font-weight:600;margin-bottom:4px">'+n+'</div>';
+      try{const rr=await fetch('/regimes/'+n);const rd=await rr.json();const p=rd.params;
+        h+='<div style="font-size:11px;color:var(--d)">Λ='+(p.Lambda||0)+' Γ='+(p.Gamma||0)+' σ='+(p.sigma||0)+'</div>';
+        h+='<div style="font-size:11px;color:var(--d)">α='+(p.alpha||0)+' f_FDT='+(p.f_FDT||0)+' N='+(p.N||0)+'</div>';
+      }catch(e){}
+      h+='</div>';
+    }
+    h+='</div>';o.innerHTML=h;
+  }catch(e){o.innerHTML='<div class="error">'+esc(e.message)+'</div>';}
+}
+
+// ======== UTILS ========
+function obsGrid(d){return '<div class="obs-grid">'+
+  '<div class="obs-card"><div class="label">crystallinity</div><div class="value">'+(d.crystallinity||0).toFixed(4)+'</div></div>'+
+  '<div class="obs-card"><div class="label">k*</div><div class="value">'+(d.k_star||0).toFixed(4)+'</div></div>'+
+  '<div class="obs-card"><div class="label">peak density</div><div class="value">'+(d.peak_density||0).toFixed(4)+'</div></div>'+
+  '<div class="obs-card"><div class="label">norm</div><div class="value">'+(d.norm||0).toFixed(4)+'</div></div>'+
+  '<div class="obs-card"><div class="label">IPR</div><div class="value">'+(d.ipr||0).toFixed(4)+'</div></div>'+
+  '<div class="obs-card"><div class="label">FWHM</div><div class="value">'+(d.fwhm||0).toFixed(4)+'</div></div>'+
+'</div>';}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function now(){return new Date().toLocaleTimeString();}
+document.addEventListener('keydown',e=>{if(e.ctrlKey&&e.key==='Enter'){e.preventDefault();if(activeTab==='code')runCode();else if(activeTab==='field')runField();else if(activeTab==='coupled')runCoupled();}});
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+import os.path;
+
+let exists = os.path.exists(".");
+print("os.path.exists('.') = " + str(exists));

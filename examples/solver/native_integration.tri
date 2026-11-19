@@ -1,0 +1,26 @@
+fn fib(n) {
+    if n <= 1 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+let results = []
+for i in range(10) {
+    results.push(fib(i))
+}
+
+print(results)
+
+let total = 0
+for r in results {
+    total = total + r
+}
+print(total)
+
+let m = {"a": 1, "b": 2, "c": 3}
+print(m["a"])
+print(m["c"])
+
+let s = "hello world"
+print(s.upper())

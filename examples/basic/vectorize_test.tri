@@ -1,0 +1,18 @@
+let result = [];
+for i in range(10) {
+    result.push(i * i);
+}
+print(result);
+
+let total = 0;
+for i in range(100) {
+    total = total + i;
+}
+print(f"sum 0..99 = {total}");
+
+let items = [1, 2, 3, 4, 5];
+let s = 0;
+for x in items {
+    s = s + x;
+}
+print(f"sum of items = {s}");

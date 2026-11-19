@@ -1,0 +1,32 @@
+// Lotka-Volterra predator-prey simulation
+
+let prey = 100.0;
+let predators = 20.0;
+
+let alpha = 0.1;
+let beta = 0.02;
+let gamma = 0.3;
+let delta = 0.01;
+
+let dt = 0.1;
+let steps = 200;
+
+print("Predator-Prey Simulation (Lotka-Volterra)");
+print("==========================================");
+
+for step in range(steps) {
+    let dprey = (alpha * prey - beta * prey * predators) * dt;
+    let dpred = (delta * prey * predators - gamma * predators) * dt;
+
+    prey = prey + dprey;
+    predators = predators + dpred;
+
+    if prey < 0.0 { prey = 0.0; }
+    if predators < 0.0 { predators = 0.0; }
+
+    if step % 20 == 0 {
+        print("t=" + str(step) + " prey=" + str(int(prey)) + " predators=" + str(int(predators)));
+    }
+}
+
+print("Final: prey=" + str(int(prey)) + " predators=" + str(int(predators)));

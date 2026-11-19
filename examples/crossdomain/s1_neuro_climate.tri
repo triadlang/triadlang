@@ -1,0 +1,6 @@
+@T(18.0)
+reg neuron : HodgkinHuxley = 4;
+reg climate : ENSO_recharge = 4;
+pair(neuron, climate) kappa=-2.5 for T=18.0;
+OBSERVE neuron k_star, crystallinity, peak, atom_count;
+OBSERVE climate k_star, crystallinity, peak, atom_count;

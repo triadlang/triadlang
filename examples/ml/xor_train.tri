@@ -1,0 +1,33 @@
+import triad.tensor as T
+import triad.nn as nn
+import triad.losses as losses
+
+let model = nn.Sequential(
+    nn.Linear(2, 8),
+    nn.ReLU(),
+    nn.Linear(8, 1),
+    nn.Sigmoid()
+);
+
+let opt = nn.Adam(model.parameters(), 0.05);
+
+import numpy as np;
+let x = T.tensor(np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]));
+let y = T.tensor(np.array([[0.0], [1.0], [1.0], [0.0]]));
+
+for i in range(500) {
+    let pred = model(x);
+    let loss = losses.bce_loss(pred, y);
+    opt.zero_grad();
+    loss.backward();
+    opt.step();
+    if i % 100 == 0 {
+        print(loss._data);
+    }
+}
+
+let final = model(x);
+print("Predictions:");
+for i in range(4) {
+    print(final[i]._data);
+}

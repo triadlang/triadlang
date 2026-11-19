@@ -1,0 +1,6 @@
+@T(18.0)
+reg market : LSV_market = 4;
+reg polymer : MaxwellWiechert = 4;
+pair(market, polymer) kappa=-2.5 for T=18.0;
+OBSERVE market k_star, crystallinity, peak, atom_count;
+OBSERVE polymer k_star, crystallinity, peak, atom_count;

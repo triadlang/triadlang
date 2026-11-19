@@ -1,0 +1,8 @@
+import click;
+
+fn hello() {
+    print("click command would run here");
+}
+
+let result = click.echo("click works");
+print("click result = " + str(result));

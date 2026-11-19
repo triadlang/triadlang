@@ -1,0 +1,4 @@
+@T(18.0)
+reg neuron : HodgkinHuxley = 4;
+evolve neuron for 18.0;
+OBSERVE neuron k_star, crystallinity, peak, atom_count;

@@ -1,0 +1,63 @@
+// Mock LLM runtime in TriadLang
+// Demonstrates a KV-cache policy with Triad-style memory
+
+print("TriadLang LLM Mock Runtime");
+print("==========================");
+
+type Token {
+    id: Int;
+    text: String;
+}
+
+type KVEntry {
+    key: String;
+    value: Float;
+    age: Int;
+}
+
+// KV cache
+let cache = [];
+let max_cache = 8;
+
+fn kv_insert(key, value) {
+    if len(cache) >= max_cache {
+        // evict oldest
+        cache = cache.slice(1, len(cache));
+    }
+    cache.push({"key": key, "value": value, "age": 0});
+}
+
+fn kv_lookup(key) {
+    for entry in cache {
+        if entry["key"] == key {
+            return entry["value"];
+        }
+    }
+    return none;
+}
+
+fn age_cache() {
+    for entry in cache {
+        entry["age"] = entry["age"] + 1;
+    }
+}
+
+// Simulate token processing
+let tokens = ["the", "triad", "entity", "persists", "through", "time", "and", "memory"];
+
+for i in range(len(tokens)) {
+    let tok = tokens[i];
+    kv_insert(tok, float(i) * 0.1);
+    age_cache();
+    print("processed: " + tok + " cache_size=" + str(len(cache)));
+}
+
+// Lookup
+let val = kv_lookup("triad");
+if val != none {
+    print("lookup 'triad' = " + str(val));
+} else {
+    print("'triad' evicted from cache");
+}
+
+print("Final cache size: " + str(len(cache)));

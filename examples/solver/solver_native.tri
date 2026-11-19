@@ -1,0 +1,15 @@
+let result = solver_solve({"N": 128, "T": 2.0, "dt": 0.005, "seed": 42})
+
+print(f"N = {result["N"]}")
+print(f"norm = {result["norm"]}")
+print(f"peak = {result["peak"]}")
+print(f"dx = {result["dx"]}")
+
+let density = result["density"]
+let x = result["x"]
+print(f"density points: {len(density)}")
+print(f"x points: {len(x)}")
+print(f"density[0] = {density[0]}")
+print(f"density[64] = {density[64]}")
+print(f"x[0] = {x[0]}")
+print(f"x[127] = {x[127]}")

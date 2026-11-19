@@ -1,0 +1,11 @@
+import triad.qubits as q;
+
+# a Bell state: H on qubit 0, then CNOT(0 -> 1). measuring should give roughly
+# equal counts of "00" and "11" and almost none of "01" or "10".
+let circuit = q.TriadCircuit(2);
+circuit.h(0);
+circuit.cnot(0, 1);
+
+let result = circuit.run(none, 1000, 7);
+print("counts: " + str(result.counts));
+print("shots: " + str(result.shots));

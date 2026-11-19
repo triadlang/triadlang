@@ -1,0 +1,8 @@
+@T(18.0)
+reg star : Cepheid_pulsator = 4;
+reg halo : DarkMatter_halo = 4;
+reg inflation : Cosmological_inflation = 4;
+ring(star, halo, inflation) kappa=-2.0 for T=18.0;
+OBSERVE star k_star, crystallinity, peak, atom_count;
+OBSERVE halo k_star, crystallinity, peak, atom_count;
+OBSERVE inflation k_star, crystallinity, peak, atom_count;

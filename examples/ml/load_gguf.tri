@@ -1,0 +1,12 @@
+import triad.inference as inf;
+
+let model = inf.load_model("Qwen/Qwen3.5-9B", gguf_file="Qwen3.5-9B-Q4_K_M.gguf");
+
+let result = inf.chat(model, [
+    {"role": "user", "content": "What is 2+2?"}
+], max_new_tokens=512, temperature=0.0);
+
+print("answer:");
+print(result.text);
+print();
+print(f"tokens/s: {result.tokens_per_second:.1f}");

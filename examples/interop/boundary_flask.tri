@@ -1,0 +1,12 @@
+import flask;
+
+let app = flask.Flask("triad_test");
+
+fn home() {
+    return "hello from triad";
+}
+
+app.add_url_rule("/", "home", home);
+print("flask app name = " + str(app.name));
+let rules = app.url_map;
+print("flask url_map type = " + str(type(rules)));

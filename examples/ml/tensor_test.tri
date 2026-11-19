@@ -1,0 +1,41 @@
+import triad.tensor as T;
+
+let W = T.randn(3, 2, requires_grad=true);
+let x = T.tensor([1.0, 2.0, 3.0]);
+let y_true = T.tensor([0.5, -0.5]);
+
+let y_pred = x @ W;
+let loss = T.mse_loss(y_pred, y_true);
+loss.backward();
+
+print(f"W shape: {W.shape}");
+print(f"y_pred: {y_pred}");
+print(f"loss: {loss}");
+print(f"W.grad shape: {W.grad.shape}");
+print(f"W.grad: {W.grad}");
+
+print("");
+print("--- Activations ---");
+let z = T.tensor([-2.0, -1.0, 0.0, 1.0, 2.0]);
+print(f"relu: {T.relu(z)}");
+print(f"tanh: {T.tanh(z)}");
+print(f"sigmoid: {T.sigmoid(z)}");
+print(f"softmax: {T.softmax(z)}");
+
+print("");
+print("--- Simple training loop ---");
+let w = T.tensor([0.0, 0.0, 0.0], requires_grad=true);
+let target = T.tensor([3.0, -1.0, 2.0]);
+let lr = 0.1;
+
+for i in range(50) {
+    let pred = w;
+    let l = T.mse_loss(pred, target);
+    l.backward();
+    w = T.tensor(w.data - lr * w.grad, requires_grad=true);
+    if i % 10 == 0 {
+        print(f"  step {i}: loss={l.item():.6f}  w={w}");
+    }
+}
+print(f"  final w: {w}");
+print(f"  target:  {target}");

@@ -1,0 +1,12 @@
+import fs;
+
+// write a file
+fs.write_text("/tmp/triad_test.txt", "Hello from TriadLang file I/O!");
+
+// read it back
+let content = fs.read_text("/tmp/triad_test.txt");
+print(content);
+
+// check existence
+print("exists: " + str(fs.exists("/tmp/triad_test.txt")));
+print("missing: " + str(fs.exists("/tmp/does_not_exist.txt")));

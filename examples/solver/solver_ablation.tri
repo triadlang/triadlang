@@ -1,0 +1,15 @@
+print("=== full triad solver: crystallization across coupling strength ===")
+print("")
+print("the three pillars stay active together. only the self-interaction")
+print("strength Lambda changes. crystallization is emergent: stronger")
+print("coupling structures the field more, nothing is imposed.")
+print("")
+
+let weak = solver_solve({"N": 128, "T": 5.0, "dt": 0.005, "seed": 42, "Lambda": -0.5, "V_ext": "harmonic"})
+print(f"Lambda=-0.5: norm={weak["norm"]:.6f}  peak={weak["peak"]:.6f}  crystallinity={weak["crystallinity"]:.4f}")
+
+let mid = solver_solve({"N": 128, "T": 5.0, "dt": 0.005, "seed": 42, "Lambda": -3.0, "V_ext": "harmonic"})
+print(f"Lambda=-3.0: norm={mid["norm"]:.6f}  peak={mid["peak"]:.6f}  crystallinity={mid["crystallinity"]:.4f}")
+
+let strong = solver_solve({"N": 128, "T": 5.0, "dt": 0.005, "seed": 42, "Lambda": -8.0, "V_ext": "harmonic"})
+print(f"Lambda=-8.0: norm={strong["norm"]:.6f}  peak={strong["peak"]:.6f}  crystallinity={strong["crystallinity"]:.4f}")

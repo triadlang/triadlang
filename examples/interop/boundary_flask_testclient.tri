@@ -1,0 +1,16 @@
+import flask;
+
+let app = flask.Flask("test_kwargs");
+
+fn json_route() {
+    return flask.jsonify({"status": "ok", "value": 42});
+}
+
+app.add_url_rule("/", "json_route", json_route);
+
+let client = app.test_client();
+let response = client.get("/");
+let data = response.get_json();
+print("status code = " + str(response.status_code));
+print("json status = " + str(data["status"]));
+print("json value = " + str(data["value"]));

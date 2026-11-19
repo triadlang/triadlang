@@ -1,0 +1,40 @@
+fn to_solver_input(regime_name, T, seed) {
+    return {"regime": regime_name, "T": T, "seed": seed, "mode": "full"};
+}
+
+fn run_equation(regime_name, T, seed) {
+    import triad;
+    let r = triad.regime(regime_name);
+    let result = triad.solve(r, T=T);
+    return result;
+}
+
+fn read_crystallinity(result) {
+    import triad;
+    return triad.crystal(result);
+}
+
+fn read_k_star(result) {
+    import triad;
+    return triad.k_star(result);
+}
+
+fn read_peak(result) {
+    import triad;
+    return triad.peak(result);
+}
+
+fn read_norm(result) {
+    import triad;
+    return triad.norm(result);
+}
+
+fn run_and_observe(regime_name, T, seed) {
+    let result = run_equation(regime_name, T, seed);
+    return {
+        "crystallinity": read_crystallinity(result),
+        "k_star": read_k_star(result),
+        "peak": read_peak(result),
+        "norm": read_norm(result)
+    };
+}

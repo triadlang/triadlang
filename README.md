@@ -1,3 +1,11 @@
+https://github.com/qrv0/triad/
+https://github.com/andujarleo/triad-lab
+https://github.com/triadlang/pde
+https://github.com/triadlang/physics
+https://github.com/triadlang/machine-learning
+https://github.com/andujarleo/mnls
+https://github.com/triadlang/QuantumMechanics
+
 ```
        ████████╗██████╗ ██╗ █████╗ ██████╗
        ╚══██╔══╝██╔══██╗██║██╔══██╗██╔══██╗

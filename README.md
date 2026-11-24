@@ -1,10 +1,17 @@
-- github.com/qrv0/triad/
-- github.com/andujarleo/triad-lab
+New :
+- gitHub.com/triadlang/triadlang (programming language)
 - github.com/triadlang/pde
 - github.com/triadlang/physics
 - github.com/triadlang/machine-learning
-- github.com/andujarleo/mnls
 - github.com/triadlang/QuantumMechanics
+- GitHub.com/triadlang/lab
+
+Old  :
+- github.com/andujarleo/mnls
+- github.com/qrv0/triad/ (study)
+- gitHub.com/triadlang/triad-lang (programming language)
+- github.com/andujarleo/triad-lab
+- GitHub.com/triadlango/tri
 
 ```
        ████████╗██████╗ ██╗ █████╗ ██████╗

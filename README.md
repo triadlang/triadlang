@@ -70,4 +70,4 @@ TriadLang Proprietary Source-Available License
 
 Copyright © 2026 triadlang.
 All rights reserved.
-
+It is not an open-source license. The code is public as proof of authorship.

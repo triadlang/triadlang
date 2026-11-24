@@ -1,10 +1,13 @@
+rebuilding study qrv0/triad -> triadlang/triad
+
 New :
-- gitHub.com/triadlang/triadlang (programming language)
-- github.com/triadlang/pde
+- gitHub.com/triadlang/triadlang (programming language) [rebuilding]
+- github.com/triadlang/pde 
 - github.com/triadlang/physics
-- github.com/triadlang/machine-learning
-- github.com/triadlang/QuantumMechanics
-- GitHub.com/triadlang/lab
+- github.com/triadlang/machine-learning [rebuilding]
+- github.com/triadlang/QuantumMechanics [building]
+- GitHub.com/triadlang/lab [rebuilng]
+- github.com/triadlang/triad [rebuilding]
 
 Old  :
 - github.com/andujarleo/mnls
@@ -60,7 +63,6 @@ your .tri file  ──▶  field evolves (P1 + P2 + P3)  ──▶  measurements
 
 [![solver](https://img.shields.io/badge/solver-1D%20%7C%202D%20%7C%203D-blue)](#whats-actually-under-the-hood)
 [![ml](https://img.shields.io/badge/ML_stack-no_torch-orange)](#what-you-can-actually-do-with-it)
-[![cuda](https://img.shields.io/badge/CUDA-optional-lightgrey)](#install)
 
 </div>
 
